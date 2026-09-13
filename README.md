@@ -172,3 +172,8 @@ python data_code/02_backfill_10y.py --sources yahoo fred
 | `data/processed/` | 기간별 Parquet 데이터, 로컬 보관 |
 | `docs/` | 설계·시행착오·실행 기록과 README 이미지 |
 | `data_code/old_code/`, `data/old_data/`, `docs/old_docs/` | 학부 프로젝트 코드·데이터·문서 보관 |
+
+## 레퍼런스
+[AutoML] PyCaret을 활용한 시계열 데이터 예측 모형 생성 (https://teddylee777.github.io/machine-learning/pycaret-timeseries/)
+마의 벽 9.4를 넘은 데이터 접근법 / XGB, LGBM, CAT, ET (0.942) (https://dacon.io/competitions/official/235871/codeshare/4494)
+
