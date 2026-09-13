@@ -175,5 +175,6 @@ python data_code/02_backfill_10y.py --sources yahoo fred
 
 ## 레퍼런스
 [AutoML] PyCaret을 활용한 시계열 데이터 예측 모형 생성 (https://teddylee777.github.io/machine-learning/pycaret-timeseries/)
+
 마의 벽 9.4를 넘은 데이터 접근법 / XGB, LGBM, CAT, ET (0.942) (https://dacon.io/competitions/official/235871/codeshare/4494)
 
