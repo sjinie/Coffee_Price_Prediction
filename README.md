@@ -315,6 +315,12 @@ native·Docker backfill과 증분 적재, 실제 뉴스 재수집, API·Nginx �
 Mac에서 Torch·LightGBM을 함께 로드할 때 segfault를 재현해 패키지 초기화에 `OMP_NUM_THREADS=1` 기본값을 두었습니다. `setdefault`는 사용자 설정을 보존하므로 새 실험은 위처럼 셸에서 명시합니다.
 현재 서빙 가격을 유지한 채 방향 확률과 뉴스 수집 시점을 분리해 표시하며, 과거 노트북 성과를 새 뉴스 모델 성과로 바꾸어 쓰지 않습니다.
 
+## GitHub Actions 검증과 수동 이미지 게시
+
+PR과 main push에서 `CI`가 Python·PostgreSQL fixture 테스트, Vue 테스트·build와 API·pipeline·web Docker build를 실행합니다. 처리 데이터가 필요한 E2E와 macOS 전용 환경 검사 파일은 제외하며, CI 성공을 전체 과거 데이터 재현 성공으로 해석하지 않습니다.
+
+`Publish GHCR images`의 **Run workflow**에서 `publish=false`(기본값)로 실행해도 같은 커밋의 CI 전체를 실행합니다. `publish=true`를 선택한 main 실행만 검증 성공 후 GHCR에 SHA 태그 이미지를 게시합니다. 다른 브랜치에서는 게시 job을 건너뜁니다. Azure 배포는 포함하지 않습니다.
+
 ## 파일 안내
 
 | 파일·폴더 | 내용 |

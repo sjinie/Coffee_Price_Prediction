@@ -4,7 +4,7 @@
 
 - `.github/workflows/ci.yml`은 PR·main push에서 PostgreSQL 기반 fixture Python 테스트, Vue 테스트·build, API·pipeline·web Docker build를 실행한다. 저장소에 없는 처리 데이터·artifact가 필요한 `test_postgres_e2e.py`와 macOS 전용 환경 검사는 제외한다.
 - `.github/workflows/publish-ghcr.yml`은 수동 실행만 가능하며 `publish=false`가 기본이다. 값과 관계없이 같은 커밋의 reusable CI를 실행하고, 성공 후 `publish=true`이면서 `refs/heads/main`일 때만 API·pipeline·web 이미지를 GHCR에 commit SHA tag로 게시한다. `packages: write`는 게시 job에만 부여한다.
-- YAML 파싱, `docker compose config --quiet`, Git 추적 대상 확인과 frontend 테스트·build는 로컬에서 통과했다. GitHub Actions 실행·이미지 게시·Azure 배포는 수행하지 않았다.
+- 로컬 actionlint·게시 조건 검사 통과. [새 PR #3의 Actions](https://github.com/sjinie/Coffee_Price_Prediction/actions/runs/35449683380)에서 Python 68개 통과·데이터 기반 재현 1개 skip, frontend 테스트 3개·build, API·pipeline·web Linux Docker build가 모두 성공했다. `test_postgres_e2e.py`와 macOS 전용 환경 검사 파일은 위와 같이 제외한다. 이미지 게시·Azure 배포는 수행하지 않았다.
 
 ## 2026-09-19 — 의존성 파일 확인·보완
 
