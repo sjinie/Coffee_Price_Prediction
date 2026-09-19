@@ -90,3 +90,89 @@ PyCaret 4.0.0a8은 상태공간 지수평활·ARIMA 모델 생성에 쓴다. 자
 외부 uv Python 3.12 환경에서 `python data_code/02_backfill_10y.py`를 실행한 뒤 03을 Run All 한다. 기본 수집 기간은 `configs/sources.yaml`을 읽는다. 03-2는 저장된 Parquet로 독립 실행하며 03의 실행 상태가 필요 없다. 04는 이전 실험으로 보존한다. 실행 결과와 다음 작업은 [STATUS](STATUS.md)에 기록한다.
 
 참고: [ALFRED 최초 공개값](https://fred.stlouisfed.org/docs/api/fred/series_observations.html#output_type), [Fed 달러지수 개편](https://www.federalreserve.gov/econres/notes/feds-notes/revisions-to-the-federal-reserve-dollar-indexes-20190115.html), [NASA 수정 안내](https://power.larc.nasa.gov/docs/tutorials/), [Farmdoc 가뭄·서리 분석](https://farmdocdaily.illinois.edu/2023/12/the-weather-risk-premium-in-coffee-futures-prices.html), [DLinear 원 구현](https://github.com/cure-lab/LTSF-Linear).
+
+## Local E2E 서빙 구조
+
+저장된 Parquet를 입력으로 `coffee_service.pipeline`이 PostgreSQL에 가격·모델·예측·파이프라인 실행 상태·소스 상태를 저장한다. `--skip-ingestion`은 이미 저장된 소스를 지정한 기준일에서 자른 뒤 적재할 때 사용한다. 수집 경로는 소스별 7일 겹침 데이터를 원자적으로 병합한다. 가격과 ALFRED의 BRL/USD·금리·WTI는 필수이며, 필수 수집 실패나 커피 최신일 대비 14일을 넘긴 거시 자료는 적재를 중단한다. 기상·COT 등의 보조 수집 실패는 소스 상태에 남긴다.
+
+`predictions`의 자연키는 `(model_id, origin_date, horizon)`이다. UPSERT는 같은 target date일 때만 실제값을 보완하므로 이미 발행한 예측의 목표일·예측값을 바꾸지 않는다. 실제값은 저장된 `target_date`와 `prices.date`를 조인해 채운다. 파이프라인의 가격·예측 적재는 한 트랜잭션으로 롤백하며, 수집 파일 상태인 `source_status`는 별도 commit으로 남긴다.
+
+현재 서빙 모델은 5·20일 가격 유지와 60일 가격+거시 DLinear이다. 60일 artifact는 노트북의 후보 설정을 재현한 것이며, 기존 Test의 개선은 시간 구간과 비중첩 시작점에 따라 달랐다. 그러므로 모델 선택을 안정적인 성능 우위로 해석하지 않는다.
+
+FastAPI는 PostgreSQL의 읽기 전용 조회 경로(`/health`, 가격, 예측, 모델, 파이프라인·소스 상태)를 제공한다. Vue 화면은 이 API에서 5·20·60일을 선택해 카드·차트·상태를 표시한다.
+
+### Docker Compose 경계와 시작 순서
+
+Compose는 `postgres`, `api`, `web`, profile 작업인 `pipeline` 서비스로 구성한다. PostgreSQL healthcheck가 먼저 통과하고, API 컨테이너가 `python -m coffee_service.db`로 스키마를 생성한 뒤 Uvicorn을 시작한다. 별도 migration version이나 Alembic은 사용하지 않는다. 웹은 Nginx가 런타임 `API_UPSTREAM=http://api:8000`을 대상으로 `/api/`와 `/health`를 프록시한다.
+
+API와 pipeline의 DB 연결은 `PGHOST`·`PGPORT`·`PGDATABASE`·`PGUSER`·`PGPASSWORD`를 런타임에 받는다. 호스트 `DATABASE_URL`은 Compose에 전달하지 않는다. `POSTGRES_PASSWORD`와 PostgreSQL 변수는 로컬 `.env.docker` 또는 셸 환경변수로 설정한다. 웹·API 포트는 기본적으로 각각 8080·8001이며, host loopback에만 바인딩한다.
+
+pipeline의 `/seed` Parquet와 artifact는 read-only bind mount다. PostgreSQL과 `/data`는 각각 named volume을 쓴다. entrypoint는 `/seed`의 파일이 `/data/sources`에 없을 때만 임시 파일로 복사한 다음 rename한다. 따라서 중간 실패·빈 원본·부분 원본은 다음 실행에서 재시도할 수 있고, 기존 작업 파일과 같은 이름의 원본 수정본은 자동 반영하지 않는다. 이 경계로 적재 작업이 입력 원본이나 artifact를 수정하지 않도록 했다.
+
+CI, 클라우드 배포, 정기 수집·복구·모니터링은 아직 구현하지 않았다.
+
+<a id="news-intelligence-contract"></a>
+
+## News Intelligence 데이터·예측 계약
+
+이 절은 2026-09-19에 추가한 뉴스 실험·서빙 경로다. 앞의 03-1·03-2는 기존 노트북 설계와 결과로 보존한다. 구현은 `coffee_service/news.py`(수집·집계), `intelligence.py`(분류·회귀·선택·추론), `experiments.py`(시간 순서 검증), `pipeline.py`(적재)로 나눈다. 현재는 세 지평 모두 기존 가격 모델을 유지하고 수치 피처 기반 상승 확률만 별도로 제공한다. 수치와 실행 증거는 [STATUS](STATUS.md#news-intelligence-v1)에 기록한다.
+
+### 메타데이터·중복·이용 가능 시점
+
+Daily Coffee News WordPress의 공개 posts 경로에서 ID·제목·URL·공개/수정 시각만 요청한다. [이용약관](https://dailycoffeenews.com/terms-of-service/)의 개인·비상업적 복사 제한을 확인했으며, 개인 연구용 메타데이터만 보관하고 본문 저장·기사 API 제공·원문 재배포는 하지 않는다. 유료 소스나 LLM 호출은 사용하지 않는다.
+
+| 자료 | 계약 |
+|---|---|
+| 기사 Parquet | `source_dir/news/articles.parquet` 또는 `--news-path`. `article_id`, `source`, `title`, 빈 `summary`, `url`, `language`, `rights`, UTC `published_at`·`modified_at`·`collected_at`·`available_at`, 규칙 결과와 `analysis_version` |
+| 기사 식별·보존 | URL의 추적 파라미터·fragment·끝 슬래시를 정리한 뒤 SHA-256을 ID로 사용한다. 같은 URL은 최초 수집 버전을 유지하고, 정규화 제목이 같으며 이용 가능 시각이 24시간 이내인 기사도 중복 제거한다. 원본 제목을 다시 HTML 파싱하지 않는다. |
+| 시간 계약 | `published_at <= collected_at`, `available_at = max(published_at, modified_at)`. 예측일 UTC 23시까지 공개되고 이용 가능해진 기사만 집계한다. 조회 시 timezone 없는 값·범위 밖 점수·잘못된 URL/ID를 거부한다. |
+| 수집 범위 | Parquet 속성의 `coverage_start`, `coverage_end`, `last_collected_at`으로 연속 성공 구간을 기록한다. 페이지 총수·중복·누락을 검사하고 성공한 전체 결과만 임시 파일 후 rename으로 저장한다. 증분은 마지막 공개일/coverage 끝을 기준으로 7일 겹쳐 조회한다. |
+| DB | `news_articles`는 `article_id` 충돌 시 최초 행을 보존한다. `news_daily_features`는 `(as_of_date, window_days, availability_mode)`별 JSONB 집계다. 원본 기사 API는 없고 `/api/v1/news/summary`만 집계를 반환한다. |
+
+`title-rules-v2`는 영어 제목의 커피 관련성(0/1), 주제, 강세/약세/중립, 규칙 신뢰도를 산출한다. 날씨·생산·공급·재고·수출·환율·수요·물류·정책·기타를 구분하고, 공급 감소와 수요 감소처럼 가격 영향이 다른 표현을 나눈다. 부정·상충 표현은 보수적으로 처리한다. 이는 제목 규칙의 출력이며 감성 모델의 확률·확정적 가격 영향이 아니다. 읽을 때 파생 필드만 현 규칙으로 재계산하고 원본 메타데이터는 보존한다.
+
+집계는 `(as_of - window, as_of]`의 공개 시각을 사용한다. 창별 전체/관련 건수, 강세·약세 비율, 평균/가중 영향, 시간 감쇠, 규칙 신뢰도 합, 주제별 건수·평균 영향의 28개 열을 만든다. 부호는 강세 +1·약세 −1·중립 0, 시간 가중치는 `exp(-age_days/window)`, 가중 영향은 `sum(부호×신뢰도×시간 가중치)/sum(시간 가중치)`다. 전체 6개 창은 168개 열이며, 분모와 기사 범위를 임의로 바꾸지 않는다.
+
+### historical·live와 0·결측의 구분
+
+- `historical`은 공개·수정 시각으로 과거를 재생한다. 수집 시각 제한을 풀기 때문에 나중에 확보한 제목을 이용하는 회고적 연구이며, 당시 최초 공개본을 복원하지 못한다.
+- pipeline 기본값 `live`는 `collected_at <= min(현재 시각, 예측일 UTC 23시)`도 요구한다. 최초 수집 전 날짜에는 뉴스 표시값을 NULL로 두고 뉴스 모델 대신 수치 분류기·기존 가격으로 대체한다. 모드별 모델 ID는 `intelligence-h{horizon}-{run_id}-{live|historical}`로 분리한다. 뉴스 summary API의 기본 조회 모드는 `historical`이므로 live 조회는 `availability_mode=live`를 명시한다.
+- 수집 범위를 확인한 정상 빈 창은 건수·영향 0이다. 파일 없음·수집 실패·요청 구간을 덮지 못한 coverage는 이용 불가다. 이때 뉴스 영향·건수·수집 시각은 NULL, 수치 분류기를 쓸 수 있으면 `fallback`, 확률도 계산할 수 없으면 `unavailable`로 표시한다. 뉴스 장애는 필수 가격·ALFRED 소스의 성공을 막지 않는다.
+- 회귀 학습은 정확한 수익률 0도 포함한다. 분류 학습·지표는 실제 수익률 0을 제외하며 확률의 의미는 `P(UP | non-FLAT)`다. 분류 지표의 기준은 `p >= 0.5`지만, C2의 방향은 `sign(p-0.5)`이므로 정확히 0.5면 수익률 0이다. 진단의 10bp 보합 기준은 분류 라벨·서빙 방향에 적용하지 않는다.
+- `final_direction`은 최종 가격 예측 수익률의 부호로 정한다. 5·20일 Persistence는 FLAT이므로 별도 `P(up)`이 0.5보다 높거나 낮아도 가격 방향은 보합이다. 결측 수치 피처는 임의 대치하지 않는다.
+
+### 학습과 고정 결합
+
+수치 입력은 `PRODUCTION_FEATURES`의 가격 4개(1/5/20일 수익률·20일 변동성)와 거시 3개(BRL/USD·금리·유가의 20일 변화)다. 60거래일 입력 이력이 모두 유효한 날짜를 공통 기준으로 삼되, 분류기·표 회귀는 현재 행의 7개 집계 피처를 받는다. 뉴스 모델은 지평별 3개 창(5일: 1/3/7일, 20일: 7/14/30일, 60일: 14/30/60일) 중 하나의 28개 열을 더한다. 뉴스가 없는 날도 0으로 유지해 수치/뉴스/기존 가격 모델을 같은 날짜로 비교한다.
+
+모델마다 분류·회귀를 한 쌍으로 학습한다. Logistic Regression(`max_iter=1000`)/Ridge(`alpha=100`)는 각 Train에서 StandardScaler를 fit한다. CatBoost는 150 trees·depth 4·learning rate 0.03·L2 5, LightGBM은 150 trees·15 leaves·max depth 4·learning rate 0.03이다. seed 42와 단일 thread를 사용하며 추가 하이퍼파라미터 탐색은 하지 않는다. 학습 타깃이 단일 클래스면 상수 분류기, 회귀 타깃이 상수면 평균 회귀기로 처리한다.
+
+Train 시작은 2015-01-01로 고정하고 정답 날짜가 2020/2021/2022년 말을 넘지 않도록 purge해 다음 2021/2022/2023년을 검증한다. 평가 정답도 해당 연도 안에서 끝나야 한다. 60일 DLinear 기준의 scaler·가중치도 fold Train만으로 다시 fit한다. Validation 선택 후 2023년 말까지 재학습하며, 이미 본 2024~2025년은 기술 평가로 남긴다.
+
+| 가격 후보 | 최종 로그수익률 |
+|---|---|
+| C1 | `r`(해당 회귀 원값) |
+| C2 | `abs(r) * sign(p - 0.5)` |
+| C3 | `0.5*r + 0.5*σ_train*(2*p-1) + 0.1*σ_train*news_impact` |
+
+`p`는 같은 모델 쌍의 상승 확률, `σ_train`은 해당 Train 타깃의 표준편차다. 수치 전용의 `news_impact`는 0이다. 세 식의 가중치는 고정이며 학습된 meta-model·OOF fit·Test fit을 추가하지 않는다. OOF 예측은 검증 결과 기록에만 쓴다.
+
+<a id="news-intelligence-selection"></a>
+
+### 채택 기준과 서빙 결과
+
+3개 fold가 모두 유효해야 하며, 회귀·분류를 각각 선택한다. 상대 RMSE 개선은 `1 - 후보 RMSE / 같은 fold의 기존 가격 기준 RMSE`다. 아래 평균은 fold의 산술평균이며, 뉴스 후보는 기준 통과에 더해 **동일 모델·동일 C번호의 수치 후보**보다 평균과 2개 이상 fold에서 엄격히 좋아야 한다.
+
+| 대상 | 모두 만족해야 하는 조건 |
+|---|---|
+| 가격 회귀 | 평균 상대 RMSE 개선 ≥1%, 3개 중 2개 이상 개선, 최악 fold ≥−5% |
+| 5·20일 가격 회귀 추가 조건 | 평균 방향 BA ≥0.52, 2개 이상 fold 방향 BA >0.5. 실제 보합은 BA에서 제외하고 예측 보합은 상승/하락 어느 쪽도 맞힌 것으로 세지 않는다. |
+| 방향 분류 | 평균 BA ≥0.52, 2개 이상 fold에서 Train 다수 클래스 BA 초과, 평균 Brier ≤Train 상승 비율을 상수 확률로 쓴 기준 |
+
+기준을 통과한 후보 중 회귀는 평균 상대 개선, 분류는 평균 BA가 높은 것을 선택한다. 회귀 후보가 없으면 기존 가격 모델을 유지하고, 분류 후보가 없으면 수치 전용 최고 평균 BA를 `experimental`로 표시한다. `validated`는 이 Validation 기준 통과이며 미사용 미래 성과 보장이 아니다. 현재 선택은 가격 세 지평 모두 `base`, 분류는 수치 CatBoost(5일 validated·20일 experimental), 수치 Logistic Regression(60일 experimental)이다. 뉴스 피처는 채택되지 않았다.
+
+서빙 artifact는 선택·수치 대체 경로에 필요한 모델 쌍만 저장한다. 현재 `news_intelligence_v1_serving.joblib`의 3쌍은 원본 `news_intelligence_v1.joblib`의 36쌍과 같은 선택·run ID를 유지하며, 기존 DLinear artifact도 변경하지 않는다. 새 artifact는 기존 파일을 덮어쓰지 않는다. 모드와 run ID가 다른 예측은 별도 자연키로 저장하고, 재실행은 이미 발행된 가격·방향·확률을 바꾸지 않는다. 이전 예측의 신호 필드가 전부 비어 있는 경우만 목표일·가격·수익률이 같을 때 한 번 보완한다.
+
+pipeline의 `--skip-ingestion`은 수치 수집만 생략한다. `--ingest-news`는 독립된 선택 플래그이며, 없으면 저장된 뉴스만 읽는다. `--intelligence-artifact`를 지정해야 새 신호를 적재한다. Docker는 `PIPELINE_MODELS_DIR`를 `/models`에 읽기 전용 마운트하고 `/seed/news/*.parquet`를 기존 소스와 함께 누락된 작업 파일에만 복사한다. native 새 실험은 import 전에 `OMP_NUM_THREADS=1`을 명시한다. 패키지의 기본값은 `setdefault`라 기존 사용자 값을 덮어쓰지 않는다.
+
+API·Vue는 최종 가격·수익률·방향과 별도 상승 확률, 뉴스 영향·관련 기사 수·수집 시각, 상태·모드·버전을 제공한다. 뉴스 표시 창은 5/20/60일 지평별 7/30/60일이다. 60일 현재 모델 metadata의 Test RMSE는 기존 DLinear 노트북 지표를 유지하므로, 새 분류기나 뉴스 입력의 성과로 해석하지 않는다.
