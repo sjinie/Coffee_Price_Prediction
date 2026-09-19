@@ -1,5 +1,12 @@
 # 데이터를 모으고 분석하며 겪은 문제
 
+## 짧은 이력에서 60일 예측 없이 pipeline이 success가 됐다
+
+- 게시 소스 fab81c0의 generate_predictions는 h60 창이 불완전하면 그 지평을 생략하고 h5/h20을 반환할 수 있다. run_pipeline은 세 지평 확인 없이 UPSERT·success를 기록했다. HTTP 사후 검사만으로는 부분 적재와 DB success를 막을 수 없다.
+- 수정 소스에서 최신 유효 가격일의 h5/h20/h60을 UPSERT 전에 검사한다. h60 누락 또는 가격 close 누락은 기존 rollback·failed 처리 경로를 타도록 테스트했다. 예측·원자료를 0으로 보정하지 않았다.
+- 기존 GHCR 이미지는 변하지 않았다. 배포 CLI는 restore의 입력을 기존 이미지 함수로 사전 검사하고 collect는 실행 전에 차단한다. 새 이미지 게시·digest 갱신·독립 검증 후 신규 수집 차단을 해제해야 한다.
+- seed 복사는 기존 작업 파일을 덮어쓰지 않는다. 다른 제공본을 검증할 때 기존 volume을 삭제하지 않고 새 Compose project를 사용한다.
+
 ## Actions가 성공했지만 Node.js 20 deprecation 경고가 나왔다
 
 - 기존 게시 run 35455393542에서 checkout·setup-python·setup-node·login·build-push Action의 내부 Node.js 20 경고를 확인했다. 프로젝트의 Node.js 22 버전과는 별개다.
