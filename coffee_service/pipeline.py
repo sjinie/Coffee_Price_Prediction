@@ -159,6 +159,21 @@ def validate_macro_freshness(sources: dict[str, pd.DataFrame], cutoff: date) -> 
             raise ValueError(f"거시 데이터가 오래되었습니다: {name}")
 
 
+def validate_latest_prediction_coverage(dataset, predictions: pd.DataFrame) -> None:
+    """Reject a run that cannot serve every advertised horizon at the latest price."""
+    if "close" not in dataset.prices:
+        raise ValueError("가격 데이터에 close 열이 없습니다.")
+    latest = dataset.prices.loc[dataset.prices["close"].notna()].index.max()
+    if pd.isna(latest):
+        raise ValueError("최신 커피 가격이 없습니다.")
+    latest_date = pd.Timestamp(latest).date()
+    origins = pd.to_datetime(predictions["origin_date"], errors="coerce").dt.date
+    present = set(predictions.loc[origins.eq(latest_date), "horizon"])
+    missing = sorted({5, 20, 60} - present)
+    if missing:
+        raise ValueError("최신 가격일 예측이 없습니다: " + ", ".join(f"horizon {value}" for value in missing))
+
+
 def run_pipeline(
     mode: str,
     source_dir: Path,
@@ -228,6 +243,7 @@ def run_pipeline(
             dataset = assemble_features(sources, fit_end=min("2023-12-31", end.isoformat()))
             bundle = load_bundle(artifact)
             predictions = generate_predictions(dataset, bundle)
+            validate_latest_prediction_coverage(dataset, predictions)
             if intelligence_artifact is None:
                 db.upsert_models(connection, bundle)
             else:
