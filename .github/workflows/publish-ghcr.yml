@@ -1,0 +1,52 @@
+name: Publish GHCR images
+
+on:
+  workflow_dispatch:
+    inputs:
+      publish:
+        description: Publish images to GHCR
+        required: true
+        default: false
+        type: boolean
+
+permissions:
+  contents: read
+
+jobs:
+  validate:
+    uses: ./.github/workflows/ci.yml
+
+  publish:
+    needs: validate
+    if: inputs.publish == true && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - uses: docker/build-push-action@v6
+        with:
+          context: .
+          target: api
+          push: true
+          tags: ghcr.io/${{ github.repository_owner }}/coffee-price-prediction-api:${{ github.sha }}
+      - uses: docker/build-push-action@v6
+        with:
+          context: .
+          target: pipeline
+          push: true
+          tags: ghcr.io/${{ github.repository_owner }}/coffee-price-prediction-pipeline:${{ github.sha }}
+      - uses: docker/build-push-action@v6
+        with:
+          context: frontend
+          push: true
+          tags: ghcr.io/${{ github.repository_owner }}/coffee-price-prediction-web:${{ github.sha }}

@@ -1,0 +1,72 @@
+name: CI
+
+on:
+  workflow_call:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  python:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    services:
+      postgres:
+        image: postgres:17.11-bookworm
+        env:
+          POSTGRES_DB: coffee_test
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+        options: >-
+          --health-cmd "pg_isready -U postgres -d coffee_test"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 12
+        ports:
+          - 5432:5432
+    env:
+      COFFEE_TEST_DATABASE_URL: postgresql://postgres:postgres@localhost:5432/coffee_test
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: |
+            requirements-api.txt
+            requirements-pipeline.txt
+      - run: python -m pip install --upgrade pip
+      - run: python -m pip install -r requirements-api.txt -r requirements-pipeline.txt pytest==9.1.1 httpx==0.28.1
+      - run: >-
+          python -m pytest tests
+          --ignore=tests/test_core4_environment.py
+          --ignore=tests/test_postgres_e2e.py
+
+  frontend:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    defaults:
+      run:
+        working-directory: frontend
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+      - run: npm ci
+      - run: npm test
+      - run: npm run build
+
+  docker:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - run: docker build --target api --tag coffee-price-api:ci .
+      - run: docker build --target pipeline --tag coffee-price-pipeline:ci .
+      - run: docker build --tag coffee-price-web:ci frontend

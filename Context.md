@@ -6,5 +6,5 @@
 - 서빙: 5·20일은 Persistence, 60일은 가격+거시 DLinear artifact다. 기존 단일 기간 결과는 후보 근거이며 안정적 우위가 확정된 것은 아니다.
 
 # 다음 단계
-- 별도 작업에서 GitHub Actions 테스트·이미지 빌드, GHCR, Azure 배포의 CI/CD 범위를 설계한다.
+- GitHub Actions CI와 수동 GHCR 게시 workflow를 PR로 main에 반영한 뒤 실제 실행 결과를 확인한다. Azure 배포는 별도 작업으로 유지한다.
 - 시간을 옮긴 검증으로 60일 DLinear 후보를 재평가한다.
