@@ -1,5 +1,12 @@
 # 작업 상태
 
+## 2026-09-20 — A. Actions 내부 Node.js 24 전환
+
+- 변경: checkout v4→[v5.1.0](https://github.com/actions/checkout/releases/tag/v5.1.0), setup-python v5→[v6.3.0](https://github.com/actions/setup-python/releases/tag/v6.3.0), setup-node v4→[v5.0.0](https://github.com/actions/setup-node/releases/tag/v5.0.0), login-action v3→[v4.6.0](https://github.com/docker/login-action/releases/tag/v4.6.0), build-push-action v6→[v7.4.0](https://github.com/docker/build-push-action/releases/tag/v7.4.0). 공식 release와 각 SHA의 `action.yml`에서 `node24`를 확인하고 full commit SHA+버전 주석으로 고정했다(확인일 2026-09-20 KST).
+- 계약: 프로젝트 Node.js 22·Python 3.12, publish=false 검증, 동일 커밋 reusable CI 성공 후 publish=true+main 게시, 게시 job에만 packages:write를 유지했다. 의존성·lockfile·Dockerfile 변경은 없다.
+- 호환성: Node.js 24 Action의 runner 최소 v2.327.1과 기존 게시 run의 v2.337.0을 대조했다. checkout v5.1.0의 pull_request_target 기본 동작 변경은 현재 event에 해당하지 않는다.
+- 검증: 기존 run 35455393542의 Node.js 20 경고 대상과 수정 대상을 대조했고 YAML·SHA/게시 조건 정적 검사, 로컬 actionlint v1.7.7과 독립 리뷰를 통과했다. 실제 새 GitHub CI와 경고 소멸은 사용자 push/PR 반영 후 재검증해야 한다.
+
 ## 2026-09-19 — GitHub Actions CI·GHCR 게시 workflow 추가
 
 - `.github/workflows/ci.yml`은 PR·main push에서 PostgreSQL 기반 fixture Python 테스트, Vue 테스트·build, API·pipeline·web Docker build를 실행한다. 저장소에 없는 처리 데이터·artifact가 필요한 `test_postgres_e2e.py`와 macOS 전용 환경 검사는 제외한다.

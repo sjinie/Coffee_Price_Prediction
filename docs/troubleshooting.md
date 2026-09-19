@@ -1,5 +1,11 @@
 # 데이터를 모으고 분석하며 겪은 문제
 
+## Actions가 성공했지만 Node.js 20 deprecation 경고가 나왔다
+
+- 기존 게시 run 35455393542에서 checkout·setup-python·setup-node·login·build-push Action의 내부 Node.js 20 경고를 확인했다. 프로젝트의 Node.js 22 버전과는 별개다.
+- 공식 릴리스와 `action.yml`을 대조해 Node.js 24 Action의 full SHA로 고정했다. 정확한 전후 버전과 확인일은 [STATUS](STATUS.md)에 기록했다. 런타임 강제·경고 숨김·검증 생략은 사용하지 않았다.
+- YAML·게시 조건 검사와 로컬 actionlint는 통과했다. 새 workflow의 실제 GitHub 실행과 경고 소멸은 아직 확인하지 않았다.
+
 ## 기상 원자료는 있는데 rolling 결과가 비었다
 
 처음에는 30일 기상 집계의 빈칸을 중앙값으로 채웠다. 원자료를 다시 보니 결측이 아니라 계산 시작점의 문제였다. 1월 1일부터 잘라서 30일 이동평균을 구하면 첫 29일은 관측 수가 모자란다.
