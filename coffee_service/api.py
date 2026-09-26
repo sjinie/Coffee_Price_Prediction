@@ -94,6 +94,25 @@ def create_app(connection_factory=db.connect):
             )
         return row
 
+    @app.get("/api/v1/news/jev")
+    def jev_news(limit: int = Query(50, ge=1, le=200)):
+        with connection_factory() as connection:
+            latest_run = db.fetch_one(connection,
+                """SELECT run_id, status, started_at, finished_at, message
+                   FROM pipeline_runs WHERE mode = 'news' ORDER BY started_at DESC LIMIT 1""")
+            forecast = db.fetch_one(connection,
+                """SELECT n.document FROM news_forecast_runs n
+                   JOIN pipeline_runs p USING (run_id)
+                   WHERE p.status IN ('success', 'partial')
+                   ORDER BY p.started_at DESC LIMIT 1""")
+            articles = db.fetch_all(connection,
+                """SELECT document FROM jev_analyses
+                   WHERE available_at <= now()
+                   ORDER BY event_at DESC, analysis_id LIMIT %s""", (limit,))
+        return {"latest_run": latest_run,
+                "forecast": forecast["document"] if forecast else None,
+                "articles": [row["document"] for row in articles]}
+
     @app.get("/api/v1/models/current")
     def current_models():
         with connection_factory() as connection:
@@ -114,7 +133,7 @@ def create_app(connection_factory=db.connect):
                 """
                 SELECT run_id, mode, status, started_at, finished_at, message,
                        price_rows, prediction_rows
-                FROM pipeline_runs ORDER BY started_at DESC LIMIT 1
+                FROM pipeline_runs WHERE mode <> 'news' ORDER BY started_at DESC LIMIT 1
                 """,
             )
 

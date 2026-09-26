@@ -28,7 +28,7 @@ test('조회 → 실패 → 빈 응답 복구와 지평 선택을 보존한다',
   const pending = app.loadData()
   assert.equal(app.loading.value, true)
   await pending
-  assert.equal(requests.length, 5)
+  assert.equal(requests.length, 6)
   assert.equal(app.loading.value, false)
   assert.equal(app.futurePredictions.value.length, 1)
   assert.equal(app.futurePredictions.value[0].origin_date, '2025-12-31')
@@ -97,4 +97,29 @@ test('신호는 확률 결측을 꾸미지 않고 보합·실험 상태·뉴스 
     { horizon: 5, origin_date: '2025-12-31', target_date: '2026-01-08', actual_price: null },
   ]
   assert.deepEqual(app.futurePredictions.value.map(item => item.model_id), [undefined, 'current-60'])
+})
+
+test('뉴스 장애는 가격 조회를 막지 않고 별도로 표시한다', async () => {
+  const fetch = async path => path.includes('/news/jev')
+    ? { ok: false, status: 503 }
+    : { ok: true, json: async () => path.includes('/prices') ? [{ date: '2026-09-25', close: 300 }] : [] }
+  const app = new Function('computed', 'onMounted', 'ref', 'fetch', `${source}
+    return { loadData, error, newsError, prices, newsForecastLabel, newsArticles }
+  `)(computed, () => {}, ref, fetch)
+  await app.loadData()
+  assert.equal(app.error.value, '')
+  assert.equal(app.prices.value[0].close, 300)
+  assert.match(app.newsError.value, /뉴스 조회에 실패/)
+  assert.deepEqual(app.newsArticles.value, [])
+  assert.equal(app.newsForecastLabel('insufficient_data'), '학습 데이터 부족')
+})
+
+test('뉴스 응답을 기다리는 동안에도 가격 로딩은 끝난다', async () => {
+  const fetch = path => path.includes('/news/jev') ? new Promise(() => {})
+    : Promise.resolve({ ok: true, json: async () => [] })
+  const app = new Function('computed', 'onMounted', 'ref', 'fetch', `${source}
+    return { loadData, loading }
+  `)(computed, () => {}, ref, fetch)
+  await app.loadData()
+  assert.equal(app.loading.value, false)
 })

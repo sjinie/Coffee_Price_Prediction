@@ -58,6 +58,7 @@ services:
       PGUSER: ${POSTGRES_USER:-coffee}
       PGPASSWORD: ${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in .env}
       FRED_API_KEY: ${FRED_API_KEY:-}
+      AI_GATEWAY_API_KEY: ${AI_GATEWAY_API_KEY:-}
     depends_on:
       api:
         condition: service_healthy

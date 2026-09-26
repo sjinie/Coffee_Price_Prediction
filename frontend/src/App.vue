@@ -6,6 +6,8 @@ const predictions = ref([])
 const models = ref([])
 const pipeline = ref(null)
 const sources = ref([])
+const newsView = ref(null)
+const newsError = ref('')
 const loading = ref(true)
 const error = ref('')
 const selectedHorizon = ref(60)
@@ -47,6 +49,7 @@ async function get(path) {
 async function loadData() {
   loading.value = true
   error.value = ''
+  void loadNews()
   try {
     ;[prices.value, predictions.value, models.value, pipeline.value, sources.value] = await Promise.all([
       get('/api/v1/prices?limit=365'),
@@ -61,6 +64,24 @@ async function loadData() {
     loading.value = false
   }
 }
+async function loadNews() {
+  newsError.value = ''
+  try {
+    newsView.value = await get('/api/v1/news/jev?limit=50')
+  } catch {
+    newsError.value = '뉴스 조회에 실패했습니다. 가격과 기존 예측은 계속 확인할 수 있습니다.'
+  }
+}
+const newsForecasts = computed(() => newsView.value?.forecast?.forecasts || [])
+const newsArticles = computed(() => newsView.value?.articles || [])
+const jevLabel = value => ({ bullish: 'Bullish · 상승 압력', bearish: 'Bearish · 하락 압력', neutral: '중립', uncertain: '판단 유보' }[value] || '미분류')
+const newsForecastLabel = value => ({ experimental: '실험적 보정', insufficient_data: '학습 데이터 부족', unavailable: '이용 불가', no_news: '반영 가능한 뉴스 없음', stale_price: '가격 갱신 필요' }[value] || value)
+const newsReason = item => ({
+  insufficient_data: '평가 가능한 뉴스·후속 가격 이력이 부족합니다.',
+  no_news: '해당 시점에 반영할 뉴스 신호가 없습니다.',
+  unavailable: '자료 시점 또는 처리 상태를 확인해 주세요.',
+}[item.status] || '')
+const usedByForecast = article => newsForecasts.value.some(row => (row.article_ids || []).includes(article.article_id) || (row.article_ids || []).includes(article.analysis_id))
 async function retry() {
   await loadData()
   refreshButton.value?.focus()
@@ -183,7 +204,7 @@ const actualPoints = computed(() => linePoints(
 const predictedPoints = computed(() => linePoints(
   selectedPredictions.value.map(item => item.predicted_price), comparisonDomain.value,
 ))
-const statusLabel = value => ({ success: '완료', failed: '실패', running: '실행 중', existing: '저장 자료', current: '최신 확인' }[value] || '대기')
+const statusLabel = value => ({ success: '완료', partial: '부분 완료', failed: '실패', running: '실행 중', existing: '저장 자료', current: '최신 확인' }[value] || '대기')
 const ticks = domain => Array.from({ length: 5 }, (_, index) => domain[1] - (domain[1] - domain[0]) * index / 4)
 </script>
 
@@ -205,6 +226,27 @@ const ticks = domain => Array.from({ length: 5 }, (_, index) => domain[1] - (dom
         <article><span>최근일 고가 / 저가</span><strong class="range-value">{{ formatNumber(latestPrice?.high) }}<em>/</em>{{ formatNumber(latestPrice?.low) }}</strong><small>원천 OHLC · ¢/lb</small></article>
         <article><span>60일 Test RMSE</span><strong>{{ dlinearModel?.metrics?.test_rmse ?? '—' }}</strong><small>로그수익률 · DLinear</small></article>
         <article><span>가장 오래된 소스</span><strong class="date-value">{{ formatDate(oldestFreshness?.last_data_date) }}</strong><small class="source-id">{{ oldestFreshness?.source ?? '—' }}</small></article>
+      </section>
+
+      <section class="panel news-panel" aria-labelledby="jev-title">
+        <div class="panel-heading"><h2 id="jev-title">뉴스를 반영한 가격 예측</h2><span class="unit">Jev · 아라비카 가격 압력</span></div>
+        <p v-if="newsError" role="status">{{ newsError }}</p>
+        <p v-if="newsView?.latest_run?.status === 'failed'" role="status">최근 뉴스 처리에 실패했습니다. 아래는 마지막 저장 결과입니다.</p>
+        <p v-else-if="newsView?.latest_run?.status === 'partial'" role="status">일부 뉴스만 처리되었습니다. 보정 결과의 수집 범위를 확인해 주세요.</p>
+        <p class="section-note">뉴스의 분류 확률은 미래 가격의 상승 확률이 아닙니다. 실험적 보정은 예측력 개선이 확인되지 않은 결과입니다.</p>
+        <template v-if="newsView?.forecast">
+          <p class="section-note">실행 {{ formatTime(newsView.forecast.as_of) }} · 가격 기준 {{ formatDate(newsView.forecast.price_date) }} · {{ newsView.forecast.training_availability === 'research' ? '연구용 시점 기준 · 과거 기사 재분류' : '실제 이용 가능 시각 기준' }}</p>
+          <p class="section-note">공급자에서 확보한 기사 {{ newsView.forecast.source_status.source_count ?? '—' }}건 · 최신 기사 표본으로, 기간 내 모든 뉴스를 포함하지 않습니다.</p>
+          <div class="news-table-wrap"><table class="forecast-table"><caption class="sr-only">기존 예측과 뉴스 보정 예측 비교</caption><thead><tr><th scope="col">지평</th><th scope="col">기존 예측</th><th scope="col">뉴스 반영 예측</th><th scope="col">보정 폭</th><th scope="col">상태</th></tr></thead><tbody>
+            <tr v-for="item in newsForecasts" :key="item.horizon"><th scope="row">{{ item.horizon }}거래일</th><td>{{ formatNumber(item.base_predicted_price) }} ¢/lb</td><td>{{ formatNumber(item.adjusted_price) }}<span v-if="item.adjusted_price != null"> ¢/lb</span></td><td>{{ item.adjusted_price == null ? '—' : formatNumber(item.adjusted_price - item.base_predicted_price) + ' ¢/lb' }}</td><td>{{ newsForecastLabel(item.status) }}<small>{{ newsReason(item) }}</small><small>반영 기사 {{ item.news_article_count ?? 0 }}건</small></td></tr>
+          </tbody></table></div>
+        </template>
+        <p v-else class="empty-state">아직 뉴스 분석·보정 결과가 없습니다.</p>
+        <details v-if="newsArticles.length" class="news-details"><summary>분석한 최근 뉴스 {{ newsArticles.length }}건</summary><ul class="news-list"><li v-for="article in newsArticles" :key="article.analysis_id">
+          <a v-if="/^https?:\/\//.test(article.url)" :href="article.url" target="_blank" rel="noopener noreferrer">{{ article.title }}</a><span v-else>{{ article.title }}</span>
+          <small>{{ article.source }} · {{ article.time_basis === 'published_at' ? '발행' : '발견' }} {{ formatTime(article.event_at) }} · 분석 {{ formatTime(article.analyzed_at) }}</small>
+          <span>{{ jevLabel(article.label) }} · 분류 확률 강세 {{ formatProbability(article.p_bullish) }} / 약세 {{ formatProbability(article.p_bearish) }}</span><small v-if="usedByForecast(article)">이번 예측의 뉴스 입력에 포함</small>
+        </li></ul></details>
       </section>
 
       <div class="workspace">

@@ -94,3 +94,10 @@ h3 { margin: 0; font-size: .75rem; font-weight: 600; }h3 span { color: var(--mut
 .forecast-table th:nth-child(2) { width: 21%; }
 .forecast-version { margin-top: .3rem; font-size: .625rem; font-weight: 400; color: var(--muted); }
 .forecast-version summary { cursor: pointer; }
+.news-panel { margin-bottom: 24px; }
+.news-table-wrap { overflow-x: auto; }
+.news-details { margin-top: 18px; }
+.news-details summary { cursor: pointer; }
+.news-list { display: grid; gap: 16px; padding-left: 20px; }
+.news-list small, .news-list span { display: block; margin-top: 4px; }
+.news-list a { color: inherit; overflow-wrap: anywhere; }
