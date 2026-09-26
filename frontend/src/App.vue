@@ -100,6 +100,15 @@ const zeroNewsWeights = computed(() => {
     && coefficients.every(value => value === 0)
 })
 const noExperimentalChange = item => item.status === 'experimental' && item.news_correction === 0 && zeroNewsWeights.value
+const boundedWeight = value => typeof value === 'number' && Number.isFinite(value) && value >= 0 && value <= 1
+const formatWeight = value => boundedWeight(value) ? value.toFixed(3) : '—'
+const formatWeightInterval = value => Array.isArray(value) && value.length === 2 && value.every(boundedWeight) && value[0] <= value[1]
+  ? `${formatWeight(value[0])} ~ ${formatWeight(value[1])}` : '—'
+const newsEvidenceLabel = value => ({ improvement_supported: '연구 재평가에서 개선 근거 있음', not_demonstrated: '예측력 개선 미확인', insufficient_evaluation: '개선 판단에 필요한 평가 자료 부족' }[value] || '예측력 미평가')
+const priceCorrectionPercent = item => item.adjusted_price == null || typeof item.news_correction !== 'number' ? '—' : formatPercent(Math.expm1(item.news_correction))
+const newsEvaluationRows = computed(() => newsForecasts.value.filter(item => item.evaluation))
+const articlePressure = article => [article.p_bullish, article.p_bearish, article.relevance].every(boundedWeight)
+  ? (article.p_bullish - article.p_bearish) * article.relevance : null
 async function retry() {
   await loadData()
   refreshButton.value?.focus()
@@ -251,21 +260,48 @@ const ticks = domain => Array.from({ length: 5 }, (_, index) => domain[1] - (dom
         <p v-if="newsError" role="status">{{ newsError }}</p>
         <p v-if="newsView?.latest_run?.status === 'failed'" role="status">최근 뉴스 처리에 실패했습니다. 아래는 마지막 저장 결과입니다.</p>
         <p v-else-if="newsView?.latest_run?.status === 'partial'" role="status">일부 뉴스만 처리되었습니다. 보정 결과의 수집 범위를 확인해 주세요.</p>
-        <p class="section-note">뉴스의 분류 확률은 미래 가격의 상승 확률이 아닙니다. 실험적 보정은 예측력 개선이 확인되지 않은 결과입니다.</p>
+        <p class="section-note">뉴스의 분류 확률은 미래 가격의 상승 확률이 아닙니다. 실험적 보정의 개선 근거는 지평별 평가 상태를 확인하세요.</p>
         <p v-if="newsView?.selection?.selected_count != null" class="section-note">{{ newsView.selection.requested_start }} ~ {{ newsView.selection.requested_end }} · 뉴욕 날짜별 최대 1건 · 선정 {{ newsView.selection.selected_count }}건 · 분석 완료 {{ newsView.selection.selected_analysis_ids?.length ?? 0 }}건. 공급·작황·날씨·무역 관련성을 기준으로 선정합니다.</p>
         <template v-if="newsView?.forecast">
           <p class="section-note">실행 {{ formatTime(newsView.forecast.as_of) }} · 가격 기준 {{ formatDate(newsView.forecast.price_date) }} · {{ newsView.forecast.training_availability === 'research' ? '연구용 시점 기준 · 과거 기사 재분류' : '실제 이용 가능 시각 기준' }}</p>
           <p class="section-note">이 예측을 만들 때 수집한 후보 {{ newsView.forecast.source_status.source_count ?? '—' }}건 · 수집처의 표본으로, 기간 내 모든 뉴스를 포함하지 않습니다.</p>
-          <details v-if="jevModel" class="forecast-version"><summary>보정 파라미터</summary><small>반감기 {{ formatCoefficient(jevModel.half_life) }} 달력일 · 시차 {{ (jevModel.lags || []).join(', ') || '—' }} 거래일 · 지평 감쇠 τ {{ formatCoefficient(jevModel.horizon_decay?.tau) }} (exp(-(h-5)/τ)) · 계수 {{ (jevModel.coefficients || []).map(formatCoefficient).join(', ') || '—' }}</small></details>
-          <div class="news-table-wrap"><table class="forecast-table"><caption class="sr-only">기존 예측과 뉴스 보정 예측 비교</caption><thead><tr><th scope="col">지평</th><th scope="col">기존 예측</th><th scope="col">뉴스 반영 예측</th><th scope="col">보정 폭</th><th scope="col">상태</th></tr></thead><tbody>
-            <tr v-for="item in newsForecasts" :key="item.horizon"><th scope="row">{{ item.horizon }}거래일</th><td>{{ formatNumber(item.base_predicted_price) }} ¢/lb</td><td>{{ formatNumber(item.adjusted_price) }}<span v-if="item.adjusted_price != null"> ¢/lb</span></td><td>{{ item.adjusted_price == null ? '—' : formatNumber(item.adjusted_price - item.base_predicted_price) + ' ¢/lb' }}</td><td>{{ newsForecastLabel(item.status) }}<small>{{ noExperimentalChange(item) ? '학습된 뉴스 가중치가 모두 0이어서 가격 변화가 없습니다.' : newsReason(item) }}</small><small>입력 기사 {{ item.news_article_count ?? 0 }}건</small></td></tr>
+          <template v-if="jevModel?.horizon_models">
+            <p class="section-note">반영 강도는 0~1입니다. 방향은 뉴스가 정하고, 강도는 가격 변동성에 비례한 효과를 얼마나 적용할지 정합니다. 강도 0.2는 가격 20% 변화를 뜻하지 않습니다.</p>
+            <p class="section-note">현재 뉴스 신호 {{ formatNumber(newsForecasts[0]?.news_signal) }} · {{ newsImpactLabel(newsForecasts[0]?.news_signal) }}. 최신 기사에 더 큰 비중을 두고, 이전 거래일의 뉴스도 시차를 두어 반영합니다.</p>
+          </template>
+          <details v-if="jevModel" class="forecast-version"><summary>계산 방식과 가정</summary>
+            <small>반감기 {{ formatCoefficient(jevModel.half_life) }} 달력일 · 시차 {{ (jevModel.lags || []).join(', ') || '—' }} 거래일 · 지평 감쇠 τ {{ formatCoefficient(jevModel.horizon_decay?.tau) }} (exp(-(h-5)/τ))</small>
+            <template v-if="jevModel.horizon_models">
+              <small>기사 신호 = (Bullish 확률 − Bearish 확률) × 커피 관련성. 확률 차이가 클수록 강하게 반영합니다. 중립·판단 유보 확률도 유지하며, 같은 확률분포에서 계산된 Jev confidence는 다시 곱하지 않습니다.</small>
+              <small>보정 로그수익률 = 최근 변동성 × 지평 배수 × 뉴스 신호 × 반영 강도. 보정 가격 = 기본 예측 × exp(보정 로그수익률).</small>
+              <small>시차별 비중 {{ (jevModel.lag_weights || []).map(formatWeight).join(' / ') }}. 반감기·시차 비중·지평 감쇠는 고정 가정이며 통계적으로 확정된 값이 아닙니다.</small>
+              <small>강도는 지평별 후속 수익률로 추정합니다. 사전 가정은 효과 없음 50% + 0~1 균등분포 50%이며, 과거 5일 수익률과 평균을 통제합니다. 95% 사후구간은 이 가정에 따른 강도의 불확실성으로 가격 예측구간이나 상승 확률이 아닙니다.</small>
+              <small>현재까지 확보한 기사의 발행·선정 시점으로 시차를 재구성한 연구용 추정입니다. 과거 당시 실시간 성능을 검증한 결과가 아닙니다.</small>
+            </template>
+            <small v-else>기존 모델 계수 {{ (jevModel.coefficients || []).map(formatCoefficient).join(', ') || '—' }}</small>
+          </details>
+          <div class="news-table-wrap"><table class="forecast-table"><caption class="sr-only">기존 예측과 뉴스 보정 예측 및 반영 강도 비교</caption><thead><tr><th scope="col">지평</th><th scope="col">기존 예측</th><th scope="col">뉴스 반영 예측</th><th scope="col">가격 보정</th><th v-if="jevModel?.horizon_models" scope="col">반영 강도 · 0~1</th><th scope="col">상태</th></tr></thead><tbody>
+            <tr v-for="item in newsForecasts" :key="item.horizon">
+              <th scope="row">{{ item.horizon }}거래일</th><td>{{ formatNumber(item.base_predicted_price) }} ¢/lb</td>
+              <td>{{ formatNumber(item.adjusted_price) }}<span v-if="item.adjusted_price != null"> ¢/lb</span></td>
+              <td>{{ item.adjusted_price == null ? '—' : formatNumber(item.adjusted_price - item.base_predicted_price) + ' ¢/lb' }}<small>{{ priceCorrectionPercent(item) }}</small></td>
+              <td v-if="jevModel?.horizon_models">{{ formatWeight(item.news_weight) }}<small v-if="boundedWeight(item.news_weight)">95% 사후구간 {{ formatWeightInterval(item.news_weight_interval) }}</small><small>겹치지 않는 학습 구간 {{ jevModel.horizon_models[item.horizon]?.calibration_rows ?? 0 }}개</small></td>
+              <td>{{ newsForecastLabel(item.status) }}<small>{{ noExperimentalChange(item) ? '학습된 뉴스 가중치가 모두 0이어서 가격 변화가 없습니다.' : newsReason(item) }}</small><small v-if="item.evidence_status">{{ newsEvidenceLabel(item.evidence_status) }}</small><small>입력 기사 {{ item.news_article_count ?? 0 }}건</small></td>
+            </tr>
           </tbody></table></div>
+          <details v-if="newsEvaluationRows.length" class="news-details"><summary>기본 예측과 성능 비교 · 과거 기사 재분류 연구</summary>
+            <p class="section-note">뒤쪽 40% 기간을 순서대로 평가하며, 각 예측일보다 먼저 결과가 확정된 자료만 학습합니다. 같은 날짜의 기본 예측과 비교합니다. RMSE·MAE는 로그수익률 단위입니다.</p>
+            <div class="news-table-wrap"><table class="forecast-table"><caption class="sr-only">동일 기준일 뉴스 보정 전후 연구 재평가</caption><thead><tr><th scope="col">지평 / 평가 수</th><th scope="col">기간</th><th scope="col">RMSE · 기본 → 뉴스</th><th scope="col">MAE · 기본 → 뉴스</th><th scope="col">방향 일치율 · 기본 → 뉴스</th></tr></thead><tbody><tr v-for="item in newsEvaluationRows" :key="item.horizon"><th scope="row">{{ item.horizon }}거래일<small>{{ item.evaluation.n }}개</small></th><td>{{ formatDate(item.evaluation.period_start) }} ~ {{ formatDate(item.evaluation.period_end) }}</td><td>{{ item.evaluation.baseline?.rmse?.toFixed(4) ?? '—' }} → {{ item.evaluation.adjusted?.rmse?.toFixed(4) ?? '—' }}</td><td>{{ item.evaluation.baseline?.mae?.toFixed(4) ?? '—' }} → {{ item.evaluation.adjusted?.mae?.toFixed(4) ?? '—' }}</td><td>{{ formatProbability(item.evaluation.baseline?.direction_accuracy) }} → {{ formatProbability(item.evaluation.adjusted?.direction_accuracy) }}</td></tr></tbody></table></div>
+            <p class="section-note">시간 의존성을 고려한 블록 재표본추출로 오차 개선을 검토합니다. 평가 자료가 부족하거나 개선 구간이 0을 포함하면 개선을 확인했다고 표시하지 않습니다.</p>
+            <p class="section-note">방향 일치율은 상승·하락·보합을 모두 비교합니다. Persistence는 항상 보합을 예측하므로 이 수치만으로 뉴스의 개선을 판단하지 않습니다.</p>
+          </details>
         </template>
         <p v-else class="empty-state">아직 뉴스 분석·보정 결과가 없습니다.</p>
         <details v-if="newsArticles.length" class="news-details"><summary>분석한 최근 뉴스 {{ newsArticles.length }}건</summary><ul class="news-list"><li v-for="article in newsArticles" :key="article.analysis_id">
           <a v-if="/^https?:\/\//.test(article.url)" :href="article.url" target="_blank" rel="noopener noreferrer">{{ article.title }}</a><span v-else>{{ article.title }}</span>
           <small>{{ article.source }} · {{ article.time_basis === 'published_at' ? '발행' : '발견' }} {{ formatTime(article.event_at) }} · 분석 {{ formatTime(article.analyzed_at) }}</small>
-          <span>{{ jevLabel(article.label) }} · 분류 확률 강세 {{ formatProbability(article.p_bullish) }} / 약세 {{ formatProbability(article.p_bearish) }}</span><small v-if="usedByForecast(article)">이번 예측의 뉴스 입력에 포함</small>
+          <span>{{ jevLabel(article.label) }} · 분류 확률 강세 {{ formatProbability(article.p_bullish) }} / 약세 {{ formatProbability(article.p_bearish) }} / 중립 {{ formatProbability(article.p_neutral) }} / 판단 유보 {{ formatProbability(article.p_uncertain) }}</span>
+          <small v-if="jevModel?.horizon_models">기사 방향 신호 {{ formatNumber(articlePressure(article)) }} (−1~1) · 커피 관련성 {{ formatProbability(article.relevance) }} · Jev 분류 확신도 {{ formatProbability(article.confidence) }} (참고용)</small><small v-if="usedByForecast(article)">이번 예측의 뉴스 입력에 포함</small>
         </li></ul></details>
       </section>
 

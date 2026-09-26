@@ -1,5 +1,16 @@
 # 작업 상태
 
+## 2026-09-26 — 뉴스 확률·방향과 0~1 반영 강도 분리
+
+- 결정/완료 조건: 88개 기존 Jev 분류를 재사용하고 기본 Persistence/DLinear 산출물을 보존한다. 방향은 `(P_bullish−P_bearish)×relevance`, 적용량은 0~1 강도·과거 변동성·최근성·거래일 시차로 결정한다. 강한 확신의 같은 방향 뉴스는 더 크게 반영하되 음의 회귀계수로 뉴스 방향을 뒤집지 않는다. 실험적 가격 변화와 성능 개선 근거는 별도 표시한다.
+- 원인/변경: v1의 0은 기본값이 아니라 지평을 함께 학습한 비음수 Ridge의 경계 해였다. v2는 지평별 비중첩 수익률 구간으로 강도를 추정하고, 효과 없음 50% + Uniform(0,1) 50% 사전의 사후평균·95% 사후구간을 제공한다. `confidence`는 확률분포로부터 계산된 요약이므로 중복 곱을 제거했다. 최근 20일 로그수익률 표준편차×√5를 가격 규모로 사용하고 반감기 3일·시차 0/1/3/5·지평 τ10은 고정 가정으로 표시한다. 임의의 양수 하한이나 향상을 보장하는 기본 가중치는 넣지 않았다.
+- 실제 실행: native PostgreSQL 17, Python 3.12.14에서 cache-only 실행 성공. 최종 run `a4948176-6d26-4663-acca-cbb02f67ed70`, 모델 `news-residual-v2-eeea07bd411f`, 발행 `2026-09-26T10:33:27.067045+00:00`. 분석 88건, 신규 Jev 요청 0회. 기존 가격 3,076행·기본 예측 2,061행은 API 전체 JSON 대조로 동일했다. v1 artifact는 ignored `data/raw/jev/articles.model.v1-backup.json`에 보존했다.
+- 보정 실측: 5일 강도 **0.116431**, 95% 사후구간 **[0, 0.799194]**, 비중첩 학습 25구간. 기본 278.600006→**277.652812 ¢/lb**(약 −0.34%). 20일 강도 **0.251128**, 구간 **[0, 0.950379]**, 학습 6구간. **278.143751 ¢/lb**(약 −0.16%). 20일은 사전평균 0.25와 비슷해 사전 가정의 영향이 크다. 60일은 2구간으로 최소 6구간 미달이며 보정가 null이다. 현재 뉴스 입력은 시차 전체에서 22개 기사이며, 일별 대표 선정 규칙은 바뀌지 않았다.
+- 평가: 연구 재평가 5일 origin 2026-07-10~09-18의 50개 동일 날짜에서 baseline→뉴스 RMSE **0.0561664→0.0565635**, MAE **0.0496921→0.0501057**(로그수익률). 평균 MSE 개선 −0.000044767, 5거래일 circular blocks/seed42/1,000회 95% 구간 **[−0.000213217, +0.000103672]**로 개선 미확인이다. 방향 일치 0%→40%는 Persistence가 보합만 예측하는 특성 때문에 단독 개선 근거로 사용하지 않는다. 20일은 walk-forward 각 시점의 최소 학습 표본을 충족하지 못해 평가 0개다. 과거 기사의 현재 분류·이미 확인한 기간이므로 미사용 Test나 실제 live 성과가 아니다.
+- 검증: Python 뉴스·DB/API 관련 **37 passed, 2 warnings**, Vue **7 passed**, Vite build 성공. 시간 경계/일별 선정 완료/수정/미래 분석 차단, 강한·약한 확률과 부호, confidence 중복 미사용, target maturity·비중첩 학습·walk-forward purge, 결측 변동성·artifact 왕복을 확인했다. 별도 SciPy 적분으로 실측 5/20일 사후평균·null probability를 대조해 NumPy 격자 결과와 1e-6 이내 일치했다(런타임 의존성 추가 없음). 브라우저에서 보정가·가중치·사후구간·계산 설명·성능 비교·기사별 네 확률을 확인했다. 독립 리뷰 지적의 상단 성능 단정 문구를 수정했고 재검토에서 추가 결함이 없었다.
+- 근거 확인(2026-09-26): [TypeSafe Choice](https://docs.typesafe.ai/primitives/choice)·[confidence](https://docs.typesafe.ai/confidence), [시간순 rolling-origin](https://otexts.com/fpp3/tscv.html), [시간 블록 bootstrap](https://bashtage.github.io/arch/bootstrap/timeseries-bootstraps.html). [Financial News Intelligence Platform](https://github.com/abhiminav/financial-news-intelligence-platform)과 [StockIntel](https://github.com/zhaymn/StockIntel)의 README에서 확률 차이·과거 수익률 통제·시간순 평가·부정적 결과 공개를 참고했으며 그 결과를 재현하거나 커피 가중치로 전용하지 않았다. 선택한 사전분포·감쇠 수치는 이 출처로부터 추정된 값이 아니다.
+- 한계/다음: 통계적으로 유의미한 가격 예측 개선이나 인과 효과를 확인하지 못했다. 200일 중 88개 대표 기사라는 제한, 사람이 확인한 분류 정답 및 실제 확률 calibration 부재, 작은 비중첩 표본과 Bayesian 오차 가정을 유지해서 해석한다. 다음은 전향적 뉴스·실현 가격 누적과 분류 품질 검증이다. 기존 Starlette httpx/AnyIO deprecation 2건은 숨기지 않았으며 별도 호환성 작업이다. 의존성 변경·새 API 호출·Docker/CI/GHCR/Azure 검증·push는 하지 않았다.
+
 ## 2026-09-26 — 기본 예측의 빈 신호와 Jev 보정 표시 구분
 
 - 원인: `/api/v1/predictions`의 기존 방향 분류·뉴스 항목은 null이고, Jev 결과는 별도 `/api/v1/news/jev`에 저장된다. 기본 표의 반복된 “이용 불가”가 정상 Jev 분석까지 실패한 것으로 보이게 했다.

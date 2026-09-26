@@ -9,6 +9,25 @@ const source = componentSource
   .split('<script setup>')[1].split('</script>')[0]
   .replace(/import .* from 'vue'\n/, '')
 
+test('뉴스 확률 신호·반영 강도·실제 가격 보정률을 구분한다', () => {
+  const app = new Function('computed', 'onMounted', 'ref', `${source}
+    return { formatWeight, formatWeightInterval, priceCorrectionPercent, articlePressure, newsEvidenceLabel }
+  `)(computed, () => {}, ref)
+  assert.equal(app.formatWeight(.2), '0.200')
+  for (const missing of [null, undefined, false, '0.2', -1, 1.1, NaN]) assert.equal(app.formatWeight(missing), '—')
+  assert.equal(app.formatWeightInterval([0, .8]), '0.000 ~ 0.800')
+  assert.equal(app.formatWeightInterval([.8, .1]), '—')
+  assert.equal(app.priceCorrectionPercent({ adjusted_price: 101, news_correction: Math.log(1.01), news_weight: .2 }), '+1%')
+  assert.equal(app.priceCorrectionPercent({ adjusted_price: null, news_correction: null }), '—')
+  const strong = { p_bullish: .9, p_bearish: .05, relevance: 1 }
+  const weak = { p_bullish: .45, p_bearish: .4, relevance: 1 }
+  assert.ok(app.articlePressure(strong) > app.articlePressure(weak))
+  assert.ok(Math.abs(app.articlePressure(strong) - .85) < 1e-12)
+  assert.ok(app.articlePressure({ ...strong, p_bullish: .05, p_bearish: .9 }) < 0)
+  assert.equal(app.articlePressure({ p_bullish: null }), null)
+  assert.match(app.newsEvidenceLabel('not_demonstrated'), /미확인/)
+})
+
 test('조회 → 실패 → 빈 응답 복구와 지평 선택을 보존한다', async () => {
   let mode = 'data'
   const requests = []

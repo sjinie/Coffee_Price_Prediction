@@ -433,6 +433,16 @@ python3 deploy/deploy.py --env-file /path/outside/repo/coffee.env --project coff
 
 기본 캐시 `data/raw/jev/articles.json`은 분석 버전별 불변 기록입니다. `articles.json.collected.json`은 후보, `articles.json.selection.json`은 일별 선정 이력, `articles.json.status.json`은 실행 상태, `articles.model.json`은 보정 artifact입니다. 전체 본문은 크롤링하지 않습니다. 원본·분류 자료는 Git에서 제외합니다. `/api/v1/news/jev`와 대시보드는 현재 기간에 선정된 분석만 표시합니다.
 
-최근성 감쇠와 0·1·3·5거래일 시차를 사용하며, 비음수 Ridge가 baseline의 로그수익률 오차를 학습하고 장기 지평의 보정 폭을 줄입니다. 일별 선택은 뉴욕 날짜가 끝난 다음 자정부터 이용하며 수정 기사도 수정 시각보다 앞서 쓰지 않습니다. 기본 `research` 모드는 과거 기사를 현재 재분류한 탐색으로, 당시 보유했던 뉴스 아카이브의 실시간 백테스트가 아닙니다. `live`는 실제 분석 완료 시각까지 제한합니다. 자료가 부족하면 보정 가격을 만들지 않으며, 어느 모드도 예측력 개선을 보장하지 않습니다.
+`news-residual-v2`는 방향과 반영 강도를 분리합니다.
+
+- 기사 신호는 `(P_bullish − P_bearish) × relevance`입니다. 확률 차이가 클수록 강한 방향 신호가 됩니다. `confidence`는 같은 확률분포에서 나온 값이므로 다시 곱하지 않고 참고용으로 보존합니다. 중립·판단 유보 확률을 버리거나 상승/하락 확률만 재정규화하지 않습니다.
+- 발행 후 3달력일 반감기로 감쇠한 기사를 tanh로 집계하고, 0/1/3/5거래일 시차를 비음수 비중으로 결합합니다. 반영 강도 `w_h`는 지평별 0~1입니다.
+- `보정 로그수익률 = 최근 20거래일 변동성 × √5 × exp(-(h−5)/10) × 뉴스 신호 × w_h`, `보정 가격 = 기본 예측 × exp(보정 로그수익률)`입니다. 같은 신호·강도에서 단기에 더 크게 반영하며, 가중치 0.2가 가격 20% 변화를 뜻하지 않습니다.
+- 강도는 후속 수익률이 겹치지 않는 최소 6구간으로 추정합니다. 과거 5일 수익률과 평균을 통제하고, 효과 없음 50% + Uniform(0,1) 50%의 명시적 사전 가정을 사용한 사후평균과 95% 사후구간을 표시합니다. 이는 인과적 영향 비율이나 가격 예측구간이 아닙니다. 표본이 적으면 사전 가정의 영향이 크며, 자료·변동성이 부족하면 보정가는 비워 둡니다.
+- 뒤쪽 40% 날짜를 순서대로 평가하되 각 기준일 이전에 정답이 확정된 자료만 학습합니다. 같은 날짜의 baseline과 RMSE/MAE를 비교하고 시간 블록 재표본추출로 개선 구간을 계산합니다. 실험적 보정값과 예측력 개선 근거를 따로 표시하며 기존 기본 가격은 유지합니다.
+
+일별 선택은 뉴욕 날짜가 끝난 다음 자정부터 이용하며 수정 기사도 수정 시각보다 앞서 쓰지 않습니다. 기본 `research`의 과거 평가는 현재 재분류한 기사에 기반한 연구 재평가이며 실제 당시의 실시간 성과가 아닙니다. 현재 연구용 예측은 발행 시점까지 실제 확보한 기사만 골라 사건 시점의 시차를 재구성합니다. `live` 학습 모델은 과거 각 시점의 실제 이용 가능 시각을 지킵니다. 반감기·시차 비중·지평 감쇠와 사전분포는 고정 가정이며 검증된 커피 시장 상수가 아닙니다.
+
+방법 참고: [Financial News Intelligence Platform](https://github.com/abhiminav/financial-news-intelligence-platform)의 확률 차이·과거 수익률 통제·시기별 비교, [StockIntel](https://github.com/zhaymn/StockIntel)의 시간순 검증과 부정적 결과 공개, [Forecasting: Principles and Practice](https://otexts.com/fpp3/tscv.html)의 rolling-origin 평가를 참고했습니다. 해당 프로젝트의 성능을 재현하거나 계수를 전용하지 않았습니다. Jev 확률과 확신도의 관계는 [TypeSafe 공식 문서](https://docs.typesafe.ai/confidence)를 따릅니다.
 
 실제 수집 범위·분류 수·제공자 제한·검증 결과는 [STATUS](docs/STATUS.md)의 최신 항목을 확인하세요.
