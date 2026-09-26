@@ -1,5 +1,17 @@
 # 작업 상태
 
+## 2026-09-26 — Jev 뉴스 수집·분류와 실험적 가격 보정
+
+- 추가: `jev.py`의 Yahoo KC 뉴스 수집과 TypeSafe choice/noul 요청, 불변 분석 캐시·원자 저장·요청 상한; `news_residual.py`의 최근성 감쇠·거래일 시차·단기 가중 잔차 Ridge; news CLI·별도 DB snapshot·`/api/v1/news/jev`·Vue 비교/기사 패널. 기존 가격 서빙 계약·가격 테이블을 유지했다. 설치/의존성 변경 없음. 예제 Gateway 키는 빈 placeholder로 정리했다.
+- 실제 수집: 2026-09-26 Yahoo `KC=F` 메타데이터 199건 조회 중 2026-06-29~09-25의 122건을 확보했다. 최신 표본이므로 90일 전체 커버리지로 간주하지 않는다. 원자료는 ignored `data/raw/jev/yahoo-probe.json`, 성공 분석은 `articles.json`, 초기 실행 상태는 `articles.json.status.json`에 보존했다. GDELT는 timeout/429로 실수집 실패해 기본 소스를 Yahoo로 결정했다.
+- 실제 Jev: 합성 smoke 1회와 실제 기사 1회가 HTTP 200이었다. 실제 기사 “Short Covering Boosts Coffee Prices”는 bullish 0.48/bearish 0.01, confidence 0.30, relevance 0.93을 반환했다. 이는 분류 품질 평가나 수익률 확률 검증이 아니다. 이후 HTTP 429가 반복되어 최초 요청 예산(합성 1+실배치 199)을 소진했다. 성공 응답에 기록된 비용만 합계 $0.000045906이며 계정 전체 청구액은 확인하지 않았다. 이 실패를 반영해 429 즉시 중단/연속 transient 3회 중단으로 수정했고 추가 Gateway 요청은 하지 않았다.
+- 실제 가격·DB: 원본을 별도 `data/processed/jev_live`로 복사한 뒤 Yahoo/FRED incremental을 실행해 2026-09-25까지 가격 3,076행·예측 2,061행을 적재했다(run `a5d4f044-70f5-43e4-bee5-d2495bce6767`). 별도 native PostgreSQL 17, loopback 15439/coffee_jev를 사용했다. 실제 뉴스 cache-only 실행 2회(`1f4eedec-b6de-4c85-b104-7b631bc54cb3`, `2a23a0ef-198c-454e-9695-cf65edf7470f`)는 partial이며 신규 API 요청 0회, 분석 1건·지평별 snapshot 3행을 남겼다. 기존 2,061개 예측 전체 checksum `462e019814a004984ed461c2d502c930`을 유지했다.
+- 결과: 세 지평 모두 `insufficient_data`, 보정 가격 null이다. 기존 5/20일 278.6000061, 60일 361.8698120 ¢/lb를 보존했다. API와 브라우저에서 부분 처리·기사 1건·자료 부족을 확인했다. 실제 자료로 잔차 학습·성능 개선을 검증하지 못했으며, 수치 보정·최근성·시차·시간순 평가 동작은 fixture로 검증했다.
+- 검증: 외부 Python 3.12.14, requests 2.34.2/pandas 2.3.3/scikit-learn 1.7.2/yfinance 1.7.0/python-dotenv 1.2.3. 실제 PostgreSQL을 지정한 `python -m pytest tests --ignore=tests/test_core4_environment.py -q`: **102 passed, 3 warnings**, 72.71초. 기존 sklearn 단일 클래스 경고와 Starlette httpx/AnyIO deprecation은 남는다. Vue **5 passed**, Vite 8.3.0 build 성공, placeholder DB password로 Compose 설정 검증 성공. 새 Linux container/CI/GHCR/Azure 실행은 검증하지 않았다.
+- 독립 리뷰: target 결측 정답 유입, 성숙 경계·tune purge·지평 자격, 미래 기사 노출, 실패 snapshot/cache 상태, 뉴스 요청 지연, 예제 키를 수정했다. 실코드/설정 리뷰와 관련 회귀 검증을 마쳤다. 원래 사용자 문서·AGENTS 변경과 원본 자료/.env는 보존했다.
+- 공식 확인(2026-09-26): [Vercel TypeSafe endpoint/schema](https://vercel.com/docs/ai-gateway/sdks-and-apis/typesafe), [TypeSafe primitives](https://docs.typesafe.ai/primitives), [choice](https://docs.typesafe.ai/primitives/choice), [Jev 한계](https://docs.typesafe.ai/model-jaggedness/jev-1.13), [yfinance get_news](https://ranaroussi.github.io/yfinance/reference/api/yfinance.Ticker.get_news.html), [GDELT DOC 2](https://blog.gdeltproject.org/gdelt-doc-2-0-api-debuts/).
+- 다음: Gateway 429 제한 해소 후 작은 batch로 분류를 누적하고 실제 이용 가능 시점 이후의 정답이 성숙하면 재평가한다. 강세/약세 정답을 사람이 검토한 표본과 시간순 baseline 비교 전에는 예측력 개선을 주장하지 않는다.
+
 ## 2026-09-20 — B. 게시 이미지 복원 배포 검증과 신규 수집 경계
 
 - 게시 증거: [run 35455393542](https://github.com/sjinie/Coffee_Price_Prediction/actions/runs/35455393542) success, source와 조회 당시 원격 main 모두 `fab81c0cb2f72a58eab9244976a333940bae99d2`. 로그의 API/pipeline/web digest가 GHCR manifest 및 실제 pull과 일치했다. 모두 linux/amd64이며 전체 digest는 README·compose.deploy.yaml에 기록했다. 실제 이미지 안 API 3개·pipeline/config/entrypoint 17개 파일의 SHA-256도 게시 소스와 일치했다.

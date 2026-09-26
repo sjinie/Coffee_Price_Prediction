@@ -406,3 +406,26 @@ python3 deploy/deploy.py --env-file /path/outside/repo/coffee.env --project coff
 [AutoML] PyCaret을 활용한 시계열 데이터 예측 모형 생성 (https://teddylee777.github.io/machine-learning/pycaret-timeseries/)
 
 마의 벽 9.4를 넘은 데이터 접근법 / XGB, LGBM, CAT, ET (0.942) (https://dacon.io/competitions/official/235871/codeshare/4494)
+
+## Jev 뉴스와 실험적 가격 보정
+
+`coffee_service.pipeline news`는 Yahoo KC=F의 최근 90일 제목·요약을 Vercel TypeSafe Jev로 분류하고, 결과를 별도 뉴스 예측으로 저장합니다. `AI_GATEWAY_API_KEY`를 로컬 `.env` 또는 pipeline 실행 환경에만 설정하세요. Vue·API에는 키를 전달하지 않습니다.
+
+```bash
+# DATABASE_URL이 가리키는 PostgreSQL을 먼저 실행합니다.
+# 가격·필수 거시자료를 갱신한 후 뉴스 분류를 실행합니다.
+"$HOME/.virtualenvs/coffee-price-prediction/bin/python" -m coffee_service.pipeline news \
+  --source-dir data/processed/jev_live --jev-source yahoo --jev-limit 20
+
+# 이미 갱신한 자료와 저장된 분류만 재사용합니다. 외부 API를 호출하지 않습니다.
+"$HOME/.virtualenvs/coffee-price-prediction/bin/python" -m coffee_service.pipeline news \
+  --source-dir data/processed/jev_live --skip-ingestion --skip-news-collection
+```
+
+최초 source-dir에는 기존 필수 가격·ALFRED 이력을 복사해 두어야 합니다. 이력이 부족하면 기존 검사가 적재 전에 차단합니다. `--jev-limit`는 뉴스 조회 개수와 신규 분류 요청 상한(1~200)입니다. 429는 즉시 종료하고 성공 캐시를 남기므로 제한 해제 후 재실행할 수 있습니다. `partial`/`failed`는 종료 코드 1이며 캐시 재사용 때도 원래 상태를 보존합니다.
+
+기본 캐시는 `data/raw/jev/articles.json`, 수집 메타데이터는 `articles.json.collected.json`, 실행 상태는 `articles.json.status.json`, 보정 artifact는 `articles.model.json`입니다. 본문은 크롤링하지 않으며 최신 기사 표본은 기간 전체를 대표하지 않습니다. `/api/v1/news/jev`와 대시보드에서 분석 기사·기존 가격·뉴스 보정 가격·처리 상태를 조회합니다.
+
+최근 기사에는 더 큰 시간 가중치를 주고, 0·1·3·5거래일 시차를 사용합니다. 비음수 Ridge가 baseline의 로그수익률 오차를 학습하고 지평이 길수록 보정 폭을 감쇠합니다. 충분한 학습·검증 자료가 없으면 보정 가격을 만들지 않습니다. 기본 `--jev-training-availability research`는 과거 기사를 현재 재분류한 탐색이며 실시간 백테스트가 아닙니다. `live`는 실제 분석 완료 시각 이후의 자료만 사용합니다. 어느 모드도 검증된 우위를 의미하지 않습니다.
+
+2026-09-26 실제 실행은 수집 122건 중 분류 1건 성공 뒤 HTTP 429로 중단됐습니다. 현재 가격 보정은 자료 부족 상태입니다. 환경·실행·검증 결과는 [STATUS](docs/STATUS.md)를 확인하세요.

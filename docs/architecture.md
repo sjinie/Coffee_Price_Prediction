@@ -176,3 +176,16 @@ Train 시작은 2015-01-01로 고정하고 정답 날짜가 2020/2021/2022년 �
 pipeline의 `--skip-ingestion`은 수치 수집만 생략한다. `--ingest-news`는 독립된 선택 플래그이며, 없으면 저장된 뉴스만 읽는다. `--intelligence-artifact`를 지정해야 새 신호를 적재한다. Docker는 `PIPELINE_MODELS_DIR`를 `/models`에 읽기 전용 마운트하고 `/seed/news/*.parquet`를 기존 소스와 함께 누락된 작업 파일에만 복사한다. native 새 실험은 import 전에 `OMP_NUM_THREADS=1`을 명시한다. 패키지의 기본값은 `setdefault`라 기존 사용자 값을 덮어쓰지 않는다.
 
 API·Vue는 최종 가격·수익률·방향과 별도 상승 확률, 뉴스 영향·관련 기사 수·수집 시각, 상태·모드·버전을 제공한다. 뉴스 표시 창은 5/20/60일 지평별 7/30/60일이다. 60일 현재 모델 metadata의 Test RMSE는 기존 DLinear 노트북 지표를 유지하므로, 새 분류기나 뉴스 입력의 성과로 해석하지 않는다.
+
+## 2026-09-26 — Jev 뉴스 잔차 보정 계약
+
+기존 가격 산출물과 새 뉴스 산출물은 독립적으로 보존한다. `pipeline news`는 기존 수집·feature·가격 모델을 재사용하며, `jev_analyses`에는 content/model/prompt 기반 불변 분석을, `news_forecast_runs`에는 발행 시각별 별도 예측 snapshot을 저장한다. 기사 조회가 느리거나 실패해도 가격 화면은 계속 로드된다. 실패한 뉴스 run은 마지막 정상/부분 성공 snapshot을 대체하지 않는다.
+
+- 입력: Yahoo KC=F의 제목(최대 512자)·공급자 요약(최대 1,200자), URL, 출처, 발행/수집/분석 시각. 선택적 GDELT는 발행 대신 발견 시각을 사용한다. URL·내용·제목 중복을 제거하고 모델/프롬프트 버전별 분류 캐시를 재사용한다. 원문 본문은 수집하지 않는다.
+- TypeSafe: `POST https://ai-gateway.vercel.sh/typesafe/v1/systemone`, model `typesafe-ai/jev`, `state`와 `questions`. `choice`는 bullish/bearish/neutral/uncertain, `noul`은 아라비카 선물 관련성이다. 텍스트의 일반 감성과 가격 압력을 구분하고 기사 내용은 지시가 아닌 데이터로 취급한다. 응답의 확률·confidence·relevance·토큰·비용을 보존한다. 분류 확률은 미래 가격 상승 확률이 아니다.
+- 시점: `event_at`은 발행(없으면 발견), `available_at`은 발행/수정/발견/수집/분석 중 가장 늦은 시각이다. live에서는 cutoff 이전에 이용 가능해진 기사만 쓴다. 연구 모드는 과거 발행 시각으로 재분류 결과를 붙이므로 실시간 성과로 해석하지 않는다.
+- 신호: `tanh(sum(relevance * confidence * (p_bullish-p_bearish) * 2**(-age_days/half_life)))`. half-life 후보 1/3/7일, 시차 0/1/3/5거래일. 오래된 기사를 늦게 수집해도 기사 나이를 다시 0으로 만들지 않는다. 최신 종가 이후의 뉴스는 새 snapshot의 lag 0에만 반영한다. 과거 예측을 소급 수정하지 않는다.
+- 보정: 양수 계수·절편 없는 Ridge(alpha 1/10)가 5/20/60 지평의 baseline 로그수익률 잔차를 학습한다. 같은 시차 신호에 `exp(-(h-5)/tau)`(tau 10/20/40)를 곱해 단기 보정을 더 크게 한다. 이는 단기 영향에 대한 설계 가정이며 인과적 전달 시간의 추정치는 아니다.
+- 평가: origin 기준 시간순 60/20/20 분할, 다음 구간 시작 이후에 성숙하는 train/tune 정답을 제거한다. 정답은 target 거래일 23:00 UTC 이후에만 사용한다. 거래일 결측 축은 유지하고 종가 결측 origin/target을 제외한다. 지평별 최소 train/tune/holdout 12/5/5행을 모두 충족한 지평만 선택·학습·평가한다. 이 최소치는 탐색용이며 통계적 신뢰를 보증하지 않는다. 같은 holdout 행의 RMSE/MAE/방향 정확도를 baseline과 비교하되, 겹치는 지평의 독립성은 보장하지 않는다.
+- 상태: `experimental`, `insufficient_data`, `unavailable`, `no_news`. 데이터가 부족하면 보정가 null이며 기존 가격을 조작하지 않는다. 모델 hash·학습 cutoff·기사 ID·선택 설정·평가 지표를 snapshot에 기록한다. artifact가 발행 시각보다 나중에 학습됐거나 가격이 7일보다 오래되면 보정을 차단한다.
+- 운영: key는 pipeline에만 주입한다. 최초 범위 최대 90일/200요청, 캐시 단위 배타 잠금, 원자 저장, 429 즉시 중단/Retry-After 기록, 연속 네트워크·서버 오류 3회 중단을 적용한다. 일반 CI는 외부 API 대신 fixture를 사용한다.
