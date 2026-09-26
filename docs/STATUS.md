@@ -1,5 +1,14 @@
 # 작업 상태
 
+## 2026-09-26 — 가격·기후·거시 6개 단일 모델 지평별 비교
+
+- 범위: `data_code/03_3_single_model_comparison.ipynb`에서 DLinear·NLinear·XGBoost·LightGBM·PatchTST·TimesNet을 5/20/60거래일 누적 로그수익률로 비교했다. 앙상블 없이 가격 4·거시 3·기후/달력 20개, 공통 60일 창을 사용하며 트리도 같은 창을 펼쳐 입력한다. 신경망은 scalar 회귀 변형으로 명시했다. 기존 DLinear 구조와 변환 함수를 재사용하고 새 네트워크만 `data_code/single_model_networks.py`로 분리했다. 기존 노트북·서비스·artifact·의존성은 변경하지 않았다.
+- 평가: 2015년부터 expanding 학습, 2022/2023년 검증의 합산 RMSE로 각 모델의 10/30 epoch 또는 100/300 tree 설정을 선택했다. 월별 기후 기준값·scaler·target 통계는 fold별 학습 범위에서만 적합하고 정답 날짜 경계를 지켰다. 고정 설정으로 2015~2023년 재학습 후 이미 본 2024~2025년을 재평가했으며 미사용 Test라고 부르지 않는다. seed 42 한 개의 제한된 설정 비교다.
+- 결과: 검증 선택은 5/20일 Persistence, 60일 DLinear다. 과거 재평가에서 단일 모델 최저 RMSE는 5일 DLinear **0.055739**(Persistence 0.054442보다 나쁨), 20일 LightGBM **0.112507**(Persistence 대비 +0.44%), 60일 PatchTST **0.160502**(+13.60%)다. 검증 선택 60일 DLinear는 **0.163876**(+11.78%)이며 사후 최저 모델로 선택을 바꾸지 않았다. 단일 seed·작은 후보군·겹치는 target 때문에 안정적 우월성을 확정하지 않는다.
+- 실행/보관: Mac 외부 Python 3.12.14, CPU 1 thread에서 Notebook 전체 **535초** 실행 완료. 코드 셀 11개와 한글 그림 2개를 저장했다. 개별 예측 27,297행과 지표·연도별·비중첩 분석은 ignored `data/processed/single_model_comparison/20260926T115735770501Z/`에 보관했다. 후속 단순평균을 위한 개별 예측일·목표일·지평·seed·설정만 저장하며 평균 예측은 만들지 않았다.
+- 검증: 새 모델 단위검사 **8 passed**(forward/backward, NLinear 채널 복원, TimesNet 상수 입력·배치 독립성·그룹 계산 대조), 미래 원천 변경 시 과거 입력 불변·target 날짜/결측·공통 평가 행·지표 재계산 검사 통과. 독립 리뷰의 결과 저장 재시도 문제를 수정해 임시 디렉터리 전체 기록 후 rename하며 동일 결과는 재사용하고 충돌은 보존한다. 수정한 저장 셀을 실제 결과로 재실행하고 저장 실패/재시도/충돌 검사를 통과했다. nbformat·코드 compile·저장 PNG 한글/수치와 HTML 본문을 확인했다.
+- 근거 확인(2026-09-26): [DLinear/NLinear](https://github.com/cure-lab/LTSF-Linear), [PatchTST](https://github.com/yuqinie98/PatchTST), [TimesNet](https://github.com/thuml/Time-Series-Library/blob/main/models/TimesNet.py), [XGBoost](https://xgboost.readthedocs.io/en/stable/python/python_api.html), [LightGBM](https://lightgbm.readthedocs.io/en/stable/pythonapi/lightgbm.LGBMRegressor.html). 설치 Torch 2.14.0 / XGBoost 3.4.1 / LightGBM 4.7.0을 유지했다. 초기 font cache 권한 안내는 쓰기 가능한 cache 경로로 해결했다. Jupyter 실행에는 loopback TCP 비암호화 안내가 있었으며 외부 공개 서버나 secret 입력은 사용하지 않았다. CI·Docker·배포 및 다중 seed 검증은 이번 범위가 아니다.
+
 ## 2026-09-26 — 단색·Fade 대시보드와 목표일 기준 예측 비교
 
 - 변경: 기존 Vue/SVG 화면을 단색 배경·청록 강조색·선 중심으로 정리했다. 가격 비교를 뉴스 설명보다 먼저 배치하고 밝게/어둡게/시스템 테마, 진입 및 지평 변경 CSS Fade, `prefers-reduced-motion` 대응을 추가했다. 뉴스 상세·모델·실행·소스 정보와 기존 anchor를 유지하며 의존성·API·DB·모델은 변경하지 않았다.
