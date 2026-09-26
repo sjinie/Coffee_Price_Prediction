@@ -136,6 +136,17 @@ def export(job, results):
     temporary.replace(job / "results.csv")
 
 
+def pack_batch(pending):
+    batch = []
+    for article in sorted(pending, key=lambda item: item["selection_date"], reverse=True):
+        candidate = batch + [article]
+        size = len(json.dumps(jev._batch_payload(candidate), ensure_ascii=False).encode("utf-8"))
+        if size > jev.MAX_BATCH_BYTES:
+            break
+        batch = candidate
+    return batch
+
+
 def run(data=DATA, *, once=False):
     data = Path(data)
     cache_path = data / "backfill-analyses.json"
@@ -202,9 +213,7 @@ def run(data=DATA, *, once=False):
                 if cost_total(cache.values()) + Decimal("0.01") >= Decimal("1"):
                     save("budget_stop")
                     return 1
-                batch = sorted(pending, key=lambda item: item["selection_date"], reverse=True)[:20]
-                while len(json.dumps(jev._batch_payload(batch), ensure_ascii=False).encode()) > 60000:
-                    batch.pop()
+                batch = pack_batch(pending)
                 if not batch:
                     save("stopped", error="Article exceeds request size limit")
                     return 1

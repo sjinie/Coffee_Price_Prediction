@@ -40,6 +40,6 @@
 
 ## 2026-09-26 — Jev 백그라운드 백필
 - 최근 365일 하루 최대2건 549건을 선정했고, 2022~2025년 하루 최대1건은 원자료 8,429레코드에서 960건을 미리 선정했다. 과거 501일은 적합한 기사 미확보다.
-- `coffee_service.news_backfill`이 최근 목록부터 처리하고 429/일시 오류 뒤 60초마다 재시도하며, HTTP 200 성공 뒤에는 300초를 기다린다(더 긴 Retry-After 준수). 기존 분석을 재사용하며 현재 전체 완료가 아니다. 실시간 상태는 `data/raw/jev/backfill-status.json`, 결과는 각 `results.json`/`results.csv`다.
+- `coffee_service.news_backfill`이 최근 목록부터 처리하고 Jev 질문을 요청 크기 한도 안에서 묶는다. 429/일시 오류 뒤 60초마다 재시도하며, HTTP 200 성공 뒤에는 300초를 기다린다(더 긴 Retry-After 준수). 기존 분석을 재사용하며 현재 전체 완료가 아니다. 실시간 상태는 `data/raw/jev/backfill-status.json`, 결과는 각 `results.json`/`results.csv`다.
 - Codex heartbeat `jev`가 30분마다 상태를 확인한다. Python이 대기를 담당하며 완료/실패/조치 필요 때만 알린다. Mac 종료 후 체크포인트 재개가 필요하다. $1 Gateway budget을 유지하고 402에서 중단한다.
 - 향후 뉴스 앙상블용 연구 자료이며 이번에는 학습·DB 적재를 하지 않았다. 현재 시점의 과거 기사 재분류와 당시 이용 가능성을 구분하고 2022~23 Validation/이미 본 2024~25 Test 구분을 유지한다. 실행 근거와 검증은 STATUS 최신 항목을 따른다.

@@ -25,6 +25,15 @@ def setup_jobs(tmp_path):
         worker.write_json(tmp_path / name / "selected.json", [article()])
 
 
+def test_batch_packs_multiple_articles_to_request_ceiling():
+    rows = [{**article(), "title": f"Brazil coffee crop falls {index}"} for index in range(150)]
+    batch = worker.pack_batch(rows)
+    assert 20 < len(batch) < len(rows)
+    assert len(jev._batch_payload(batch)["questions"]) == len(batch) * 2
+    assert len(json.dumps(jev._batch_payload(batch), ensure_ascii=False).encode()) <= jev.MAX_BATCH_BYTES
+    assert len(json.dumps(jev._batch_payload(batch + [rows[len(batch)]]), ensure_ascii=False).encode()) > jev.MAX_BATCH_BYTES
+
+
 def test_retry_after_floor_dates_and_uncapped_delay():
     assert worker.retry_delay(None) == 60
     assert worker.retry_delay("NaN") == 60

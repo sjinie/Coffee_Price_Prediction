@@ -77,19 +77,18 @@ def test_batch_questions_are_independent_and_cost_is_not_duplicated():
             sent.append(kwargs["json"])
             class Response:
                 status_code, headers = 200, {}
-                def json(self): return {"answers": {"article_0_price_pressure": pressure, "article_0_relevance": {"type": "noul", "noul": .9}, "article_1_price_pressure": pressure, "article_1_relevance": {"type": "noul", "noul": .8}}, "usage": {"input_tokens": 30}, "provider_metadata": {"gateway": {"cost": .02}}}
+                def json(self): return {"answers": {name: pressure if name.endswith("_price_pressure") else {"type": "noul", "noul": .9} for name in kwargs["json"]["questions"]}, "usage": {"input_tokens": 30}, "provider_metadata": {"gateway": {"cost": .02}}}
             return Response()
     records = [{"url": "https://a.test/one", "title": "Arabica frost cuts harvest", "discovered_at": "2026-01-01T00:00:00Z"}, {"url": "https://a.test/two", "title": "Coffee exports fall", "discovered_at": "2026-01-02T00:00:00Z"}]
     result = jev.classify_articles(records, session=Session(), api_key="fixture")
     assert len(result) == 2 and result[0]["cost"] == .02 and result[1]["cost"] is None and result[1]["usage"] == {}
     assert sent[0]["state"] == {"market": "Arabica Coffee Futures (KC)"}
     assert sent[0]["questions"]["article_0_price_pressure"]["instructions"]["article"]["title"] != sent[0]["questions"]["article_1_price_pressure"]["instructions"]["article"]["title"]
-    with pytest.raises(ValueError, match="20"):
-        jev.classify_articles(records * 11, session=Session(), api_key="fixture")
+    assert len(jev.classify_articles(records * 11, session=Session(), api_key="fixture")) == 22
     large = [{**records[0], "title": "가" * 512, "summary": "가" * 1200}] * 20
     with pytest.raises(jev.JevStopError, match="reduce batch_size"):
         jev.classify_articles(large, session=Session(), api_key="fixture")
-    assert len(sent) == 1
+    assert len(sent) == 2
     pressure["type"] = "score"
     with pytest.raises(jev.JevStopError, match="answer types"):
         jev.classify_articles(records, session=Session(), api_key="fixture")

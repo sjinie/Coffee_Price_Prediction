@@ -30,6 +30,7 @@ GDELT_ENDPOINT = "https://api.gdeltproject.org/api/v2/doc/doc"
 GATEWAY_ENDPOINT = "https://ai-gateway.vercel.sh/typesafe/v1/systemone"
 MODEL = "typesafe-ai/jev"
 PROMPT_VERSION = "arabica-kc-futures-v2"
+MAX_BATCH_BYTES = 100_000
 SELECTION_POLICY = "ny-daily-market-news-v1"
 NY_TZ = ZoneInfo("America/New_York")
 REQUIRED_KEYS = (
@@ -360,12 +361,13 @@ def _response_record(article: dict[str, Any], response: Mapping[str, Any], analy
 
 
 def classify_articles(records, *, session=None, api_key: str | None = None) -> list[dict[str, Any]]:
-    if not 1 <= len(records) <= 20:
-        raise ValueError("a Jev batch must contain between one and 20 articles")
+    if not records:
+        raise ValueError("a Jev batch must contain at least one article")
     articles = [_article_fields(record) for record in records]
     request = _batch_payload(articles)
-    # ponytail: conservative byte ceiling; add a model tokenizer only if large batches matter.
-    if len(json.dumps(request, ensure_ascii=False).encode("utf-8")) > 60_000:
+    # ponytail: byte ceiling is an empirical proxy (85KB used 21,915 tokens);
+    # lower it or use exact token counts if Gateway reports context errors.
+    if len(json.dumps(request, ensure_ascii=False).encode("utf-8")) > MAX_BATCH_BYTES:
         raise JevStopError("Jev batch is too large; reduce batch_size")
     key = api_key or os.getenv("AI_GATEWAY_API_KEY")
     if not key:
