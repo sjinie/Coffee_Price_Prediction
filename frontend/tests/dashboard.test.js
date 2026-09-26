@@ -14,11 +14,11 @@ test('뉴스 확률 신호·반영 강도·실제 가격 보정률을 구분한�
     return { formatWeight, formatWeightInterval, priceCorrectionPercent, articlePressure, newsEvidenceLabel }
   `)(computed, () => {}, ref)
   assert.equal(app.formatWeight(.2), '0.200')
-  for (const missing of [null, undefined, false, '0.2', -1, 1.1, NaN]) assert.equal(app.formatWeight(missing), '—')
+  for (const missing of [null, undefined, false, '0.2', -1, 1.1, NaN]) assert.equal(app.formatWeight(missing), '-')
   assert.equal(app.formatWeightInterval([0, .8]), '0.000 ~ 0.800')
-  assert.equal(app.formatWeightInterval([.8, .1]), '—')
+  assert.equal(app.formatWeightInterval([.8, .1]), '-')
   assert.equal(app.priceCorrectionPercent({ adjusted_price: 101, news_correction: Math.log(1.01), news_weight: .2 }), '+1%')
-  assert.equal(app.priceCorrectionPercent({ adjusted_price: null, news_correction: null }), '—')
+  assert.equal(app.priceCorrectionPercent({ adjusted_price: null, news_correction: null }), '-')
   const strong = { p_bullish: .9, p_bearish: .05, relevance: 1 }
   const weak = { p_bullish: .45, p_bearish: .4, relevance: 1 }
   assert.ok(app.articlePressure(strong) > app.articlePressure(weak))
@@ -43,7 +43,7 @@ test('조회 → 실패 → 빈 응답 복구와 지평 선택을 보존한다',
     return { ok: true, json: async () => mode === 'empty' ? (path.includes('/pipeline') ? null : []) : payload }
   }
   const app = new Function('computed', 'onMounted', 'ref', 'fetch', `${source}
-    return { loadData, retry, refreshButton, loading, error, prices, selectedHorizon, selectedPredictions, futurePredictions, formatNumber, pricePoints }
+    return { loadData, retry, refreshButton, loading, error, prices, selectedHorizon, selectedPredictions, futurePredictions, formatNumber, historicalComparison }
   `)(computed, () => {}, ref, fetch)
   const pending = app.loadData()
   assert.equal(app.loading.value, true)
@@ -65,9 +65,42 @@ test('조회 → 실패 → 빈 응답 복구와 지평 선택을 보존한다',
   assert.equal(focused, true)
   assert.equal(app.error.value, '')
   assert.equal(app.prices.value.length, 0)
-  assert.equal(app.pricePoints.value, '')
+  assert.equal(app.historicalComparison.value.length, 0)
   assert.equal(app.futurePredictions.value.length, 0)
-  assert.equal(app.formatNumber(null), '—')
+  assert.equal(app.formatNumber(null), '-')
+})
+
+test('목표일 달력 위에만 현재 모델의 과거 예측을 그리고 결측 구간을 연결하지 않는다', () => {
+  const app = new Function('computed', 'onMounted', 'ref', `${source}
+    return { prices, predictions, models, selectedHorizon, historicalComparison, comparisonPredictedPath, comparisonActualPath, latestHistoricalForecast, comparisonForecastCount }
+  `)(computed, () => {}, ref)
+  app.models.value = [{ model_id: 'current-60', horizons: [60] }]
+  app.prices.value = [
+    { date: '2025-01-05', close: 103 },
+    { date: '2025-01-01', close: 100 },
+    { date: '2025-01-10', close: 110 },
+    { date: '2025-01-03', close: 105 },
+  ]
+  app.predictions.value = [
+    { model_id: 'old-60', horizon: 60, origin_date: '2025-01-01', target_date: '2025-01-03', predicted_price: 999 },
+    { model_id: 'current-60', horizon: 60, origin_date: '2025-01-10', target_date: '2025-01-10', predicted_price: 104 },
+    { model_id: 'current-60', horizon: 60, origin_date: '2025-01-01', target_date: '2025-01-03', predicted_price: 104 },
+    { model_id: 'current-60', horizon: 60, origin_date: '2025-01-03', target_date: '2025-01-10', predicted_price: 108 },
+    { model_id: 'current-60', horizon: 60, origin_date: '2025-01-03', target_date: '2025-01-12', predicted_price: 112 },
+  ]
+  assert.deepEqual(app.historicalComparison.value.map(item => item.forecast?.predicted_price ?? null), [null, 104, null, 108])
+  assert.equal((app.comparisonPredictedPath.value.match(/M/g) || []).length, 2)
+  assert.doesNotMatch(app.comparisonPredictedPath.value, /NaN|Infinity/)
+  assert.match(app.comparisonActualPath.value, /^M/)
+  assert.equal(app.latestHistoricalForecast.value.origin_date, '2025-01-03')
+  app.selectedHorizon.value = 5
+  assert.equal(app.comparisonPredictedPath.value, '')
+  assert.equal(app.latestHistoricalForecast.value, null)
+  app.selectedHorizon.value = 60
+  app.prices.value = [...app.prices.value.filter(item => item.date !== '2025-01-10'), { date: '2025-01-10', close: null }]
+  assert.equal(app.historicalComparison.value.at(-1).forecast, null)
+  assert.equal(app.comparisonForecastCount.value, 1)
+  assert.equal(app.latestHistoricalForecast.value, null)
 })
 
 test('방향은 예측 기준일 가격과 비교하고 결측·미성숙은 평가에서 제외한다', () => {

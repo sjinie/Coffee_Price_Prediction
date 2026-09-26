@@ -8,21 +8,23 @@ const pipeline = ref(null)
 const sources = ref([])
 const newsView = ref(null)
 const newsError = ref('')
+const newsLoading = ref(false)
 const loading = ref(true)
 const error = ref('')
 const selectedHorizon = ref(60)
+const theme = ref('system')
 const refreshButton = ref(null)
 
 const formatter = new Intl.NumberFormat('ko-KR', { maximumFractionDigits: 2 })
 const dateFormatter = new Intl.DateTimeFormat('ko-KR', { dateStyle: 'medium' })
-const formatDate = value => value ? dateFormatter.format(new Date(`${value}T00:00:00`)) : '—'
+const formatDate = value => value ? dateFormatter.format(new Date(`${value}T00:00:00`)) : '-'
 const formatTime = value => value ? new Intl.DateTimeFormat('ko-KR', {
   dateStyle: 'medium', timeStyle: 'short',
-}).format(new Date(value)) : '—'
+}).format(new Date(value)) : '-'
 const finiteNumber = value => value !== null && value !== '' && Number.isFinite(Number(value)) ? Number(value) : null
 const formatNumber = value => {
   const number = finiteNumber(value)
-  return number === null ? '—' : formatter.format(number)
+  return number === null ? '-' : formatter.format(number)
 }
 const formatPercent = value => {
   const number = finiteNumber(value)
@@ -66,10 +68,13 @@ async function loadData() {
 }
 async function loadNews() {
   newsError.value = ''
+  newsLoading.value = true
   try {
     newsView.value = await get('/api/v1/news/jev?limit=50')
   } catch {
     newsError.value = '뉴스 조회에 실패했습니다. 가격과 기존 예측은 계속 확인할 수 있습니다.'
+  } finally {
+    newsLoading.value = false
   }
 }
 const newsForecasts = computed(() => newsView.value?.forecast?.forecasts || [])
@@ -87,7 +92,7 @@ const hasLegacyDirection = item => finiteNumber(item.probability_up) !== null ||
 const hasLegacyNews = item => finiteNumber(item.news_impact_score) !== null || finiteNumber(item.news_article_count) !== null || Boolean(item.news_updated_at)
 const formatCoefficient = value => {
   const number = finiteNumber(value)
-  return number === null ? '—' : String(number)
+  return number === null ? '-' : String(number)
 }
 const zeroNewsWeights = computed(() => {
   const coefficients = jevModel.value?.coefficients
@@ -101,11 +106,11 @@ const zeroNewsWeights = computed(() => {
 })
 const noExperimentalChange = item => item.status === 'experimental' && item.news_correction === 0 && zeroNewsWeights.value
 const boundedWeight = value => typeof value === 'number' && Number.isFinite(value) && value >= 0 && value <= 1
-const formatWeight = value => boundedWeight(value) ? value.toFixed(3) : '—'
+const formatWeight = value => boundedWeight(value) ? value.toFixed(3) : '-'
 const formatWeightInterval = value => Array.isArray(value) && value.length === 2 && value.every(boundedWeight) && value[0] <= value[1]
-  ? `${formatWeight(value[0])} ~ ${formatWeight(value[1])}` : '—'
+  ? `${formatWeight(value[0])} ~ ${formatWeight(value[1])}` : '-'
 const newsEvidenceLabel = value => ({ improvement_supported: '연구 재평가에서 개선 근거 있음', not_demonstrated: '예측력 개선 미확인', insufficient_evaluation: '개선 판단에 필요한 평가 자료 부족' }[value] || '예측력 미평가')
-const priceCorrectionPercent = item => item.adjusted_price == null || typeof item.news_correction !== 'number' ? '—' : formatPercent(Math.expm1(item.news_correction))
+const priceCorrectionPercent = item => item.adjusted_price == null || typeof item.news_correction !== 'number' ? '-' : formatPercent(Math.expm1(item.news_correction))
 const newsEvaluationRows = computed(() => newsForecasts.value.filter(item => item.evaluation))
 const articlePressure = article => [article.p_bullish, article.p_bearish, article.relevance].every(boundedWeight)
   ? (article.p_bullish - article.p_bearish) * article.relevance : null
@@ -115,10 +120,11 @@ async function retry() {
 }
 onMounted(loadData)
 
-const latestPrice = computed(() => prices.value.at(-1))
+const orderedPrices = computed(() => [...prices.value].sort((a, b) => String(a.date).localeCompare(String(b.date))))
+const latestPrice = computed(() => orderedPrices.value.at(-1))
 const latestPriceChange = computed(() => {
-  if (prices.value.length < 2) return null
-  const previous = finiteNumber(prices.value.at(-2).close)
+  if (orderedPrices.value.length < 2) return null
+  const previous = finiteNumber(orderedPrices.value.at(-2).close)
   const latest = finiteNumber(latestPrice.value?.close)
   if (previous === null || latest === null || previous === 0) return null
   return ((latest / previous) - 1) * 100
@@ -141,6 +147,7 @@ const selectedPredictions = computed(() => predictions.value
   .filter(isCurrentPrediction)
   .filter(item => item.horizon === selectedHorizon.value
     && finiteNumber(item.actual_price) !== null && finiteNumber(item.predicted_price) !== null)
+  .sort((a, b) => String(a.target_date).localeCompare(String(b.target_date)))
   .slice(-180))
 // 방향은 인접 평가점이 아닌 각 예측 기준일 종가와 비교한다.
 const evaluation = computed(() => {
@@ -182,7 +189,7 @@ const directionPaths = key => {
     const command = drawing ? 'L' : 'M'
     drawing = true
     return command + evaluationX(index) + ',' + directionY(item[key])
-  }).join(' ')
+  }).join(' ').trim()
 }
 const directionLabel = value => value === null ? '확인 불가' : value > 0 ? '↑ 상승' : value < 0 ? '↓ 하락' : '→ 보합'
 const matchLabel = value => value === null ? '평가 제외' : value ? '일치' : '불일치'
@@ -197,26 +204,30 @@ const oldestFreshness = computed(() => {
   return [...sources.value].sort((a, b) => String(a.last_data_date).localeCompare(String(b.last_data_date)))[0]
 })
 
-function linePoints(values, domain, width = 900, height = 280) {
-  if (!values.length) return ''
-  const [min, max] = domain
-  const span = max - min || 1
-  return values.map((value, index) => {
-    const x = (index / Math.max(values.length - 1, 1)) * width
-    const y = height - ((value - min) / span) * height
-    return `${x.toFixed(1)},${y.toFixed(1)}`
-  }).join(' ')
-}
-
-const priceDomain = computed(() => {
-  const values = prices.value.map(item => finiteNumber(item.close)).filter(value => value !== null)
-  return chartDomain(values)
+const historicalPrices = computed(() => orderedPrices.value
+  .map(item => ({ ...item, close: finiteNumber(item.close) }))
+  .filter(item => item.date)
+  .slice(-180))
+const historicalForecasts = computed(() => {
+  const byTarget = new Map()
+  predictions.value
+    .filter(isCurrentPrediction)
+    .filter(item => item.horizon === selectedHorizon.value)
+    .filter(item => item.target_date && item.origin_date && item.origin_date < item.target_date)
+    .filter(item => item.target_date <= latestPriceDate.value && finiteNumber(item.predicted_price) !== null)
+    .forEach(item => {
+      const previous = byTarget.get(item.target_date)
+      if (!previous || item.origin_date > previous.origin_date) byTarget.set(item.target_date, item)
+    })
+  return byTarget
 })
-const comparisonDomain = computed(() => {
-  const values = selectedPredictions.value.flatMap(item => [item.actual_price, item.predicted_price])
-    .map(finiteNumber).filter(value => value !== null)
-  return chartDomain(values)
-})
+const historicalComparison = computed(() => historicalPrices.value.map(item => ({
+  ...item,
+  forecast: item.close === null ? null : historicalForecasts.value.get(item.date) || null,
+})))
+const comparisonDomain = computed(() => chartDomain(historicalComparison.value.flatMap(item => [
+  item.close, item.forecast?.predicted_price,
+]).map(finiteNumber).filter(value => value !== null)))
 function chartDomain(values) {
   if (!values.length) return [0, 1]
   const min = Math.min(...values)
@@ -224,23 +235,55 @@ function chartDomain(values) {
   const padding = (max - min) * 0.05 || Math.max(Math.abs(max) * 0.05, 1)
   return [min - padding, max + padding]
 }
-const pricePoints = computed(() => linePoints(prices.value.map(item => finiteNumber(item.close)), priceDomain.value))
-const actualPoints = computed(() => linePoints(
-  selectedPredictions.value.map(item => item.actual_price), comparisonDomain.value,
-))
-const predictedPoints = computed(() => linePoints(
-  selectedPredictions.value.map(item => item.predicted_price), comparisonDomain.value,
-))
+const comparisonDateRange = computed(() => [
+  historicalComparison.value[0]?.date || '',
+  historicalComparison.value.at(-1)?.date || '',
+])
+const dateX = value => {
+  const [start, end] = comparisonDateRange.value.map(date => Date.parse(`${date}T00:00:00Z`))
+  const date = Date.parse(`${value}T00:00:00Z`)
+  return Number.isFinite(date) && Number.isFinite(start) && Number.isFinite(end)
+    ? ((date - start) / (end - start || 1)) * 900 : 0
+}
+const priceY = value => {
+  const [min, max] = comparisonDomain.value
+  return 280 - ((Number(value) - min) / (max - min || 1)) * 280
+}
+function datedPath(values, valueFor) {
+  let drawing = false
+  return values.map(item => {
+    const value = finiteNumber(valueFor(item))
+    if (value === null) { drawing = false; return '' }
+    const command = drawing ? 'L' : 'M'
+    drawing = true
+    return `${command}${dateX(item.date).toFixed(1)},${priceY(value).toFixed(1)}`
+  }).join(' ').trim()
+}
+const comparisonActualPath = computed(() => datedPath(historicalComparison.value, item => item.close))
+const comparisonPredictedPath = computed(() => datedPath(historicalComparison.value, item => item.forecast?.predicted_price))
+const comparisonForecastCount = computed(() => historicalComparison.value.filter(item => item.close !== null && item.forecast).length)
+const latestHistoricalForecast = computed(() => finiteNumber(latestPrice.value?.close) === null
+  ? null : historicalForecasts.value.get(latestPriceDate.value) || null)
+const latestForecastError = computed(() => {
+  const prediction = finiteNumber(latestHistoricalForecast.value?.predicted_price)
+  const actual = finiteNumber(latestPrice.value?.close)
+  return prediction === null || actual === null ? null : prediction - actual
+})
+const formatSignedNumber = value => {
+  const number = finiteNumber(value)
+  return number === null ? '-' : `${number > 0 ? '+' : ''}${formatNumber(number)}`
+}
 const statusLabel = value => ({ success: '완료', partial: '부분 완료', failed: '실패', running: '실행 중', existing: '저장 자료', current: '최신 확인' }[value] || '대기')
 const ticks = domain => Array.from({ length: 5 }, (_, index) => domain[1] - (domain[1] - domain[0]) * index / 4)
 </script>
 
 <template>
   <a class="skip-link" href="#dashboard">본문 바로가기</a>
-  <main id="dashboard" tabindex="-1">
+  <main id="dashboard" tabindex="-1" :data-theme="theme">
     <header class="page-heading">
-      <div><h1>커피 선물</h1><p>KC=F · ICE Coffee C · 아라비카 · ¢/lb</p></div>
-      <div class="heading-tools"><span>가격 기준 <b>{{ formatDate(latestPrice?.date) }}</b></span><button ref="refreshButton" class="refresh" :disabled="loading" @click="loadData">{{ loading ? '조회 중…' : '다시 조회' }}</button></div>
+      <div class="brand"><h1><a href="#dashboard" aria-label="커피 선물 대시보드 처음으로">커피 선물</a></h1><span>KC=F · ICE Coffee C</span></div>
+      <nav aria-label="대시보드 탐색"><a href="#comparison-title">예측 검증</a><a href="#jev-title">뉴스 보정</a><a href="#sources-title">데이터</a></nav>
+      <div class="heading-tools"><span>가격 기준 <b>{{ formatDate(latestPrice?.date) }}</b></span><label class="theme-control"><span class="sr-only">화면 테마</span><select v-model="theme" aria-label="화면 테마"><option value="system">시스템</option><option value="light">밝게</option><option value="dark">어둡게</option></select></label><button ref="refreshButton" class="refresh" :disabled="loading" @click="loadData">{{ loading ? '조회 중…' : '새로고침' }}</button></div>
     </header>
 
     <div v-if="loading" class="loading-state" role="status" aria-live="polite"><p>가격과 예측 데이터를 불러오고 있습니다.</p><div class="skeleton metrics-skeleton"></div><div class="skeleton chart-skeleton"></div></div>
@@ -249,10 +292,28 @@ const ticks = domain => Array.from({ length: 5 }, (_, index) => domain[1] - (dom
       <div v-if="!prices.length" class="notice" role="status"><strong>아직 저장된 가격이 없습니다.</strong><p>데이터 적재가 끝나면 다시 조회해 주세요.</p></div>
       <section class="metrics" aria-label="주요 지표">
         <article class="primary-metric"><span>최근 종가</span><strong>{{ formatNumber(latestPrice?.close) }}<small>¢/lb</small></strong><small>{{ formatDate(latestPrice?.date) }}</small></article>
-        <article><span>직전 거래일 대비</span><strong :class="latestPriceChange === null ? '' : latestPriceChange >= 0 ? 'up' : 'down'">{{ latestPriceChange === null ? '—' : (latestPriceChange >= 0 ? '+' : '') + formatNumber(latestPriceChange) + '%' }}</strong><small>종가 변동률</small></article>
+        <article><span>직전 거래일 대비</span><strong :class="latestPriceChange === null ? '' : latestPriceChange >= 0 ? 'up' : 'down'">{{ latestPriceChange === null ? '-' : (latestPriceChange >= 0 ? '+' : '') + formatNumber(latestPriceChange) + '%' }}</strong><small>종가 변동률</small></article>
         <article><span>최근일 고가 / 저가</span><strong class="range-value">{{ formatNumber(latestPrice?.high) }}<em>/</em>{{ formatNumber(latestPrice?.low) }}</strong><small>원천 OHLC · ¢/lb</small></article>
-        <article><span>60일 Test RMSE</span><strong>{{ dlinearModel?.metrics?.test_rmse ?? '—' }}</strong><small>로그수익률 · DLinear</small></article>
-        <article><span>가장 오래된 소스</span><strong class="date-value">{{ formatDate(oldestFreshness?.last_data_date) }}</strong><small class="source-id">{{ oldestFreshness?.source ?? '—' }}</small></article>
+        <article><span>60일 Test RMSE</span><strong>{{ dlinearModel?.metrics?.test_rmse ?? '-' }}</strong><small>로그수익률 · DLinear</small></article>
+        <article><span>가장 오래된 소스</span><strong class="date-value">{{ formatDate(oldestFreshness?.last_data_date) }}</strong><small class="source-id">{{ oldestFreshness?.source ?? '-' }}</small></article>
+      </section>
+
+      <section class="comparison hero-comparison" aria-labelledby="comparison-title">
+        <div class="comparison-heading">
+          <div><h2 id="comparison-title">실제 가격과 과거 예측</h2><span id="price-title" class="sr-only">가격 추이</span><p>같은 목표 날짜에 맞춰 비교합니다. 점선은 과거 기준일의 저장 예측입니다.</p></div>
+          <div class="tabs" role="group" aria-label="예측 horizon 선택"><button v-for="horizon in [5,20,60]" :key="horizon" :aria-pressed="selectedHorizon === horizon" :class="{ active: selectedHorizon === horizon }" @click="selectedHorizon = horizon">{{ horizon }}거래일</button></div>
+        </div>
+        <div class="chart-meta"><div class="legend"><span class="actual">실제 종가</span><span class="predicted">과거 예측</span></div><span>{{ selectedModel?.name ?? '모델 없음' }} · 최근 {{ historicalComparison.length }}거래일</span></div>
+        <template v-if="historicalComparison.length">
+          <div :key="selectedHorizon" class="chart-frame comparison-frame">
+            <div class="y-axis" aria-hidden="true"><span v-for="(tick,index) in ticks(comparisonDomain)" :key="index">{{ formatNumber(tick) }}</span></div>
+            <div class="chart" role="img" :aria-label="`${selectedHorizon}거래일 예측과 실제 종가를 목표 날짜로 정렬한 비교 차트, 단위 센트/파운드`"><svg viewBox="0 0 900 280" preserveAspectRatio="none"><line v-for="y in [0,70,140,210,280]" :key="y" x1="0" :y1="y" x2="900" :y2="y"/><path :d="comparisonActualPath" class="actual-line"/><path :d="comparisonPredictedPath" class="predicted-line"/></svg></div>
+          </div>
+          <div class="axis"><span>{{ formatDate(comparisonDateRange[0]) }}</span><span>목표 날짜 기준</span><span>{{ formatDate(comparisonDateRange[1]) }}</span></div>
+          <div class="comparison-callout"><template v-if="finiteNumber(latestPrice?.close) !== null"><span>최근 실제값 <b>{{ formatNumber(latestPrice?.close) }} ¢/lb</b> · {{ formatDate(latestPriceDate) }}</span><span v-if="latestHistoricalForecast" class="prediction-callout">그날의 예측 <b>{{ formatNumber(latestHistoricalForecast.predicted_price) }} ¢/lb</b> · 기준 {{ formatDate(latestHistoricalForecast.origin_date) }}<small>오차 {{ formatSignedNumber(latestForecastError) }} ¢/lb</small></span><span v-else>최근 실제값의 과거 예측은 아직 없습니다.</span></template><span v-else>최신 종가가 없어 비교할 수 없습니다.</span><span>연결된 예측 {{ comparisonForecastCount }}개</span></div>
+          <p class="footnote">저장된 과거 기준일 예측이며, 당시 실시간으로 공개한 기록을 뜻하지 않습니다.</p>
+        </template>
+        <p v-else class="empty-state">가격 데이터가 없습니다.</p>
       </section>
 
       <section class="panel news-panel" aria-labelledby="jev-title">
@@ -264,13 +325,13 @@ const ticks = domain => Array.from({ length: 5 }, (_, index) => domain[1] - (dom
         <p v-if="newsView?.selection?.selected_count != null" class="section-note">{{ newsView.selection.requested_start }} ~ {{ newsView.selection.requested_end }} · 뉴욕 날짜별 최대 1건 · 선정 {{ newsView.selection.selected_count }}건 · 분석 완료 {{ newsView.selection.selected_analysis_ids?.length ?? 0 }}건. 공급·작황·날씨·무역 관련성을 기준으로 선정합니다.</p>
         <template v-if="newsView?.forecast">
           <p class="section-note">실행 {{ formatTime(newsView.forecast.as_of) }} · 가격 기준 {{ formatDate(newsView.forecast.price_date) }} · {{ newsView.forecast.training_availability === 'research' ? '연구용 시점 기준 · 과거 기사 재분류' : '실제 이용 가능 시각 기준' }}</p>
-          <p class="section-note">이 예측을 만들 때 수집한 후보 {{ newsView.forecast.source_status.source_count ?? '—' }}건 · 수집처의 표본으로, 기간 내 모든 뉴스를 포함하지 않습니다.</p>
+          <p class="section-note">이 예측을 만들 때 수집한 후보 {{ newsView.forecast.source_status.source_count ?? '-' }}건 · 수집처의 표본으로, 기간 내 모든 뉴스를 포함하지 않습니다.</p>
           <template v-if="jevModel?.horizon_models">
             <p class="section-note">반영 강도는 0~1입니다. 방향은 뉴스가 정하고, 강도는 가격 변동성에 비례한 효과를 얼마나 적용할지 정합니다. 강도 0.2는 가격 20% 변화를 뜻하지 않습니다.</p>
             <p class="section-note">현재 뉴스 신호 {{ formatNumber(newsForecasts[0]?.news_signal) }} · {{ newsImpactLabel(newsForecasts[0]?.news_signal) }}. 최신 기사에 더 큰 비중을 두고, 이전 거래일의 뉴스도 시차를 두어 반영합니다.</p>
           </template>
           <details v-if="jevModel" class="forecast-version"><summary>계산 방식과 가정</summary>
-            <small>반감기 {{ formatCoefficient(jevModel.half_life) }} 달력일 · 시차 {{ (jevModel.lags || []).join(', ') || '—' }} 거래일 · 지평 감쇠 τ {{ formatCoefficient(jevModel.horizon_decay?.tau) }} (exp(-(h-5)/τ))</small>
+            <small>반감기 {{ formatCoefficient(jevModel.half_life) }} 달력일 · 시차 {{ (jevModel.lags || []).join(', ') || '-' }} 거래일 · 지평 감쇠 τ {{ formatCoefficient(jevModel.horizon_decay?.tau) }} (exp(-(h-5)/τ))</small>
             <template v-if="jevModel.horizon_models">
               <small>기사 신호 = (Bullish 확률 − Bearish 확률) × 커피 관련성. 확률 차이가 클수록 강하게 반영합니다. 중립·판단 유보 확률도 유지하며, 같은 확률분포에서 계산된 Jev confidence는 다시 곱하지 않습니다.</small>
               <small>보정 로그수익률 = 최근 변동성 × 지평 배수 × 뉴스 신호 × 반영 강도. 보정 가격 = 기본 예측 × exp(보정 로그수익률).</small>
@@ -278,24 +339,25 @@ const ticks = domain => Array.from({ length: 5 }, (_, index) => domain[1] - (dom
               <small>강도는 지평별 후속 수익률로 추정합니다. 사전 가정은 효과 없음 50% + 0~1 균등분포 50%이며, 과거 5일 수익률과 평균을 통제합니다. 95% 사후구간은 이 가정에 따른 강도의 불확실성으로 가격 예측구간이나 상승 확률이 아닙니다.</small>
               <small>현재까지 확보한 기사의 발행·선정 시점으로 시차를 재구성한 연구용 추정입니다. 과거 당시 실시간 성능을 검증한 결과가 아닙니다.</small>
             </template>
-            <small v-else>기존 모델 계수 {{ (jevModel.coefficients || []).map(formatCoefficient).join(', ') || '—' }}</small>
+            <small v-else>기존 모델 계수 {{ (jevModel.coefficients || []).map(formatCoefficient).join(', ') || '-' }}</small>
           </details>
-          <div class="news-table-wrap"><table class="forecast-table"><caption class="sr-only">기존 예측과 뉴스 보정 예측 및 반영 강도 비교</caption><thead><tr><th scope="col">지평</th><th scope="col">기존 예측</th><th scope="col">뉴스 반영 예측</th><th scope="col">가격 보정</th><th v-if="jevModel?.horizon_models" scope="col">반영 강도 · 0~1</th><th scope="col">상태</th></tr></thead><tbody>
+          <div class="news-table-wrap" tabindex="0" role="region" aria-label="뉴스 보정 예측 표"><table class="forecast-table"><caption class="sr-only">기존 예측과 뉴스 보정 예측 및 반영 강도 비교</caption><thead><tr><th scope="col">지평</th><th scope="col">기존 예측</th><th scope="col">뉴스 반영 예측</th><th scope="col">가격 보정</th><th v-if="jevModel?.horizon_models" scope="col">반영 강도 · 0~1</th><th scope="col">상태</th></tr></thead><tbody>
             <tr v-for="item in newsForecasts" :key="item.horizon">
               <th scope="row">{{ item.horizon }}거래일</th><td>{{ formatNumber(item.base_predicted_price) }} ¢/lb</td>
               <td>{{ formatNumber(item.adjusted_price) }}<span v-if="item.adjusted_price != null"> ¢/lb</span></td>
-              <td>{{ item.adjusted_price == null ? '—' : formatNumber(item.adjusted_price - item.base_predicted_price) + ' ¢/lb' }}<small>{{ priceCorrectionPercent(item) }}</small></td>
+              <td>{{ item.adjusted_price == null ? '-' : formatNumber(item.adjusted_price - item.base_predicted_price) + ' ¢/lb' }}<small>{{ priceCorrectionPercent(item) }}</small></td>
               <td v-if="jevModel?.horizon_models">{{ formatWeight(item.news_weight) }}<small v-if="boundedWeight(item.news_weight)">95% 사후구간 {{ formatWeightInterval(item.news_weight_interval) }}</small><small>겹치지 않는 학습 구간 {{ jevModel.horizon_models[item.horizon]?.calibration_rows ?? 0 }}개</small></td>
               <td>{{ newsForecastLabel(item.status) }}<small>{{ noExperimentalChange(item) ? '학습된 뉴스 가중치가 모두 0이어서 가격 변화가 없습니다.' : newsReason(item) }}</small><small v-if="item.evidence_status">{{ newsEvidenceLabel(item.evidence_status) }}</small><small>입력 기사 {{ item.news_article_count ?? 0 }}건</small></td>
             </tr>
           </tbody></table></div>
           <details v-if="newsEvaluationRows.length" class="news-details"><summary>기본 예측과 성능 비교 · 과거 기사 재분류 연구</summary>
             <p class="section-note">뒤쪽 40% 기간을 순서대로 평가하며, 각 예측일보다 먼저 결과가 확정된 자료만 학습합니다. 같은 날짜의 기본 예측과 비교합니다. RMSE·MAE는 로그수익률 단위입니다.</p>
-            <div class="news-table-wrap"><table class="forecast-table"><caption class="sr-only">동일 기준일 뉴스 보정 전후 연구 재평가</caption><thead><tr><th scope="col">지평 / 평가 수</th><th scope="col">기간</th><th scope="col">RMSE · 기본 → 뉴스</th><th scope="col">MAE · 기본 → 뉴스</th><th scope="col">방향 일치율 · 기본 → 뉴스</th></tr></thead><tbody><tr v-for="item in newsEvaluationRows" :key="item.horizon"><th scope="row">{{ item.horizon }}거래일<small>{{ item.evaluation.n }}개</small></th><td>{{ formatDate(item.evaluation.period_start) }} ~ {{ formatDate(item.evaluation.period_end) }}</td><td>{{ item.evaluation.baseline?.rmse?.toFixed(4) ?? '—' }} → {{ item.evaluation.adjusted?.rmse?.toFixed(4) ?? '—' }}</td><td>{{ item.evaluation.baseline?.mae?.toFixed(4) ?? '—' }} → {{ item.evaluation.adjusted?.mae?.toFixed(4) ?? '—' }}</td><td>{{ formatProbability(item.evaluation.baseline?.direction_accuracy) }} → {{ formatProbability(item.evaluation.adjusted?.direction_accuracy) }}</td></tr></tbody></table></div>
+            <div class="news-table-wrap" tabindex="0" role="region" aria-label="뉴스 보정 성능 비교 표"><table class="forecast-table"><caption class="sr-only">동일 기준일 뉴스 보정 전후 연구 재평가</caption><thead><tr><th scope="col">지평 / 평가 수</th><th scope="col">기간</th><th scope="col">RMSE · 기본 → 뉴스</th><th scope="col">MAE · 기본 → 뉴스</th><th scope="col">방향 일치율 · 기본 → 뉴스</th></tr></thead><tbody><tr v-for="item in newsEvaluationRows" :key="item.horizon"><th scope="row">{{ item.horizon }}거래일<small>{{ item.evaluation.n }}개</small></th><td>{{ formatDate(item.evaluation.period_start) }} ~ {{ formatDate(item.evaluation.period_end) }}</td><td>{{ item.evaluation.baseline?.rmse?.toFixed(4) ?? '-' }} → {{ item.evaluation.adjusted?.rmse?.toFixed(4) ?? '-' }}</td><td>{{ item.evaluation.baseline?.mae?.toFixed(4) ?? '-' }} → {{ item.evaluation.adjusted?.mae?.toFixed(4) ?? '-' }}</td><td>{{ formatProbability(item.evaluation.baseline?.direction_accuracy) }} → {{ formatProbability(item.evaluation.adjusted?.direction_accuracy) }}</td></tr></tbody></table></div>
             <p class="section-note">시간 의존성을 고려한 블록 재표본추출로 오차 개선을 검토합니다. 평가 자료가 부족하거나 개선 구간이 0을 포함하면 개선을 확인했다고 표시하지 않습니다.</p>
             <p class="section-note">방향 일치율은 상승·하락·보합을 모두 비교합니다. Persistence는 항상 보합을 예측하므로 이 수치만으로 뉴스의 개선을 판단하지 않습니다.</p>
           </details>
         </template>
+        <p v-else-if="newsLoading" class="empty-state" role="status">뉴스 분석 결과를 불러오는 중입니다.</p>
         <p v-else class="empty-state">아직 뉴스 분석·보정 결과가 없습니다.</p>
         <details v-if="newsArticles.length" class="news-details"><summary>분석한 최근 뉴스 {{ newsArticles.length }}건</summary><ul class="news-list"><li v-for="article in newsArticles" :key="article.analysis_id">
           <a v-if="/^https?:\/\//.test(article.url)" :href="article.url" target="_blank" rel="noopener noreferrer">{{ article.title }}</a><span v-else>{{ article.title }}</span>
@@ -306,14 +368,6 @@ const ticks = domain => Array.from({ length: 5 }, (_, index) => domain[1] - (dom
       </section>
 
       <div class="workspace">
-        <section class="panel price-panel" aria-labelledby="price-title">
-          <div class="panel-heading"><h2 id="price-title">가격 추이 <span>최근 {{ prices.length }}개 관측</span></h2><span class="unit">¢/lb</span></div>
-          <template v-if="prices.length">
-            <div class="chart-frame"><div class="y-axis" aria-hidden="true"><span v-for="(tick, index) in ticks(priceDomain)" :key="index">{{ formatNumber(tick) }}</span></div><div class="chart" role="img" :aria-label="`커피 종가 ${formatDate(prices[0]?.date)}부터 ${formatDate(latestPrice?.date)}까지, 단위 센트/파운드`"><svg viewBox="0 0 900 280" preserveAspectRatio="none"><line v-for="y in [0,70,140,210,280]" :key="y" x1="0" :y1="y" x2="900" :y2="y"/><polyline :points="pricePoints" class="price-line"/></svg></div></div>
-            <div class="axis"><span>{{ formatDate(prices[0]?.date) }}</span><span>{{ formatDate(latestPrice?.date) }}</span></div>
-          </template><p v-else class="empty-state">가격 데이터가 없습니다.</p>
-        </section>
-
         <section class="panel future" aria-labelledby="forecast-title">
           <div class="panel-heading"><h2 id="forecast-title">기본 모델 예측</h2><span class="unit">¢/lb</span></div>
           <p class="section-note">각 지평의 가장 최근 예측 기준일</p>
@@ -322,11 +376,8 @@ const ticks = domain => Array.from({ length: 5 }, (_, index) => domain[1] - (dom
           <p class="footnote">표시된 기준일의 예측입니다. 현재 시점의 실시간 예측이 아닐 수 있습니다.</p>
         </section>
 
-        <section class="panel comparison" aria-labelledby="comparison-title">
-          <div class="panel-heading"><h2 id="comparison-title">실제 · 예측 비교</h2><div class="tabs" role="group" aria-label="예측 horizon 선택"><button v-for="horizon in [5,20,60]" :key="horizon" :aria-pressed="selectedHorizon === horizon" :class="{ active: selectedHorizon === horizon }" @click="selectedHorizon = horizon">{{ horizon }}일</button></div></div>
-          <div class="chart-meta"><div class="legend"><span class="actual">실제</span><span class="predicted">예측</span></div><span>{{ selectedModel?.name ?? '모델 없음' }} · {{ selectedPredictions.length }}개 평가점 · ¢/lb</span></div>
-          <template v-if="selectedPredictions.length"><div class="chart-frame"><div class="y-axis" aria-hidden="true"><span v-for="(tick,index) in ticks(comparisonDomain)" :key="index">{{ formatNumber(tick) }}</span></div><div class="chart" role="img" :aria-label="`${selectedHorizon}거래일 실제와 예측 가격 비교, 단위 센트/파운드`"><svg viewBox="0 0 900 280" preserveAspectRatio="none"><line v-for="y in [0,70,140,210,280]" :key="y" x1="0" :y1="y" x2="900" :y2="y"/><polyline :points="actualPoints" class="actual-line"/><polyline :points="predictedPoints" class="predicted-line"/></svg></div></div><div class="axis"><span>{{ formatDate(selectedPredictions[0]?.target_date) }}</span><span>정답 날짜 기준</span><span>{{ formatDate(selectedPredictions.at(-1)?.target_date) }}</span></div></template>
-          <p v-else class="empty-state">이 지평의 실제값이 연결된 예측이 없습니다.</p>
+        <section class="panel evaluation-panel" aria-labelledby="evaluation-title">
+          <div class="panel-heading"><h2 id="evaluation-title">예측 오차와 방향 검증</h2><span class="unit">현재 표시 구간</span></div>
           <div v-if="evaluation.length" class="evaluation">
             <div class="evaluation-summary">
               <span>방향 일치 <strong>{{ formatNumber(evaluationSummary.accuracy) }}{{ evaluationSummary.accuracy === null ? '' : '%' }}</strong> <small>{{ evaluationSummary.matched }}/{{ evaluationSummary.count }}건</small></span>
@@ -362,6 +413,7 @@ const ticks = domain => Array.from({ length: 5 }, (_, index) => domain[1] - (dom
               <p>예측 {{ formatNumber(selectedEvaluation.predicted_price) }} / 실제 {{ formatNumber(selectedEvaluation.actual_price) }} · 오차 <b>{{ formatNumber(selectedEvaluation.priceError) }} ¢/lb</b></p>
             </div>
           </div>
+          <p v-else class="empty-state">이 지평의 실제값이 연결된 예측이 없습니다.</p>
         </section>
 
         <aside class="side-details" aria-label="모델 및 실행 정보">
