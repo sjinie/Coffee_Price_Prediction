@@ -4,7 +4,8 @@ import assert from 'node:assert/strict'
 import { computed, ref } from 'vue'
 
 // 실제 SFC의 조회·계산 로직을 실행한다. 화면 배치는 브라우저에서 별도로 확인한다.
-const source = readFileSync(new URL('../src/App.vue', import.meta.url), 'utf8')
+const componentSource = readFileSync(new URL('../src/App.vue', import.meta.url), 'utf8')
+const source = componentSource
   .split('<script setup>')[1].split('</script>')[0]
   .replace(/import .* from 'vue'\n/, '')
 
@@ -122,4 +123,44 @@ test('뉴스 응답을 기다리는 동안에도 가격 로딩은 끝난다', as
   `)(computed, () => {}, ref, fetch)
   await app.loadData()
   assert.equal(app.loading.value, false)
+})
+
+test('Jev 보정은 legacy 신호와 분리하며 0 계수를 숨기지 않는다', () => {
+  const app = new Function('computed', 'onMounted', 'ref', `${source}
+    return { newsView, hasLegacyDirection, hasLegacyNews, zeroNewsWeights, noExperimentalChange, formatCoefficient }
+  `)(computed, () => {}, ref)
+  const emptyLegacy = {
+    probability_up: null,
+    final_direction: null,
+    news_impact_score: null,
+    news_article_count: null,
+    news_updated_at: null,
+  }
+
+  assert.equal(app.hasLegacyDirection(emptyLegacy), false)
+  assert.equal(app.hasLegacyNews(emptyLegacy), false)
+  assert.equal(app.hasLegacyDirection({ probability_up: 0, final_direction: null }), true)
+  assert.equal(app.hasLegacyNews({ news_article_count: 0 }), true)
+  assert.match(componentSource, /별도 상승 확률·방향 분류 결과 없음/)
+  assert.match(componentSource, /href="#jev-title"/)
+
+  app.newsView.value = { forecast: { model: { status: 'experimental', lags: [0, 1, 3, 5], coefficients: [0, 0, 0, 0] } } }
+  assert.equal(app.zeroNewsWeights.value, true)
+  assert.equal(app.noExperimentalChange({ status: 'experimental', news_correction: 0 }), true)
+  assert.equal(app.noExperimentalChange({ status: 'insufficient_data', news_correction: 0 }), false)
+  assert.equal(app.noExperimentalChange({ status: 'experimental', news_correction: null }), false)
+  assert.equal(app.noExperimentalChange({ status: 'experimental', news_correction: false }), false)
+  assert.equal(app.formatCoefficient(0.00001), '0.00001')
+
+  app.newsView.value = { forecast: { model: { status: 'experimental', lags: [0, 1], coefficients: [0, 0.01] } } }
+  assert.equal(app.zeroNewsWeights.value, false)
+  app.newsView.value = { forecast: { model: { status: 'insufficient_data', lags: [0], coefficients: [0] } } }
+  assert.equal(app.noExperimentalChange({ status: 'experimental', news_correction: 0 }), false)
+  app.newsView.value = { forecast: { model: { status: 'experimental', lags: [0, 1], coefficients: [0, '0'] } } }
+  assert.equal(app.zeroNewsWeights.value, false)
+  app.newsView.value = { forecast: { model: { status: 'experimental', lags: [0, 1], coefficients: [0, false] } } }
+  assert.equal(app.zeroNewsWeights.value, false)
+  app.newsView.value = { forecast: { model: {} } }
+  assert.equal(app.zeroNewsWeights.value, false)
+  assert.equal(app.noExperimentalChange({ status: 'experimental', news_correction: 0 }), false)
 })

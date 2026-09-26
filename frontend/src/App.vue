@@ -74,6 +74,7 @@ async function loadNews() {
 }
 const newsForecasts = computed(() => newsView.value?.forecast?.forecasts || [])
 const newsArticles = computed(() => newsView.value?.articles || [])
+const jevModel = computed(() => newsView.value?.forecast?.model || null)
 const jevLabel = value => ({ bullish: 'Bullish · 상승 압력', bearish: 'Bearish · 하락 압력', neutral: '중립', uncertain: '판단 유보' }[value] || '미분류')
 const newsForecastLabel = value => ({ experimental: '실험적 보정', insufficient_data: '학습 데이터 부족', unavailable: '이용 불가', no_news: '반영 가능한 뉴스 없음', stale_price: '가격 갱신 필요' }[value] || value)
 const newsReason = item => ({
@@ -82,6 +83,23 @@ const newsReason = item => ({
   unavailable: '자료 시점 또는 처리 상태를 확인해 주세요.',
 }[item.status] || '')
 const usedByForecast = article => newsForecasts.value.some(row => (row.article_ids || []).includes(article.article_id) || (row.article_ids || []).includes(article.analysis_id))
+const hasLegacyDirection = item => finiteNumber(item.probability_up) !== null || ['UP', 'DOWN', 'FLAT'].includes(item.final_direction)
+const hasLegacyNews = item => finiteNumber(item.news_impact_score) !== null || finiteNumber(item.news_article_count) !== null || Boolean(item.news_updated_at)
+const formatCoefficient = value => {
+  const number = finiteNumber(value)
+  return number === null ? '—' : String(number)
+}
+const zeroNewsWeights = computed(() => {
+  const coefficients = jevModel.value?.coefficients
+  const lags = jevModel.value?.lags
+  return jevModel.value?.status === 'experimental'
+    && Array.isArray(coefficients)
+    && Array.isArray(lags)
+    && coefficients.length > 0
+    && coefficients.length === lags.length
+    && coefficients.every(value => value === 0)
+})
+const noExperimentalChange = item => item.status === 'experimental' && item.news_correction === 0 && zeroNewsWeights.value
 async function retry() {
   await loadData()
   refreshButton.value?.focus()
@@ -229,7 +247,7 @@ const ticks = domain => Array.from({ length: 5 }, (_, index) => domain[1] - (dom
       </section>
 
       <section class="panel news-panel" aria-labelledby="jev-title">
-        <div class="panel-heading"><h2 id="jev-title">뉴스를 반영한 가격 예측</h2><span class="unit">Jev · 아라비카 가격 압력</span></div>
+        <div class="panel-heading"><h2 id="jev-title">Jev 뉴스 기반 실험적 가격 보정</h2><span class="unit">아라비카 가격 압력</span></div>
         <p v-if="newsError" role="status">{{ newsError }}</p>
         <p v-if="newsView?.latest_run?.status === 'failed'" role="status">최근 뉴스 처리에 실패했습니다. 아래는 마지막 저장 결과입니다.</p>
         <p v-else-if="newsView?.latest_run?.status === 'partial'" role="status">일부 뉴스만 처리되었습니다. 보정 결과의 수집 범위를 확인해 주세요.</p>
@@ -238,8 +256,9 @@ const ticks = domain => Array.from({ length: 5 }, (_, index) => domain[1] - (dom
         <template v-if="newsView?.forecast">
           <p class="section-note">실행 {{ formatTime(newsView.forecast.as_of) }} · 가격 기준 {{ formatDate(newsView.forecast.price_date) }} · {{ newsView.forecast.training_availability === 'research' ? '연구용 시점 기준 · 과거 기사 재분류' : '실제 이용 가능 시각 기준' }}</p>
           <p class="section-note">이 예측을 만들 때 수집한 후보 {{ newsView.forecast.source_status.source_count ?? '—' }}건 · 수집처의 표본으로, 기간 내 모든 뉴스를 포함하지 않습니다.</p>
+          <details v-if="jevModel" class="forecast-version"><summary>보정 파라미터</summary><small>반감기 {{ formatCoefficient(jevModel.half_life) }} 달력일 · 시차 {{ (jevModel.lags || []).join(', ') || '—' }} 거래일 · 지평 감쇠 τ {{ formatCoefficient(jevModel.horizon_decay?.tau) }} (exp(-(h-5)/τ)) · 계수 {{ (jevModel.coefficients || []).map(formatCoefficient).join(', ') || '—' }}</small></details>
           <div class="news-table-wrap"><table class="forecast-table"><caption class="sr-only">기존 예측과 뉴스 보정 예측 비교</caption><thead><tr><th scope="col">지평</th><th scope="col">기존 예측</th><th scope="col">뉴스 반영 예측</th><th scope="col">보정 폭</th><th scope="col">상태</th></tr></thead><tbody>
-            <tr v-for="item in newsForecasts" :key="item.horizon"><th scope="row">{{ item.horizon }}거래일</th><td>{{ formatNumber(item.base_predicted_price) }} ¢/lb</td><td>{{ formatNumber(item.adjusted_price) }}<span v-if="item.adjusted_price != null"> ¢/lb</span></td><td>{{ item.adjusted_price == null ? '—' : formatNumber(item.adjusted_price - item.base_predicted_price) + ' ¢/lb' }}</td><td>{{ newsForecastLabel(item.status) }}<small>{{ newsReason(item) }}</small><small>입력 기사 {{ item.news_article_count ?? 0 }}건</small></td></tr>
+            <tr v-for="item in newsForecasts" :key="item.horizon"><th scope="row">{{ item.horizon }}거래일</th><td>{{ formatNumber(item.base_predicted_price) }} ¢/lb</td><td>{{ formatNumber(item.adjusted_price) }}<span v-if="item.adjusted_price != null"> ¢/lb</span></td><td>{{ item.adjusted_price == null ? '—' : formatNumber(item.adjusted_price - item.base_predicted_price) + ' ¢/lb' }}</td><td>{{ newsForecastLabel(item.status) }}<small>{{ noExperimentalChange(item) ? '학습된 뉴스 가중치가 모두 0이어서 가격 변화가 없습니다.' : newsReason(item) }}</small><small>입력 기사 {{ item.news_article_count ?? 0 }}건</small></td></tr>
           </tbody></table></div>
         </template>
         <p v-else class="empty-state">아직 뉴스 분석·보정 결과가 없습니다.</p>
@@ -260,9 +279,9 @@ const ticks = domain => Array.from({ length: 5 }, (_, index) => domain[1] - (dom
         </section>
 
         <section class="panel future" aria-labelledby="forecast-title">
-          <div class="panel-heading"><h2 id="forecast-title">최신 예측</h2><span class="unit">¢/lb</span></div>
+          <div class="panel-heading"><h2 id="forecast-title">기본 모델 예측</h2><span class="unit">¢/lb</span></div>
           <p class="section-note">각 지평의 가장 최근 예측 기준일</p>
-          <table v-if="futurePredictions.length" class="forecast-table"><caption class="sr-only">거래일 지평별 예측 가격, 수익률, 방향 신호와 뉴스 영향</caption><thead><tr><th scope="col">지평 / 모델</th><th scope="col">목표일</th><th scope="col" class="number">예측가 / 신호</th></tr></thead><tbody><tr v-for="item in futurePredictions" :key="item.horizon"><th scope="row">{{ item.horizon }}거래일<small>{{ currentModelForHorizon(item.horizon)?.name || '모델 정보 없음' }}</small></th><td>{{ formatDate(item.target_date) }}<small>기준 {{ formatDate(item.origin_date) }}</small></td><td class="number forecast-number">{{ formatNumber(item.predicted_price) }}<small>예상 단순수익률 {{ formatPercent(finiteNumber(item.predicted_return) === null ? null : Math.expm1(Number(item.predicted_return))) }}</small><span class="signal-status" :class="item.signal_status">{{ signalStatusLabel(item.signal_status) }}</span><small title="실제 보합 사례를 제외한 상승 확률">보합 제외 상승 확률 {{ formatProbability(item.probability_up) }} · 방향 {{ directionSignalLabel(signalDirection(item)) }}</small><small>뉴스 {{ newsImpactLabel(item.news_impact_score) }} · {{ finiteNumber(item.news_article_count) === null ? '이용 불가' : formatNumber(item.news_article_count) + '건' }} · {{ formatTime(item.news_updated_at) }}</small><small>{{ newsModeLabel(item.news_availability) }}</small><details v-if="item.classifier_version || item.model_version" class="forecast-version"><summary>모델 버전</summary><small>분류 {{ item.classifier_version || '이용 불가' }} · 모델 {{ item.model_version || '이용 불가' }}</small></details></td></tr></tbody></table>
+          <table v-if="futurePredictions.length" class="forecast-table"><caption class="sr-only">거래일 지평별 기본 모델 예측과 별도 신호 상태</caption><thead><tr><th scope="col">지평 / 모델</th><th scope="col">목표일</th><th scope="col" class="number">예측가 / 신호</th></tr></thead><tbody><tr v-for="item in futurePredictions" :key="item.horizon"><th scope="row">{{ item.horizon }}거래일<small>{{ currentModelForHorizon(item.horizon)?.name || '모델 정보 없음' }}</small></th><td>{{ formatDate(item.target_date) }}<small>기준 {{ formatDate(item.origin_date) }}</small></td><td class="number forecast-number">{{ formatNumber(item.predicted_price) }}<small>예상 단순수익률 {{ formatPercent(finiteNumber(item.predicted_return) === null ? null : Math.expm1(Number(item.predicted_return))) }}</small><template v-if="hasLegacyDirection(item)"><span class="signal-status" :class="item.signal_status">{{ signalStatusLabel(item.signal_status) }}</span><small title="실제 보합 사례를 제외한 상승 확률">보합 제외 상승 확률 {{ formatProbability(item.probability_up) }} · 방향 {{ directionSignalLabel(signalDirection(item)) }}</small></template><small v-else>별도 상승 확률·방향 분류 결과 없음</small><template v-if="hasLegacyNews(item)"><small>뉴스 {{ newsImpactLabel(item.news_impact_score) }} · {{ finiteNumber(item.news_article_count) === null ? '이용 불가' : formatNumber(item.news_article_count) + '건' }} · {{ formatTime(item.news_updated_at) }}</small><small>{{ newsModeLabel(item.news_availability) }}</small></template><small v-else><a href="#jev-title">Jev 뉴스 기반 실험적 보정 보기</a></small><details v-if="item.classifier_version || item.model_version" class="forecast-version"><summary>모델 버전</summary><small>분류 {{ item.classifier_version || '이용 불가' }} · 모델 {{ item.model_version || '이용 불가' }}</small></details></td></tr></tbody></table>
           <p v-else class="empty-state">표시할 미성숙 예측이 없습니다.</p>
           <p class="footnote">표시된 기준일의 예측입니다. 현재 시점의 실시간 예측이 아닐 수 있습니다.</p>
         </section>
