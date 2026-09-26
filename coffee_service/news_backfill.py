@@ -1,4 +1,4 @@
-"""Resumable Jev job every five minutes; no agent is needed while waiting."""
+"""Resumable Jev job: retry each minute, then wait five minutes after success."""
 from __future__ import annotations
 
 import argparse
@@ -22,7 +22,8 @@ ROOT = Path(__file__).resolve().parents[1]
 DATA = ROOT / "data/raw/jev"
 JOBS = (("year-20250926-20260925", 2), ("validation-2022-2025", 1))
 INTERVAL = 300
-MAX_FAILURES = 24 * 60 * 60 // INTERVAL
+RETRY_INTERVAL = 60
+MAX_FAILURES = 24 * 60 * 60 // RETRY_INTERVAL
 
 
 def write_json(path, value):
@@ -31,31 +32,31 @@ def write_json(path, value):
 
 
 def retry_delay(value, now=None):
-    """The user's five-minute cadence is a floor, including process restarts."""
+    """Retry no faster than once a minute and honor longer Retry-After values."""
     now = time.time() if now is None else now
     try:
         seconds = float(value)
         if not math.isfinite(seconds):
-            return INTERVAL
+            return RETRY_INTERVAL
     except (ValueError, TypeError):
         try:
             parsed = parsedate_to_datetime(str(value))
             if parsed.tzinfo is None:
-                return INTERVAL
+                return RETRY_INTERVAL
             seconds = parsed.timestamp() - now
         except (ValueError, TypeError, OverflowError):
-            return INTERVAL
-    return max(INTERVAL, math.ceil(seconds))
+            return RETRY_INTERVAL
+    return max(RETRY_INTERVAL, math.ceil(seconds))
 
 
 class GatewaySession(requests.Session):
     """Retain only safe response diagnostics, never headers or request secrets."""
     status = None
-    delay = INTERVAL
+    delay = RETRY_INTERVAL
     detail = None
 
     def post(self, *args, **kwargs):
-        self.status, self.delay, self.detail = None, INTERVAL, None
+        self.status, self.delay, self.detail = None, RETRY_INTERVAL, None
         response = super().post(*args, **kwargs)
         self.status = response.status_code
         self.delay = retry_delay(response.headers.get("Retry-After"))
@@ -148,15 +149,16 @@ def run(data=DATA, *, once=False):
         state = json.loads(status_path.read_text()) if status_path.exists() else {}
         due = float(state.get("next_attempt_epoch", 0))
         last_attempt = state.get("last_response", {}).get("at")
+        cadence = INTERVAL if state.get("last_response", {}).get("status") == 200 else RETRY_INTERVAL
         if last_attempt:
-            due = max(due, jev._as_datetime(last_attempt).timestamp() + INTERVAL)
+            due = max(due, jev._as_datetime(last_attempt).timestamp() + cadence)
         state["next_attempt_epoch"] = due
         failures = int(state.get("consecutive_failures", 0))
         # After a paid/authentication/budget stop, a human must explicitly resume.
         if state.get("state") in {"stopped", "budget_stop", "retry_exhausted", "cost_unknown"}:
             raise RuntimeError("Backfill is stopped; inspect backfill-status.json before resuming")
         state.update(pid=os.getpid(), model=jev.MODEL, prompt_version=jev.PROMPT_VERSION,
-                     interval_seconds=INTERVAL, jobs=[name for name, _ in JOBS])
+                     interval_seconds=cadence, jobs=[name for name, _ in JOBS])
 
         def save(status, **values):
             state.update(state=status, updated_at=jev._now(), consecutive_failures=failures,
@@ -206,7 +208,7 @@ def run(data=DATA, *, once=False):
                 if not batch:
                     save("stopped", error="Article exceeds request size limit")
                     return 1
-                # Persist the next slot BEFORE sending, including crash/restart recovery.
+                # Persist a conservative crash/restart slot before sending.
                 due = time.time() + INTERVAL
                 save("requesting", next_attempt_epoch=due)
                 event = {"at": jev._now(), "job": job.name, "articles": len(batch)}
@@ -218,11 +220,12 @@ def run(data=DATA, *, once=False):
                     export(job, results_for(selected, cache))
                     failures = 0
                     event.update(status=200, cost=classified[0]["cost"], usage=classified[0]["usage"])
+                    due = time.time() + INTERVAL
                     if classified[0]["cost"] is None:
                         stop = "cost_unknown"
                 except (jev.JevRateLimitError, jev.JevTransientError) as exc:
                     failures += 1
-                    due = max(due, time.time() + session.delay)
+                    due = time.time() + session.delay
                     event.update(status=session.status or "connection", error=str(exc), detail=session.detail)
                     if failures >= MAX_FAILURES:
                         stop = "retry_exhausted"
@@ -233,6 +236,7 @@ def run(data=DATA, *, once=False):
                     output.write(json.dumps(event, ensure_ascii=False) + "\n")
                     output.flush()
                 save(stop or "waiting", next_attempt_epoch=due, last_response=event,
+                     interval_seconds=INTERVAL if event.get("status") == 200 else RETRY_INTERVAL,
                      completed=len(results_for(selected, cache)),
                      pending=len(selected)-len(results_for(selected, cache)))
                 if stop:

@@ -26,9 +26,9 @@ def setup_jobs(tmp_path):
 
 
 def test_retry_after_floor_dates_and_uncapped_delay():
-    assert worker.retry_delay(None) == 300
-    assert worker.retry_delay("NaN") == 300
-    assert worker.retry_delay("-1") == 300
+    assert worker.retry_delay(None) == 60
+    assert worker.retry_delay("NaN") == 60
+    assert worker.retry_delay("-1") == 60
     assert worker.retry_delay("7200") == 7200
     date = format_datetime(datetime.fromtimestamp(10000, timezone.utc), usegmt=True)
     assert worker.retry_delay(date, now=1000) == 9000
@@ -45,12 +45,12 @@ def test_rate_limit_checkpoints_and_restart_does_not_send_early(tmp_path, monkey
     assert worker.run(tmp_path, once=True) == 0
     state = json.loads((tmp_path / "backfill-status.json").read_text())
     assert state["pending"] == 1 and state["consecutive_failures"] == 1
-    assert state["next_attempt_epoch"] > worker.time.time() + 290
+    assert state["next_attempt_epoch"] > worker.time.time() + 110
     assert worker.run(tmp_path, once=True) == 0
     assert len(calls) == 1
 
 
-def test_restart_extends_old_short_slot_to_current_interval(tmp_path, monkeypatch):
+def test_restart_honors_saved_429_retry_slot(tmp_path, monkeypatch):
     setup_jobs(tmp_path)
     worker.write_json(tmp_path / "backfill-status.json", {
         "state": "waiting", "next_attempt_epoch": worker.time.time() + 1,
@@ -60,8 +60,34 @@ def test_restart_extends_old_short_slot_to_current_interval(tmp_path, monkeypatc
     monkeypatch.setattr(jev, "classify_articles", unexpected)
     assert worker.run(tmp_path, once=True) == 0
     state = json.loads((tmp_path / "backfill-status.json").read_text())
+    assert state["interval_seconds"] == 60
+    assert state["next_attempt_epoch"] > worker.time.time() + 50
+
+
+def test_429_retries_each_minute_then_200_waits_five_minutes(tmp_path, monkeypatch):
+    setup_jobs(tmp_path)
+    calls = []
+    def classify(rows, session):
+        calls.append(rows)
+        if len(calls) == 1:
+            session.status, session.delay = 429, 60
+            raise jev.JevRateLimitError(60)
+        session.status = 200
+        return [result(row) for row in rows]
+    monkeypatch.setattr(jev, "classify_articles", classify)
+    assert worker.run(tmp_path, once=True) == 0
+    state = json.loads((tmp_path / "backfill-status.json").read_text())
+    assert state["interval_seconds"] == 60
+    assert 50 < state["next_attempt_epoch"] - worker.time.time() <= 60
+    state["next_attempt_epoch"] = worker.time.time() - 1
+    state["last_response"]["at"] = "2020-01-01T00:00:00Z"
+    worker.write_json(tmp_path / "backfill-status.json", state)
+    assert worker.run(tmp_path, once=True) == 0
+    state = json.loads((tmp_path / "backfill-status.json").read_text())
     assert state["interval_seconds"] == 300
-    assert state["next_attempt_epoch"] > worker.time.time() + 290
+    assert 290 < state["next_attempt_epoch"] - worker.time.time() <= 300
+    assert worker.run(tmp_path, once=True) == 0
+    assert len(calls) == 2
 
 
 def test_success_reused_between_jobs_without_second_call(tmp_path, monkeypatch):
