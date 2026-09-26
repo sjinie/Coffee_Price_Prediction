@@ -234,11 +234,12 @@ const ticks = domain => Array.from({ length: 5 }, (_, index) => domain[1] - (dom
         <p v-if="newsView?.latest_run?.status === 'failed'" role="status">최근 뉴스 처리에 실패했습니다. 아래는 마지막 저장 결과입니다.</p>
         <p v-else-if="newsView?.latest_run?.status === 'partial'" role="status">일부 뉴스만 처리되었습니다. 보정 결과의 수집 범위를 확인해 주세요.</p>
         <p class="section-note">뉴스의 분류 확률은 미래 가격의 상승 확률이 아닙니다. 실험적 보정은 예측력 개선이 확인되지 않은 결과입니다.</p>
+        <p v-if="newsView?.selection?.selected_count != null" class="section-note">{{ newsView.selection.requested_start }} ~ {{ newsView.selection.requested_end }} · 뉴욕 날짜별 최대 1건 · 선정 {{ newsView.selection.selected_count }}건 · 분석 완료 {{ newsView.selection.selected_analysis_ids?.length ?? 0 }}건. 공급·작황·날씨·무역 관련성을 기준으로 선정합니다.</p>
         <template v-if="newsView?.forecast">
           <p class="section-note">실행 {{ formatTime(newsView.forecast.as_of) }} · 가격 기준 {{ formatDate(newsView.forecast.price_date) }} · {{ newsView.forecast.training_availability === 'research' ? '연구용 시점 기준 · 과거 기사 재분류' : '실제 이용 가능 시각 기준' }}</p>
-          <p class="section-note">공급자에서 확보한 기사 {{ newsView.forecast.source_status.source_count ?? '—' }}건 · 최신 기사 표본으로, 기간 내 모든 뉴스를 포함하지 않습니다.</p>
+          <p class="section-note">이 예측을 만들 때 수집한 후보 {{ newsView.forecast.source_status.source_count ?? '—' }}건 · 수집처의 표본으로, 기간 내 모든 뉴스를 포함하지 않습니다.</p>
           <div class="news-table-wrap"><table class="forecast-table"><caption class="sr-only">기존 예측과 뉴스 보정 예측 비교</caption><thead><tr><th scope="col">지평</th><th scope="col">기존 예측</th><th scope="col">뉴스 반영 예측</th><th scope="col">보정 폭</th><th scope="col">상태</th></tr></thead><tbody>
-            <tr v-for="item in newsForecasts" :key="item.horizon"><th scope="row">{{ item.horizon }}거래일</th><td>{{ formatNumber(item.base_predicted_price) }} ¢/lb</td><td>{{ formatNumber(item.adjusted_price) }}<span v-if="item.adjusted_price != null"> ¢/lb</span></td><td>{{ item.adjusted_price == null ? '—' : formatNumber(item.adjusted_price - item.base_predicted_price) + ' ¢/lb' }}</td><td>{{ newsForecastLabel(item.status) }}<small>{{ newsReason(item) }}</small><small>반영 기사 {{ item.news_article_count ?? 0 }}건</small></td></tr>
+            <tr v-for="item in newsForecasts" :key="item.horizon"><th scope="row">{{ item.horizon }}거래일</th><td>{{ formatNumber(item.base_predicted_price) }} ¢/lb</td><td>{{ formatNumber(item.adjusted_price) }}<span v-if="item.adjusted_price != null"> ¢/lb</span></td><td>{{ item.adjusted_price == null ? '—' : formatNumber(item.adjusted_price - item.base_predicted_price) + ' ¢/lb' }}</td><td>{{ newsForecastLabel(item.status) }}<small>{{ newsReason(item) }}</small><small>입력 기사 {{ item.news_article_count ?? 0 }}건</small></td></tr>
           </tbody></table></div>
         </template>
         <p v-else class="empty-state">아직 뉴스 분석·보정 결과가 없습니다.</p>

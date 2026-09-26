@@ -105,12 +105,20 @@ def create_app(connection_factory=db.connect):
                    JOIN pipeline_runs p USING (run_id)
                    WHERE p.status IN ('success', 'partial')
                    ORDER BY p.started_at DESC LIMIT 1""")
+            attempt = db.fetch_one(connection,
+                """SELECT n.document FROM news_forecast_runs n
+                   JOIN pipeline_runs p USING (run_id)
+                   ORDER BY p.started_at DESC LIMIT 1""")
+            selected_ids = attempt["document"].get("selected_analysis_ids", []) if attempt else []
             articles = db.fetch_all(connection,
                 """SELECT document FROM jev_analyses
                    WHERE available_at <= now()
-                   ORDER BY event_at DESC, analysis_id LIMIT %s""", (limit,))
+                     AND analysis_id = ANY(%s::text[])
+                   ORDER BY event_at DESC, analysis_id LIMIT %s""", (selected_ids, limit))
         return {"latest_run": latest_run,
                 "forecast": forecast["document"] if forecast else None,
+                "selection": {**attempt["document"].get("source_status", {}),
+                              "selected_analysis_ids": selected_ids} if attempt else None,
                 "articles": [row["document"] for row in articles]}
 
     @app.get("/api/v1/models/current")

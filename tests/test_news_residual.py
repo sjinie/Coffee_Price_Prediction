@@ -46,6 +46,21 @@ def test_snapshot_can_use_after_close_news_without_rewriting_historical_origin()
     assert snapshot.news_lag_0_article_ids.iloc[0] == ["after-close"]
 
 
+def test_daily_winner_is_unavailable_before_day_closes_and_updates_are_distinct():
+    first = {**_record("first", "2024-01-01T18:00:00Z"), "title": "Brazil coffee output",
+             "summary": "Output estimate is 50 million bags", "selection_available_at": "2024-01-02T05:00:00Z"}
+    second = {**_record("second", "2024-01-02T18:00:00Z"), "title": "Brazil coffee output",
+              "summary": "Output estimate is 55 million bags", "selection_available_at": "2024-01-03T05:00:00Z"}
+    values = signal_features([first, second], pd.bdate_range("2024-01-01", periods=3), availability="research")
+    assert values.news_signal.iloc[0] == 0
+    assert values.news_article_ids.iloc[1] == ["first"]
+    assert values.news_article_ids.iloc[2] == ["first", "second"]
+    first["modified_at"] = "2024-01-03T12:00:00Z"
+    revised = signal_features([first], pd.bdate_range("2024-01-01", periods=3), availability="research")
+    assert revised.news_article_ids.iloc[1] == []
+    assert revised.news_article_ids.iloc[2] == ["first"]
+
+
 def test_news_input_boundaries_reject_future_sessions_and_impossible_availability():
     with pytest.raises(ValueError, match="sessions after"):
         signal_features([], pd.bdate_range("2024-01-01", periods=2), as_of="2024-01-01T23:00:00Z")

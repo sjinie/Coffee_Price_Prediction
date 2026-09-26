@@ -309,7 +309,10 @@ def build_parser() -> argparse.ArgumentParser:
                         help="live는 실제 수집 시각도 제한; historical은 공개/수정 시각 기반 연구 재생")
     parser.add_argument("--jev-cache", type=Path, default=ROOT / "data/raw/jev/articles.json")
     parser.add_argument("--jev-limit", type=int, default=200, help="신규 Jev 요청 상한(재시도 포함, 최대 200)")
-    parser.add_argument("--jev-source", choices=("yahoo", "gdelt"), default="yahoo")
+    parser.add_argument("--jev-source", choices=("market", "yahoo", "gdelt"), default="market")
+    parser.add_argument("--jev-days", type=int, default=200, help="뉴스 수집 기간(달력일, 최대 200)")
+    parser.add_argument("--jev-batch-size", type=int, default=20, help="요청당 독립 평가 기사 수(1~20)")
+    parser.add_argument("--jev-candidates", type=Path, help="저장된 기사 후보로 일별 선정·분류 재개")
     parser.add_argument("--skip-news-collection", action="store_true", help="저장된 Jev 분석으로만 재실행")
     parser.add_argument("--jev-training-availability", choices=("research", "live"), default="research",
                         help="research는 사후 기사 재분류를 사용한 실험; 현재 추론은 항상 실제 가용 시각 적용")
@@ -317,20 +320,25 @@ def build_parser() -> argparse.ArgumentParser:
 
 
 def run_news_pipeline(source_dir, artifact, end, *, cache_path, limit=200,
-                      database_url=None, skip_collection=False, training_availability="research", source="yahoo"):
+                      database_url=None, skip_collection=False, training_availability="research", source="market",
+                      days=200, candidates_path=None, batch_size=20):
     """Collect decisions and store a separately issued, auditable news forecast."""
-    from .jev import MODEL, PROMPT_VERSION, collect_and_classify, read_records
+    from .jev import MODEL, PROMPT_VERSION, collect_and_classify, read_selected_records
     from .news_residual import fit_residual, predict_residual, save_residual
 
     if not 1 <= limit <= 200:
         raise ValueError("jev-limit must be between 1 and 200")
+    if not 1 <= days <= 200:
+        raise ValueError("jev-days must be between 1 and 200")
+    if not 1 <= batch_size <= 20:
+        raise ValueError("jev-batch-size must be between 1 and 20")
     with db.connect(database_url) as connection:
         db.create_schema(connection)
         run_id = db.start_pipeline_run(connection, "news")
         try:
-            start = end - timedelta(days=89)
+            start = end - timedelta(days=days - 1)
             if skip_collection:
-                records = read_records(cache_path)
+                records = read_selected_records(cache_path, start, end)
                 status = {"source_status": "cached", "classification_status": "cached",
                           "source_count": len(records), "api_attempts": 0,
                           "coverage_complete": False, "errors": []}
@@ -340,10 +348,20 @@ def run_news_pipeline(source_dir, artifact, end, *, cache_path, limit=200,
                     status["previous_api_attempts"] = status.get("api_attempts", 0)
                     status["api_attempts"] = 0
                     status["cache_replay"] = True
-                if not records:
-                    raise ValueError("저장된 Jev 분석이 없습니다.")
+                    if "selected_days" in status:
+                        selected_days = [day for day in status["selected_days"]
+                                         if start.isoformat() <= day <= end.isoformat()]
+                        status.update(selected_days=selected_days, selected_count=len(selected_days),
+                                      selected_pending_count=max(0, len(selected_days) - len(records)))
+                    status["selected_analysis_ids"] = [record["analysis_id"] for record in records]
+                    status["requested_start"], status["requested_end"] = start.isoformat(), end.isoformat()
+                    status["missing_days"] = [day for day in status.get("missing_days", [])
+                                              if start.isoformat() <= day <= end.isoformat()]
+                if not records and not status_path.exists():
+                    raise ValueError("저장된 Jev 분석 또는 실행 상태가 없습니다.")
             else:
-                records, status = collect_and_classify(cache_path, start, end, limit, source=source)
+                records, status = collect_and_classify(cache_path, start, end, limit,
+                    source=source, candidates_path=candidates_path, batch_size=batch_size)
             records = [record for record in records
                        if record["model"] == MODEL and record["prompt_version"] == PROMPT_VERSION]
             db.upsert_jev_analyses(connection, records)
@@ -369,6 +387,7 @@ def run_news_pipeline(source_dir, artifact, end, *, cache_path, limit=200,
                                     status="unavailable", reason="뉴스 수집 또는 분석에 실패했습니다.")
             document = {"run_id": run_id, "as_of": as_of.isoformat(),
                         "price_date": price_date.date().isoformat(),
+                        "selected_analysis_ids": [record["analysis_id"] for record in records],
                         "training_availability": training_availability,
                         "source_status": status, "model": residual, "forecasts": forecasts}
             save_residual(residual, Path(cache_path).with_suffix(".model.json"))
@@ -406,7 +425,8 @@ def main(argv=None) -> int:
             result = run_news_pipeline(args.source_dir, args.artifact, end,
                 cache_path=args.jev_cache, limit=args.jev_limit, database_url=args.database_url,
                 skip_collection=args.skip_news_collection,
-                training_availability=args.jev_training_availability, source=args.jev_source)
+                training_availability=args.jev_training_availability, source=args.jev_source,
+                days=args.jev_days, candidates_path=args.jev_candidates, batch_size=args.jev_batch_size)
         else:
             result = run_pipeline(
                 args.mode, args.source_dir, args.artifact, start, end,

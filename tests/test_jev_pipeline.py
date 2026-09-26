@@ -48,7 +48,8 @@ def test_news_snapshot_does_not_replace_price_run_and_keeps_first_analysis(isola
         "model": jev.MODEL, "prompt_version": jev.PROMPT_VERSION,
         "p_bullish": .8, "p_bearish": .05, "p_neutral": .1, "p_uncertain": .05,
         "relevance": 1., "confidence": .7}
-    status = {"source_status": "success", "classification_status": "success", "api_attempts": 1, "errors": []}
+    status = {"source_status": "success", "classification_status": "success", "api_attempts": 1, "errors": [],
+              "selected_count": 2, "selection_policy": "fixture"}
     monkeypatch.setattr(jev, "collect_and_classify", lambda *_args, **_kwargs: ([record], status))
     monkeypatch.setattr(pipeline, "sources_as_of", lambda *_args: {})
     monkeypatch.setattr(pipeline, "validate_macro_freshness", lambda *_args: None)
@@ -60,6 +61,15 @@ def test_news_snapshot_does_not_replace_price_run_and_keeps_first_analysis(isola
         db.create_schema(connection)
         price_run = db.start_pipeline_run(connection, "incremental")
         db.finish_pipeline_run(connection, price_run, "success", "price fixture")
+        db.upsert_jev_analyses(connection, [record])
+
+    @contextmanager
+    def factory():
+        with db.connect(isolated_database) as connection:
+            yield connection
+
+    client = TestClient(create_app(factory))
+    assert client.get("/api/v1/news/jev").json()["articles"] == []
     first = pipeline.run_news_pipeline(tmp_path, tmp_path / "model", date.today(),
         cache_path=tmp_path / "news.json", database_url=isolated_database)
     assert first["status"] == "success"
@@ -70,16 +80,12 @@ def test_news_snapshot_does_not_replace_price_run_and_keeps_first_analysis(isola
         assert db.fetch_one(connection, "SELECT count(*) AS n FROM news_forecast_runs")["n"] == 2
         assert db.fetch_one(connection, "SELECT count(*) AS n FROM predictions")["n"] == 0
 
-    @contextmanager
-    def factory():
-        with db.connect(isolated_database) as connection:
-            yield connection
-
-    client = TestClient(create_app(factory))
     assert client.get("/api/v1/pipeline/status").json()["run_id"] == price_run
     response = client.get("/api/v1/news/jev").json()
     assert response["latest_run"]["run_id"] == second["run_id"]
     assert response["articles"][0]["analysis_id"] == "analysis"
+    assert response["selection"]["selected_count"] == 2
+    assert response["selection"]["selected_analysis_ids"] == ["analysis"]
     assert len(response["forecast"]["forecasts"]) == 3
     assert all(row["adjusted_price"] is None for row in response["forecast"]["forecasts"])
 
@@ -88,7 +94,7 @@ def test_news_snapshot_does_not_replace_price_run_and_keeps_first_analysis(isola
             "available_at": (now + pd.Timedelta(days=1)).isoformat()}])
     assert len(client.get("/api/v1/news/jev").json()["articles"]) == 1
 
-    monkeypatch.setattr(jev, "read_records", lambda _path: [record])
+    monkeypatch.setattr(jev, "read_selected_records", lambda *_args: [record])
     (tmp_path / "news.json.status.json").write_text(json.dumps({
         "source_status": "success", "classification_status": "partial", "api_attempts": 2,
         "source_count": 10, "errors": ["HTTP 429"]}))

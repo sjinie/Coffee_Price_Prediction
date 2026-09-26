@@ -99,13 +99,18 @@ def _prepared(records):
                 not np.isfinite(relevance) or not np.isfinite(confidence) or not 0 <= relevance <= 1 or not 0 <= confidence <= 1):
             raise ValueError("record probabilities, relevance, and confidence must be finite and valid")
         identity = _identity(record)
-        content = str(record.get("title") or "").strip().casefold()
+        title = str(record.get("title") or "").strip().casefold()
+        content = (title, str(record.get("summary") or "").strip().casefold()) if title else None
         if identity in seen_ids or (content and content in seen_content):
             continue
         seen_ids.add(identity)
         if content:
             seen_content.add(content)
-        output.append({"id": _article_id(record), "event": event, "available": available,
+        selection_at = _utc(record.get("selection_available_at", event), "selection_available_at")
+        modified_at = _utc(record.get("modified_at") or event, "modified_at")
+        output.append({"id": _article_id(record), "event": event,
+                       "research_at": max(event, selection_at, modified_at),
+                       "available": max(available, selection_at, modified_at),
                        "weight": relevance * confidence, "pressure": float(probabilities[0] - probabilities[1])})
     return sorted(output, key=lambda row: (row["event"], row["available"], row["id"]))
 
@@ -113,7 +118,7 @@ def _prepared(records):
 def _daily_signal(prepared, cutoff, availability, half_life):
     total, ids = 0.0, []
     for record in prepared:
-        visible_at = record["available"] if availability == "live" else record["event"]
+        visible_at = record["available"] if availability == "live" else record["research_at"]
         if record["event"] > cutoff or visible_at > cutoff:
             continue
         age = (cutoff - record["event"]).total_seconds() / 86400
@@ -330,7 +335,7 @@ def fit_residual(base_predictions, prices, records, *, as_of, availability="rese
     base, close = _base_frame(base_predictions), _prices(prices)
     sessions = close.index
     prepared = _prepared(records)
-    earliest = min((row["available"] if availability == "live" else row["event"] for row in prepared), default=None)
+    earliest = min((row["available"] if availability == "live" else row["research_at"] for row in prepared), default=None)
     best = None
     observed_eligibility = {str(h): {"train_rows": 0, "tune_rows": 0, "holdout_rows": 0, "status": "insufficient_data"} for h in HORIZONS}
     for half_life in (1, 3, 7):
