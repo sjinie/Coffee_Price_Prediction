@@ -1,5 +1,17 @@
 # 작업 상태
 
+## 2026-09-26 — 최근 200일 뉴스의 일별 1건 선정·Jev 실분류 완료
+
+- 범위/원자료: 2026-03-11~09-26(200달력일). Yahoo KC=F 메타데이터 200건과 기존 WordPress 수집기의 Daily Coffee News 제목 343건, 합계 543건을 확보했다. Yahoo 표본은 5월 이후이며 전체 기간의 모든 뉴스를 보장하지 않는다. `data/raw/jev/combined-200d.json`에 후보, `wordpress-200d.parquet`에 제목 메타데이터, `daily-200d-results.csv`에 최종 88건을 저장했다(모두 ignored).
+- 일별 선정: 완료된 America/New_York 날짜별 최대 1건. 현재 199개 완료일 중 88일 선정, 111일 미확보, 진행 중인 9월 26일 제외. 중요도는 커피 가격·공급·작황·기상·수출·재고 등 제목/요약 단어 점수다. 카페·장비·개별 주가 기사는 제외한다. 현재 표본의 정규화 URL/내용/동의어 유사 중복 검출은 0건이었다. 재게시 제거는 fixture로 검증했으며, 같은 주제라도 수치·방향이 바뀐 후속 기사와 표현이 크게 다른 의미상 중복을 완벽하게 구별하지는 못한다.
+- 재현/시점: `.selection.json`에 선택 날짜·점수·정책·다음 NY 자정의 이용 가능 시각을 기록하고 완료 날짜를 고정한다. 다른 기간 재실행에서 과거 선택은 보관하되 요청 기간만 분류/조회한다. 수치·반대 방향 업데이트는 보존하며, 연구 feature도 기사 수정 시각과 일별 선정 완료보다 앞서 쓰지 않는다. 현재 분류는 당시 실시간 수집을 재현한 자료가 아니다.
+- 실제 Jev: 단건 방식으로 신규 1건 성공 후 429가 발생해 질문별 기사 입력을 분리한 `arabica-kc-futures-v2`로 변경했다. 공통 state는 시장뿐이며 질문마다 해당 기사만 제공한다. 최종 88건은 **bullish 39 / bearish 40 / neutral 4 / uncertain 5**다. v2는 9회 요청(200 3회, 429 6회) 후 모두 완료했다. 제공자 오류는 upstream high demand였고 Retry-After는 없었다. 제한된 수동 재시도 간격을 60/120/240초로 늘렸다. 성공 배치는 20/20/48건: 마지막 48건은 앞선 사용량을 확인한 일회성 backfill 요청(84,939 JSON UTF-8 bytes, 실제 input 21,915 tokens)이었고 기존 응답 검증기로 모두 검사한 뒤 저장했다. 일반 CLI는 보수적인 최대 20건/60KB 상한을 유지한다.
+- 비용/보존: v2 성공 응답 input 39,837 / output 6,593 tokens, 기록 비용 합계 **$0.001673154**(계정 전체 청구액 아님). 배치 usage/cost는 첫 레코드에만 기록해 중복 합산하지 않는다. 이전 v1 분석 2건은 파일에 보존하되 현재 API/학습에서는 v2 일별 선정 88건만 사용한다. `200d-request-audit.json`에 v2 HTTP 시도 이력을 보존했다.
+- 실제 E2E: native PostgreSQL 17 / loopback 15439에서 뉴스 run `7d1f7ea6-668f-48e3-a890-6a58e808ff53` success, 분석 88건·예측 snapshot 3행. 기존 가격 3,076행과 2,061개 가격 예측 계약을 유지했으며 예측 checksum `462e019814a004984ed461c2d502c930`이 동일했다. 실제 캐시/후보 재실행은 네트워크를 금지한 상태에서 신규 API 요청 0회/88건 재사용이었다. 실제 API 200, 기사 88건/고유 NY 날짜 88개를 확인했고 브라우저에 선정 88·완료 88·최근 기사 목록이 표시됐다.
+- 예측 결과: 연구용 Ridge는 반감기 3일, alpha 1, 지평 tau 10을 선택했으나 **계수 4개 모두 0**이었다. 5/20일 보정값은 0, 가격은 각각 기존 278.6000061 ¢/lb와 같았다. 60일은 mature tune/holdout 부족으로 null이다. 5일 holdout 25행 RMSE 0.0677684, 20일 10행 0.2312489로 뉴스 보정과 baseline이 동일했다. 입력 기사 18건이라는 표시는 실제 가격 변화나 정확도 향상을 뜻하지 않는다. 분류 정확도와 예측력 개선을 확인하지 않았다.
+- 검증: Python 전체 서비스 회귀 **111 passed, 기존 경고 3개**, 77.98초. 마지막 중복 정규화/응답 type 검증/최신 기사 우선 처리 후 관련 회귀 **47 passed**. Vue **5 passed**, Vite build 성공. 독립 리뷰에서 발견한 NY 경계·반대 방향 유실·미선정 API 노출·범위 밖 고정 기사·동의어 재게시를 수정했다. 의존성/설치 변경 없음. 새 Docker/CI/GHCR/Azure 실행은 하지 않았다.
+- 공식 확인(2026-09-26): [TypeSafe 질문 독립성](https://docs.typesafe.ai/primitives), [구조화된 instructions/API](https://docs.typesafe.ai/api), [모델 context limits](https://docs.typesafe.ai/models), [Vercel rate limits](https://vercel.com/docs/ai-gateway/rate-limits), [WordPress posts](https://developer.wordpress.org/rest-api/reference/posts/), [yfinance get_news](https://ranaroussi.github.io/yfinance/reference/api/yfinance.Ticker.get_news.html). 다음은 분류 품질 표본 검토와 뉴스 계수 0의 원인 확인이며, 성능을 좋아 보이게 하려고 가격을 임의 조정하지 않는다.
+
 ## 2026-09-26 — Jev 뉴스 수집·분류와 실험적 가격 보정
 
 - 추가: `jev.py`의 Yahoo KC 뉴스 수집과 TypeSafe choice/noul 요청, 불변 분석 캐시·원자 저장·요청 상한; `news_residual.py`의 최근성 감쇠·거래일 시차·단기 가중 잔차 Ridge; news CLI·별도 DB snapshot·`/api/v1/news/jev`·Vue 비교/기사 패널. 기존 가격 서빙 계약·가격 테이블을 유지했다. 설치/의존성 변경 없음. 예제 Gateway 키는 빈 placeholder로 정리했다.

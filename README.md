@@ -409,23 +409,30 @@ python3 deploy/deploy.py --env-file /path/outside/repo/coffee.env --project coff
 
 ## Jev 뉴스와 실험적 가격 보정
 
-`coffee_service.pipeline news`는 Yahoo KC=F의 최근 90일 제목·요약을 Vercel TypeSafe Jev로 분류하고, 결과를 별도 뉴스 예측으로 저장합니다. `AI_GATEWAY_API_KEY`를 로컬 `.env` 또는 pipeline 실행 환경에만 설정하세요. Vue·API에는 키를 전달하지 않습니다.
+`coffee_service.pipeline news`는 최근 200일의 Yahoo KC=F 제목·짧은 요약과 Daily Coffee News 제목을 수집합니다. 동일·유사 내용을 제거한 뒤 **완료된 뉴욕 날짜별 최대 1건**만 Vercel TypeSafe Jev로 분류합니다. `AI_GATEWAY_API_KEY`는 로컬 `.env` 또는 pipeline 실행 환경에만 설정하세요. Vue·API에는 키를 전달하지 않습니다.
 
 ```bash
-# DATABASE_URL이 가리키는 PostgreSQL을 먼저 실행합니다.
-# 가격·필수 거시자료를 갱신한 후 뉴스 분류를 실행합니다.
+# DATABASE_URL이 가리키는 PostgreSQL과 기존 필수 가격·ALFRED 이력이 필요합니다.
+# 가격·거시자료를 갱신한 뒤 뉴스 후보 수집·선정·분류를 실행합니다.
 "$HOME/.virtualenvs/coffee-price-prediction/bin/python" -m coffee_service.pipeline news \
-  --source-dir data/processed/jev_live --jev-source yahoo --jev-limit 20
+  --source-dir data/processed/jev_live --jev-source market --jev-days 200 --jev-batch-size 20
 
-# 이미 갱신한 자료와 저장된 분류만 재사용합니다. 외부 API를 호출하지 않습니다.
+# 이번에 저장한 200일 후보로 미완료 분류를 재개합니다. 성공 분석은 재사용합니다.
+"$HOME/.virtualenvs/coffee-price-prediction/bin/python" -m coffee_service.pipeline news \
+  --source-dir data/processed/jev_live --skip-ingestion --end 2026-09-26 \
+  --jev-candidates data/raw/jev/combined-200d.json --jev-days 200
+
+# 가격 자료와 완료된 뉴스 분류만 재사용합니다. 외부 API를 호출하지 않습니다.
 "$HOME/.virtualenvs/coffee-price-prediction/bin/python" -m coffee_service.pipeline news \
   --source-dir data/processed/jev_live --skip-ingestion --skip-news-collection
 ```
 
-최초 source-dir에는 기존 필수 가격·ALFRED 이력을 복사해 두어야 합니다. 이력이 부족하면 기존 검사가 적재 전에 차단합니다. `--jev-limit`는 뉴스 조회 개수와 신규 분류 요청 상한(1~200)입니다. 429는 즉시 종료하고 성공 캐시를 남기므로 제한 해제 후 재실행할 수 있습니다. `partial`/`failed`는 종료 코드 1이며 캐시 재사용 때도 원래 상태를 보존합니다.
+중요도는 수집된 제목·요약의 공급·작황·날씨·수출·재고·선물·가격 관련 단어 점수이며, 카페·장비·개별 기업 주가 기사는 제외합니다. 전체 시장에서 객관적으로 가장 중요한 기사를 보장하지 않습니다. 정규화 URL과 내용, 제목·요약의 높은 텍스트 유사도로 재게시를 제거하되 숫자·방향이 바뀐 후속 보도는 보존합니다. 표현이 크게 다른 의미상 중복은 남을 수 있습니다. 적합한 기사가 없는 날과 아직 끝나지 않은 뉴욕 날짜는 비워 둡니다.
 
-기본 캐시는 `data/raw/jev/articles.json`, 수집 메타데이터는 `articles.json.collected.json`, 실행 상태는 `articles.json.status.json`, 보정 artifact는 `articles.model.json`입니다. 본문은 크롤링하지 않으며 최신 기사 표본은 기간 전체를 대표하지 않습니다. `/api/v1/news/jev`와 대시보드에서 분석 기사·기존 가격·뉴스 보정 가격·처리 상태를 조회합니다.
+한 번 선정한 날짜는 같은 선택 정책에서 고정합니다. `--jev-days`는 1~200일, `--jev-limit`는 신규 HTTP 요청 상한(1~200), `--jev-batch-size`는 요청당 기사 수(1~20)입니다. 배치의 공통 state에는 시장만 넣고 각 질문에 해당 기사만 넣어, 다른 날짜의 기사로 판단하지 않게 합니다. 요청 본문이 보수적인 크기 상한을 넘으면 배치를 줄여야 합니다. 429는 현재 실행을 종료하며, 재실행은 최근 미완료 기사부터 이어갑니다. `partial`/`failed` 종료 코드는 1이고 캐시 재사용도 마지막 수집 상태를 유지합니다.
 
-최근 기사에는 더 큰 시간 가중치를 주고, 0·1·3·5거래일 시차를 사용합니다. 비음수 Ridge가 baseline의 로그수익률 오차를 학습하고 지평이 길수록 보정 폭을 감쇠합니다. 충분한 학습·검증 자료가 없으면 보정 가격을 만들지 않습니다. 기본 `--jev-training-availability research`는 과거 기사를 현재 재분류한 탐색이며 실시간 백테스트가 아닙니다. `live`는 실제 분석 완료 시각 이후의 자료만 사용합니다. 어느 모드도 검증된 우위를 의미하지 않습니다.
+기본 캐시 `data/raw/jev/articles.json`은 분석 버전별 불변 기록입니다. `articles.json.collected.json`은 후보, `articles.json.selection.json`은 일별 선정 이력, `articles.json.status.json`은 실행 상태, `articles.model.json`은 보정 artifact입니다. 전체 본문은 크롤링하지 않습니다. 원본·분류 자료는 Git에서 제외합니다. `/api/v1/news/jev`와 대시보드는 현재 기간에 선정된 분석만 표시합니다.
 
-2026-09-26 실제 실행은 수집 122건 중 분류 1건 성공 뒤 HTTP 429로 중단됐습니다. 현재 가격 보정은 자료 부족 상태입니다. 환경·실행·검증 결과는 [STATUS](docs/STATUS.md)를 확인하세요.
+최근성 감쇠와 0·1·3·5거래일 시차를 사용하며, 비음수 Ridge가 baseline의 로그수익률 오차를 학습하고 장기 지평의 보정 폭을 줄입니다. 일별 선택은 뉴욕 날짜가 끝난 다음 자정부터 이용하며 수정 기사도 수정 시각보다 앞서 쓰지 않습니다. 기본 `research` 모드는 과거 기사를 현재 재분류한 탐색으로, 당시 보유했던 뉴스 아카이브의 실시간 백테스트가 아닙니다. `live`는 실제 분석 완료 시각까지 제한합니다. 자료가 부족하면 보정 가격을 만들지 않으며, 어느 모드도 예측력 개선을 보장하지 않습니다.
+
+실제 수집 범위·분류 수·제공자 제한·검증 결과는 [STATUS](docs/STATUS.md)의 최신 항목을 확인하세요.
