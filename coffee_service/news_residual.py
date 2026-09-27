@@ -16,7 +16,9 @@ from tempfile import NamedTemporaryFile
 import numpy as np
 import pandas as pd
 
-VERSION = "news-residual-v2"
+VERSION = "news-residual-v3"
+SIGNAL_DEFINITION = "argmax_direction_times_relevance_confidence"
+LEGACY_SIGNAL_DEFINITION = "probability_margin_times_relevance"
 HORIZONS = (5, 20, 60)
 LAGS = (0, 1, 3, 5)
 HALF_LIFE = 3
@@ -72,7 +74,9 @@ def _article_id(record):
     return str(record.get("analysis_id") or record.get("article_id") or record.get("url") or _identity(record)[-1])
 
 
-def _prepared(records):
+def _prepared(records, signal_definition=SIGNAL_DEFINITION):
+    if signal_definition not in {SIGNAL_DEFINITION, LEGACY_SIGNAL_DEFINITION}:
+        raise ValueError("unsupported news signal definition")
     output, seen_ids, seen_content = [], set(), set()
     for record in records:
         if not isinstance(record, dict):
@@ -81,9 +85,11 @@ def _prepared(records):
         values = [record.get(key) for key in ("p_bullish", "p_bearish", "p_neutral", "p_uncertain")]
         if any(value is None for value in values):
             raise ValueError("record misses Jev choice probabilities")
+        if signal_definition == SIGNAL_DEFINITION and any(record.get(key) is None for key in ("relevance", "confidence")):
+            raise ValueError("record misses relevance or confidence")
         probabilities = np.asarray(values, float)
         relevance, confidence = float(record.get("relevance", 1)), float(record.get("confidence", 1))
-        if (not np.isfinite(probabilities).all() or (probabilities < 0).any()
+        if (not np.isfinite(probabilities).all() or (probabilities < 0).any() or (probabilities > 1).any()
                 or not np.isclose(probabilities.sum(), 1, atol=.02)
                 or not np.isfinite([relevance, confidence]).all() or not 0 <= relevance <= 1 or not 0 <= confidence <= 1):
             raise ValueError("record probabilities, relevance, and confidence must be finite and valid")
@@ -96,14 +102,14 @@ def _prepared(records):
             seen_content.add(content)
         selection = _utc(record.get("selection_available_at") or event, "selection_available_at")
         modified = _utc(record.get("modified_at") or event, "modified_at")
+        winners = np.isclose(probabilities, probabilities.max(), atol=1e-8, rtol=0)
+        direction = (1 if winners.sum() == 1 and winners[0] else
+                     -1 if winners.sum() == 1 and winners[1] else 0)
         output.append({"id": _article_id(record), "event": event,
                        "available": max(available, selection, modified),
                        "research_at": max(event, selection, modified),
-                       # Choice probabilities already encode directional certainty.
-                       # Multiplying the provider's derived confidence again would
-                       # count the same distributional information twice.
-                       "weight": relevance,
-                       "pressure": float(probabilities[0] - probabilities[1])})
+                       "weight": relevance * (confidence if signal_definition == SIGNAL_DEFINITION else 1),
+                       "pressure": direction if signal_definition == SIGNAL_DEFINITION else float(probabilities[0] - probabilities[1])})
     return sorted(output, key=lambda row: (row["event"], row["available"], row["id"]))
 
 
@@ -133,21 +139,23 @@ def _signals_from_prepared(prepared, index, half_life, availability, bound):
     return frame
 
 
-def signal_features(records, sessions, half_life=HALF_LIFE, availability="live", as_of=None):
+def signal_features(records, sessions, half_life=HALF_LIFE, availability="live", as_of=None,
+                    signal_definition=SIGNAL_DEFINITION):
     if availability not in {"live", "research"}:
         raise ValueError("availability must be live or research")
     if not np.isfinite(half_life) or half_life <= 0:
         raise ValueError("half_life must be positive")
-    index, prepared = _sessions(sessions), _prepared(records)
+    index, prepared = _sessions(sessions), _prepared(records, signal_definition)
     bound = _utc(as_of, "as_of") if as_of is not None else None
     if bound is not None and (index > bound.tz_convert(None).normalize()).any():
         raise ValueError("sessions after as_of are not valid news feature origins")
     return _signals_from_prepared(prepared, index, half_life, availability, bound)
 
 
-def latest_snapshot_features(records, sessions, half_life, availability, issued_as_of):
+def latest_snapshot_features(records, sessions, half_life, availability, issued_as_of,
+                             signal_definition=SIGNAL_DEFINITION):
     issued = _utc(issued_as_of, "issued_as_of")
-    index, prepared = _sessions(sessions), _prepared(records)
+    index, prepared = _sessions(sessions), _prepared(records, signal_definition)
     if index[-1] > issued.tz_convert(None).normalize():
         raise ValueError("latest price session is after issued_as_of")
     frame = _signals_from_prepared(prepared, index, half_life, availability, issued)
@@ -347,9 +355,10 @@ def fit_residual(base_predictions, prices, records, *, as_of, availability="rese
     if availability not in {"live", "research"}:
         raise ValueError("availability must be live or research")
     cutoff, base, close = _utc(as_of, "as_of"), _base_frame(base_predictions), _prices(prices)
-    prepared = _prepared(records)
+    prepared = _prepared(records, SIGNAL_DEFINITION)
     earliest = min((row["available"] if availability == "live" else row["research_at"] for row in prepared), default=None)
-    signals = signal_features(records, close.index, HALF_LIFE, availability, cutoff)
+    signals = signal_features(records, close.index, HALF_LIFE, availability, cutoff,
+                              signal_definition=SIGNAL_DEFINITION)
     rows = _candidate_rows(base, close, signals, cutoff, earliest, availability)
     models, eligibility = {}, {}
     for horizon in HORIZONS:
@@ -365,19 +374,22 @@ def fit_residual(base_predictions, prices, records, *, as_of, availability="rese
         models[str(horizon)] = {"status": "experimental", "weight": final["weight"], "weight_interval": final["weight_interval"], "null_probability": final["null_probability"], "prior": final["prior"], "calibration_rows": len(calibration), "calibration_start": calibration.origin_date.min().date().isoformat(), "calibration_end": calibration.origin_date.max().date().isoformat(), "evaluation": evaluation, "evidence_status": evaluation_status}
         eligibility[str(horizon)] = {"status": "eligible", "train_rows": len(calibration), "tune_rows": 0, "holdout_rows": evaluation["n"]}
     status = "experimental" if any(model["status"] == "experimental" for model in models.values()) else "insufficient_data"
-    bundle = {"version": VERSION, "model_version": _request_version(base, records, cutoff, availability), "availability": availability, "status": status, "training_cutoff": cutoff.isoformat(), "half_life": HALF_LIFE, "lags": list(LAGS), "lag_weights": [float(value) for value in LAG_WEIGHTS], "signal_definition": "probability_margin_times_relevance", "horizon_decay": {"tau": TAU}, "eligibility": eligibility, "horizon_models": models, "metrics": {"evaluation_kind": "retrospective_reanalysis", "holdout": {str(h): models[str(h)]["evaluation"] for h in HORIZONS}}}
+    bundle = {"version": VERSION, "model_version": _request_version(base, records, cutoff, availability), "availability": availability, "status": status, "training_cutoff": cutoff.isoformat(), "half_life": HALF_LIFE, "lags": list(LAGS), "lag_weights": [float(value) for value in LAG_WEIGHTS], "signal_definition": SIGNAL_DEFINITION, "horizon_decay": {"tau": TAU}, "eligibility": eligibility, "horizon_models": models, "metrics": {"evaluation_kind": "retrospective_reanalysis", "holdout": {str(h): models[str(h)]["evaluation"] for h in HORIZONS}}}
     return bundle
 
 
 def _validate_bundle(bundle):
-    if not isinstance(bundle, dict) or bundle.get("version") != VERSION or bundle.get("status") not in {"experimental", "insufficient_data"} or bundle.get("availability") not in {"live", "research"} or not bundle.get("model_version"):
+    if not isinstance(bundle, dict) or not (
+            bundle.get("version") == VERSION and bundle.get("signal_definition") == SIGNAL_DEFINITION or
+            bundle.get("version") == "news-residual-v2" and bundle.get("signal_definition") == LEGACY_SIGNAL_DEFINITION
+    ) or bundle.get("status") not in {"experimental", "insufficient_data"} or bundle.get("availability") not in {"live", "research"} or not bundle.get("model_version"):
         raise ValueError("unsupported news residual artifact")
     _utc(bundle.get("training_cutoff"), "training_cutoff")
     try:
         valid_weights = np.asarray(bundle.get("lag_weights", []), float).shape == LAG_WEIGHTS.shape and np.allclose(bundle.get("lag_weights", []), LAG_WEIGHTS)
     except (TypeError, ValueError):
         valid_weights = False
-    if bundle.get("half_life") != HALF_LIFE or bundle.get("lags") != list(LAGS) or bundle.get("signal_definition") != "probability_margin_times_relevance" or not valid_weights or bundle.get("horizon_decay", {}).get("tau") != TAU or not isinstance(bundle.get("horizon_models"), dict):
+    if bundle.get("half_life") != HALF_LIFE or bundle.get("lags") != list(LAGS) or not valid_weights or bundle.get("horizon_decay", {}).get("tau") != TAU or not isinstance(bundle.get("horizon_models"), dict):
         raise ValueError("news residual artifact is incomplete")
     for horizon in HORIZONS:
         model = bundle["horizon_models"].get(str(horizon))
@@ -412,12 +424,13 @@ def load_residual(path):
 
 
 def _snapshot(records, sessions, bundle, issued):
+    signal_definition = bundle["signal_definition"]
     if bundle["availability"] == "live":
-        return latest_snapshot_features(records, sessions, HALF_LIFE, "live", issued), "strict_live"
+        return latest_snapshot_features(records, sessions, HALF_LIFE, "live", issued, signal_definition), "strict_live"
     # Retrospective model: only articles actually acquired by issuance are known,
     # then reconstruct their event/selection timing without using later analysis.
     known = [record for record in records if _record_times(record)[1] <= issued]
-    return latest_snapshot_features(known, sessions, HALF_LIFE, "research", issued), "research_known_at_issue"
+    return latest_snapshot_features(known, sessions, HALF_LIFE, "research", issued, signal_definition), "research_known_at_issue"
 
 
 def _prediction_row(row, correction, status, reason, bundle, signal=0., volatility=None, ids=None, interval=None, mode=None, issued_as_of=None):

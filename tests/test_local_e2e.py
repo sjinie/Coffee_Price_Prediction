@@ -1,19 +1,62 @@
 """Local E2E 핵심 계약 검사. 외부 API는 호출하지 않는다."""
 
 from contextlib import contextmanager
-from datetime import date
+from datetime import date, timedelta
 from pathlib import Path
+import sys
 
 import numpy as np
 import pandas as pd
 import pytest
 import torch
 
-from coffee_service import db, pipeline
+from coffee_service import db, ingestion, pipeline
 from coffee_service.features import LOOKBACK, PRODUCTION_FEATURES
 from coffee_service.ingestion import incremental_start, persist_increment
 from coffee_service.modeling import DLinear, MODEL_ID, ModelBundle, load_bundle, save_bundle
 from coffee_service.transform import align_available
+
+
+def test_collection_jobs_shared_by_legacy_cli_and_pipeline(tmp_path, monkeypatch):
+    config = {"fred": {"initial_release_series": ["DEXBZUS", "DFF"]}}
+    regions = [{"region_id": "br_sul_minas"}]
+    jobs = ingestion.collection_jobs(config, regions, object(), ingestion.SOURCE_GROUPS)
+    assert pipeline.collection_jobs is ingestion.collection_jobs
+    assert pipeline.SOURCE_GROUPS is ingestion.SOURCE_GROUPS
+    assert [(name, group) for name, group, *_ in jobs] == [
+        ("coffee", "yahoo"), ("brl", "yahoo"),
+        ("dff", "fred"), ("dtwexbgs", "fred"), ("dcoilwtico", "fred"),
+        ("alfred_dexbzus", "fred"), ("alfred_dff", "fred"),
+        ("weather_br_sul_minas", "nasa"), ("cot", "cftc"),
+    ]
+
+    @contextmanager
+    def session():
+        yield object()
+
+    calls = []
+
+    def fetch(_session, _region, start, end):
+        calls.append((start, end))
+        return object()
+
+    monkeypatch.setattr(ingestion, "fetch_weather", fetch)
+    monkeypatch.setattr(ingestion, "build_session", session)
+    monkeypatch.setattr(ingestion, "save_table", lambda *_args: None)
+    monkeypatch.setattr(ingestion, "load_dotenv", lambda *_args: None)
+    monkeypatch.setattr(ingestion.yf, "set_tz_cache_location", lambda *_args: None)
+    monkeypatch.setattr(sys, "argv", ["02_backfill_10y.py", "--start", "2026-01-01",
+        "--end", "2026-01-03", "--sources", "nasa", "--regions", "br_sul_minas",
+        "--output", str(tmp_path)])
+    assert ingestion.main() == 0
+    assert calls == [(date(2026, 1, 1) - timedelta(days=30), date(2026, 1, 3) + timedelta(days=30))]
+
+    monkeypatch.setattr(pipeline, "build_session", session)
+    monkeypatch.setattr(pipeline, "persist_increment", lambda *_args: None)
+    monkeypatch.setattr(pipeline, "status_from_path", lambda *_args, **_kwargs: {})
+    pipeline.collect(tmp_path, "backfill", date(2026, 1, 1), date(2026, 1, 3),
+                     selected_groups=("nasa",), selected_regions=["br_sul_minas"])
+    assert calls[-1] == (date(2026, 1, 1) - timedelta(days=90), date(2026, 1, 3))
 
 
 def test_merge_and_incremental_range_are_idempotent(tmp_path):

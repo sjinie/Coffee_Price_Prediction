@@ -565,7 +565,7 @@ def read_records(path: Path) -> list[dict[str, Any]]:
     return [_valid_record(record) for record in payload]
 
 
-def _write_records(path: Path, records: list[dict[str, Any]]) -> None:
+def _write_records(path: Path, records: list[dict[str, Any]] | Mapping[str, Any]) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     with tempfile.NamedTemporaryFile("w", encoding="utf-8", dir=path.parent, prefix=path.name + ".", suffix=".tmp", delete=False) as output:
         output.write(json.dumps(records, ensure_ascii=False, sort_keys=True, separators=(",", ":")))
@@ -586,25 +586,15 @@ def _selection_path(path: Path) -> Path:
 
 
 def _write_collected(path: Path, *, source: str, start: date, end: date, articles: list[dict[str, Any]]) -> None:
-    collected_path = _collected_path(path)
-    collected_path.parent.mkdir(parents=True, exist_ok=True)
     payload = {"source": source, "requested_start": start.isoformat(), "requested_end": end.isoformat(),
                "collected_at": _now(), "articles": articles}
-    with tempfile.NamedTemporaryFile("w", encoding="utf-8", dir=collected_path.parent, prefix=collected_path.name + ".", suffix=".tmp", delete=False) as output:
-        output.write(json.dumps(payload, ensure_ascii=False, sort_keys=True, separators=(",", ":")))
-        temporary = Path(output.name)
-    temporary.replace(collected_path)
+    _write_records(_collected_path(path), payload)
 
 
 def _write_selection(path: Path, *, start: date, end: date, records: list[dict[str, Any]], summary: Mapping[str, Any]) -> None:
-    selection_path = _selection_path(path)
-    selection_path.parent.mkdir(parents=True, exist_ok=True)
     payload = {"requested_start": start.isoformat(), "requested_end": end.isoformat(), "policy": SELECTION_POLICY,
                "records": records, **dict(summary), "written_at": _now()}
-    with tempfile.NamedTemporaryFile("w", encoding="utf-8", dir=selection_path.parent, prefix=selection_path.name + ".", suffix=".tmp", delete=False) as output:
-        output.write(json.dumps(payload, ensure_ascii=False, sort_keys=True, separators=(",", ":")))
-        temporary = Path(output.name)
-    temporary.replace(selection_path)
+    _write_records(_selection_path(path), payload)
 
 
 def _read_candidates(path: Path) -> list[dict[str, Any]]:
@@ -669,12 +659,7 @@ def _add_error(status: dict[str, Any], message: str) -> None:
 
 
 def _write_status(path: Path, status: Mapping[str, Any]) -> None:
-    status_path = _status_path(path)
-    status_path.parent.mkdir(parents=True, exist_ok=True)
-    with tempfile.NamedTemporaryFile("w", encoding="utf-8", dir=status_path.parent, prefix=status_path.name + ".", suffix=".tmp", delete=False) as output:
-        output.write(json.dumps(dict(status), ensure_ascii=False, sort_keys=True, separators=(",", ":")))
-        temporary = Path(output.name)
-    temporary.replace(status_path)
+    _write_records(_status_path(path), dict(status))
 
 
 @contextmanager

@@ -1,7 +1,9 @@
 """커피 가격·거시·기상·COT 데이터를 받아 Parquet로 저장한다."""
 
 import argparse
+from contextlib import contextmanager
 from datetime import date, timedelta
+import fcntl
 from io import BytesIO
 import os
 from pathlib import Path
@@ -20,6 +22,7 @@ from dotenv import load_dotenv
 ROOT = Path(__file__).resolve().parents[1]
 WEATHER_COLUMNS = ["PRECTOTCORR", "T2M", "T2M_MIN", "T2M_MAX", "RH2M"]
 WEATHER_BUFFER_DAYS = 30
+SOURCE_GROUPS = ("yahoo", "fred", "nasa", "cftc")
 COT_COLUMNS = {
     "CFTC_Contract_Market_Code": "market_code",
     "Market_and_Exchange_Names": "market_name",
@@ -30,6 +33,48 @@ COT_COLUMNS = {
     "Prod_Merc_Positions_Long_All": "producer_long",
     "Prod_Merc_Positions_Short_All": "producer_short",
 }
+
+
+@contextmanager
+def source_lock(directory):
+    """Serialize CLI collectors without adding a permanent lock file."""
+    directory = Path(directory)
+    directory.mkdir(parents=True, exist_ok=True)
+    descriptor = os.open(directory, os.O_RDONLY)
+    try:
+        try:
+            fcntl.flock(descriptor, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except BlockingIOError:
+            raise RuntimeError("A pipeline already owns this source directory") from None
+        yield
+    finally:
+        os.close(descriptor)
+
+
+def collection_jobs(config, regions, session, selected_groups):
+    jobs = []
+    if "yahoo" in selected_groups:
+        jobs.extend([
+            ("coffee", "yahoo", fetch_yahoo, ("KC=F",)),
+            ("brl", "yahoo", fetch_yahoo, ("BRL=X",)),
+        ])
+    if "fred" in selected_groups:
+        jobs.extend(
+            (series.lower(), "fred", fetch_fred, (session, series))
+            for series in ("DFF", "DTWEXBGS", "DCOILWTICO")
+        )
+        jobs.extend(
+            (f"alfred_{series.lower()}", "fred", fetch_initial_release, (session, series))
+            for series in config["fred"]["initial_release_series"]
+        )
+    if "nasa" in selected_groups:
+        jobs.extend(
+            (f"weather_{region['region_id']}", "nasa", fetch_weather, (session, region))
+            for region in regions
+        )
+    if "cftc" in selected_groups:
+        jobs.append(("cot", "cftc", fetch_cot, (session,)))
+    return jobs
 
 
 def get_response(session, url, **params):
@@ -240,8 +285,8 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--start", type=date.fromisoformat, default=date.fromisoformat(period["start"]))
     parser.add_argument("--end", type=date.fromisoformat, default=date.fromisoformat(period["end"]), help="마지막 날짜 포함")
-    parser.add_argument("--sources", nargs="+", choices=["yahoo", "fred", "nasa", "cftc"],
-                        default=["yahoo", "fred", "nasa", "cftc"])
+    parser.add_argument("--sources", nargs="+", choices=SOURCE_GROUPS,
+                        default=list(SOURCE_GROUPS))
     parser.add_argument("--regions", nargs="+", help="수집할 기상 region_id. 생략하면 6곳 모두 수집")
     parser.add_argument("--weather-buffer-days", type=int, default=WEATHER_BUFFER_DAYS,
                         help="기상 집계용 앞뒤 여유 일수 (기본 30)")
@@ -263,20 +308,7 @@ def main():
     yf.set_tz_cache_location(str(ROOT / ".cache" / "yfinance"))
     failures = []
     with build_session() as session:
-        jobs = []
-        if "yahoo" in args.sources:
-            jobs.extend((name, fetch_yahoo, (symbol,)) for name, symbol in
-                        [("coffee", "KC=F"), ("brl", "BRL=X")])
-        if "fred" in args.sources:
-            jobs.extend((series.lower(), fetch_fred, (session, series))
-                        for series in ["DFF", "DTWEXBGS", "DCOILWTICO"])
-            jobs.extend((f"alfred_{series.lower()}", fetch_initial_release, (session, series))
-                        for series in config["fred"]["initial_release_series"])
-        if "nasa" in args.sources:
-            jobs.extend((f"weather_{r['region_id']}", fetch_weather, (session, r)) for r in regions)
-        if "cftc" in args.sources:
-            jobs.append(("cot", fetch_cot, (session,)))
-        for name, fetch, inputs in jobs:
+        for name, _group, fetch, inputs in collection_jobs(config, regions, session, args.sources):
             print(f"수집: {name}", flush=True)
             try:
                 start, end = args.start, args.end

@@ -1,7 +1,7 @@
 import { readFileSync } from 'node:fs'
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { computed, ref } from 'vue'
+import { computed, nextTick, ref } from 'vue'
 
 // 실제 SFC의 조회·계산 로직을 실행한다. 화면 배치는 브라우저에서 별도로 확인한다.
 const componentSource = readFileSync(new URL('../src/App.vue', import.meta.url), 'utf8')
@@ -19,11 +19,13 @@ test('뉴스 확률 신호·반영 강도·실제 가격 보정률을 구분한�
   assert.equal(app.formatWeightInterval([.8, .1]), '-')
   assert.equal(app.priceCorrectionPercent({ adjusted_price: 101, news_correction: Math.log(1.01), news_weight: .2 }), '+1%')
   assert.equal(app.priceCorrectionPercent({ adjusted_price: null, news_correction: null }), '-')
-  const strong = { p_bullish: .9, p_bearish: .05, relevance: 1 }
-  const weak = { p_bullish: .45, p_bearish: .4, relevance: 1 }
-  assert.ok(app.articlePressure(strong) > app.articlePressure(weak))
-  assert.ok(Math.abs(app.articlePressure(strong) - .85) < 1e-12)
-  assert.ok(app.articlePressure({ ...strong, p_bullish: .05, p_bearish: .9 }) < 0)
+  const strong = { p_bullish: .9, p_bearish: .05, p_neutral: .03, p_uncertain: .02, relevance: .8, confidence: .5 }
+  const weak = { p_bullish: .45, p_bearish: .4, p_neutral: .1, p_uncertain: .05, relevance: .8, confidence: .5 }
+  assert.equal(app.articlePressure(strong), app.articlePressure(weak))
+  assert.equal(app.articlePressure(strong), .4)
+  assert.equal(app.articlePressure({ ...strong, p_bullish: .05, p_bearish: .9 }), -.4)
+  assert.equal(app.articlePressure({ ...strong, p_bullish: .01, p_neutral: .93 }), 0)
+  assert.equal(app.articlePressure({ ...strong, p_bullish: .9, p_bearish: .9 }), 0)
   assert.equal(app.articlePressure({ p_bullish: null }), null)
   assert.match(app.newsEvidenceLabel('not_demonstrated'), /미확인/)
 })
@@ -118,13 +120,15 @@ test('방향은 예측 기준일 가격과 비교하고 결측·미성숙은 평
   ]
   assert.deepEqual(app.evaluation.value.map(item => item.matched), [true, false, null, true, false])
   assert.deepEqual(app.evaluation.value.map(item => item.priceError), [-10, -20, 0, 0, -5])
-  assert.deepEqual(app.evaluationSummary.value, { count: 4, matched: 2, missing: 1, accuracy: 50, mae: 7 })
+  assert.deepEqual(app.evaluationSummary.value, { count: 4, matched: 2, missing: 1, accuracy: 50, balancedAccuracy: null, directionalCount: 3, mae: 7, rmse: Math.sqrt(105) })
   assert.ok(Math.abs(app.evaluation.value[1].predictedChange + 5) < 1e-10)
   assert.equal((app.directionPaths('actualChange').match(/M/g) || []).length, 2)
   assert.doesNotMatch(app.directionPaths('predictedChange'), /NaN|Infinity/)
   app.selectedHorizon.value = 5
   assert.equal(app.evaluationSummary.value.accuracy, null)
+  assert.equal(app.evaluationSummary.value.balancedAccuracy, null)
   assert.equal(app.evaluationSummary.value.mae, null)
+  assert.equal(app.evaluationSummary.value.rmse, null)
   assert.equal(app.directionPaths('actualChange'), '')
   assert.equal(app.selectedEvaluation.value, undefined)
   assert.ok(Number.isFinite(app.errorBound.value))
@@ -157,13 +161,13 @@ test('뉴스 장애는 가격 조회를 막지 않고 별도로 표시한다', a
     ? { ok: false, status: 503 }
     : { ok: true, json: async () => path.includes('/prices') ? [{ date: '2026-09-25', close: 300 }] : [] }
   const app = new Function('computed', 'onMounted', 'ref', 'fetch', `${source}
-    return { loadData, error, newsError, prices, newsForecastLabel, newsArticles }
+    return { loadData, error, newsError, prices, newsForecastLabel, newsItems }
   `)(computed, () => {}, ref, fetch)
   await app.loadData()
   assert.equal(app.error.value, '')
   assert.equal(app.prices.value[0].close, 300)
   assert.match(app.newsError.value, /뉴스 조회에 실패/)
-  assert.deepEqual(app.newsArticles.value, [])
+  assert.deepEqual(app.newsItems.value, [])
   assert.equal(app.newsForecastLabel('insufficient_data'), '학습 데이터 부족')
 })
 
@@ -175,6 +179,39 @@ test('뉴스 응답을 기다리는 동안에도 가격 로딩은 끝난다', as
   `)(computed, () => {}, ref, fetch)
   await app.loadData()
   assert.equal(app.loading.value, false)
+})
+
+test('선택 모델은 현재 버전만 표시하고 뉴스 피처·수치 복귀를 구분한다', () => {
+  const app = new Function('computed', 'onMounted', 'ref', `${source}
+    return { models, predictions, prices, selectedHorizon, hasConditionalModels, futurePredictions, evaluationSummary, newsUseLabel, signalStatusLabel }
+  `)(computed, () => {}, ref)
+  app.models.value = [{ model_id: 'selected-h5', name: 'LightGBM + DLinear + 뉴스', horizons: [5], metrics: { news_policy: 'conditional_feature' } }]
+  app.prices.value = [{ date: '2026-09-25', close: 300 }, { date: '2026-09-01', close: 300 }]
+  app.predictions.value = [
+    { model_id: 'old-h5', horizon: 5, origin_date: '2026-09-25', target_date: '2026-10-02', actual_price: null, predicted_price: 999 },
+    { horizon: 5, origin_date: '2026-09-25', target_date: '2026-10-02', actual_price: null, predicted_price: 999 },
+    { model_id: 'selected-h5', horizon: 5, origin_date: '2026-09-25', target_date: '2026-10-02', actual_price: null, predicted_price: 278.213619, final_direction: 'DOWN', signal_status: 'numeric_fallback', news_article_count: 0, news_impact_score: 0 },
+  ]
+  assert.equal(app.hasConditionalModels.value, true)
+  assert.deepEqual(app.futurePredictions.value.map(item => item.predicted_price), [278.213619])
+  assert.equal(app.newsUseLabel(app.futurePredictions.value[0]), '해당 기준일에 반영할 기사 0건 · 수치 피처로 예측')
+  assert.match(app.newsUseLabel({ signal_status: 'numeric_fallback', news_article_count: null }), /확인 불가/)
+  assert.match(app.newsUseLabel({ signal_status: 'numeric_fallback', news_article_count: 2, news_impact_score: 0 }), /집계 점수 0/)
+  assert.match(app.newsUseLabel({ signal_status: 'news_feature', news_article_count: 2, news_impact_score: .3 }), /뉴스 피처 사용/)
+  assert.equal(app.signalStatusLabel('numeric_fallback'), '수치 피처로 예측')
+
+  app.predictions.value = [
+    { model_id: 'selected-h5', horizon: 5, origin_date: '2026-09-01', target_date: '2026-09-08', actual_price: 330, predicted_price: 300 },
+    { model_id: 'selected-h5', horizon: 5, origin_date: '2026-09-01', target_date: '2026-09-09', actual_price: 270, predicted_price: 300 },
+    { model_id: 'selected-h5', horizon: 5, origin_date: '2026-09-01', target_date: '2026-09-10', actual_price: 330, predicted_price: 330 },
+    { model_id: 'selected-h5', horizon: 5, origin_date: '2026-09-01', target_date: '2026-09-11', actual_price: 300, predicted_price: 270 },
+  ]
+  app.selectedHorizon.value = 5
+  assert.equal(app.evaluationSummary.value.balancedAccuracy, 25)
+  assert.equal(app.evaluationSummary.value.directionalCount, 3)
+  assert.equal(app.evaluationSummary.value.rmse, Math.sqrt((900 + 900 + 0 + 900) / 4))
+  assert.match(componentSource, /newsView\?\.forecast && !hasConditionalModels/)
+  assert.match(componentSource, /23:00 UTC/)
 })
 
 test('Jev 보정은 legacy 신호와 분리하며 0 계수를 숨기지 않는다', () => {
@@ -215,4 +252,104 @@ test('Jev 보정은 legacy 신호와 분리하며 0 계수를 숨기지 않는�
   app.newsView.value = { forecast: { model: {} } }
   assert.equal(app.zeroNewsWeights.value, false)
   assert.equal(app.noExperimentalChange({ status: 'experimental', news_correction: 0 }), false)
+})
+
+test('수집·선정 기사 목록은 서버 필터와 10건 페이지를 쓰고 상태 변경 시 첫 페이지로 돌아간다', async () => {
+  const requests = []
+  const fetch = async path => {
+    requests.push(path)
+    const params = new URL(path, 'http://localhost').searchParams
+    const offset = Number(params.get('offset'))
+    const status = params.get('analysis_status')
+    return { ok: true, json: async () => ({ inventory: {
+      total: 25, analyzed: 20, pending: 5, matched: status === 'pending' ? 5 : 25,
+      offset, limit: 10, items: [{ content_hash: `${status}-${offset}`, analysis_status: status }],
+    } }) }
+  }
+  const app = new Function('computed', 'onMounted', 'ref', 'fetch', `${source}
+    return { loadNews, selectNewsStatus, moveNewsPage, newsInventory, newsItems, newsOffset, newsStatus, newsPageEnd }
+  `)(computed, () => {}, ref, fetch)
+  await app.loadNews()
+  assert.match(requests[0], /limit=10&offset=0&analysis_status=all$/)
+  assert.equal(app.newsInventory.value.total, 25)
+  assert.equal(app.newsPageEnd.value, 10)
+  app.moveNewsPage(1)
+  await new Promise(resolve => setImmediate(resolve))
+  assert.equal(app.newsOffset.value, 10)
+  assert.equal(app.newsItems.value[0].content_hash, 'all-10')
+  app.selectNewsStatus('pending')
+  await new Promise(resolve => setImmediate(resolve))
+  assert.equal(app.newsOffset.value, 0)
+  assert.equal(app.newsStatus.value, 'pending')
+  assert.equal(app.newsPageEnd.value, 5)
+  assert.equal(app.newsItems.value[0].content_hash, 'pending-0')
+  app.moveNewsPage(1)
+  assert.equal(requests.length, 3)
+  assert.match(componentSource, /v-for="\(article, index\) in newsItems"/)
+  assert.match(componentSource, /article\.analysis_status === 'analyzed'/)
+  assert.match(componentSource, /aria-haspopup="dialog"/)
+  assert.match(componentSource, /aria-label="기사 분류 확률"/)
+  assert.match(componentSource, /분류 확률은 미래 가격의 상승·하락 확률이 아닙니다/)
+  assert.match(componentSource, /news_article_count\) === 0"><a href="#jev-title"/)
+})
+
+test('늦게 끝난 이전 뉴스 응답과 오류는 최신 목록·상태를 덮어쓰지 않는다', async () => {
+  const pending = []
+  const fetch = path => new Promise((resolve, reject) => pending.push({ path, resolve, reject }))
+  const app = new Function('computed', 'onMounted', 'ref', 'fetch', `${source}
+    return { loadNews, selectNewsStatus, newsItems, newsError, newsLoading }
+  `)(computed, () => {}, ref, fetch)
+  const first = app.loadNews()
+  app.selectNewsStatus('pending')
+  assert.equal(app.newsLoading.value, true)
+  pending[1].resolve({ ok: true, json: async () => ({ inventory: { matched: 1, items: [{ content_hash: 'new' }] } }) })
+  await new Promise(resolve => setImmediate(resolve))
+  assert.equal(app.newsItems.value[0].content_hash, 'new')
+  pending[0].reject(new Error('stale failure'))
+  await first
+  assert.equal(app.newsError.value, '')
+  assert.equal(app.newsLoading.value, false)
+  assert.equal(app.newsItems.value[0].content_hash, 'new')
+  const third = app.loadNews()
+  app.selectNewsStatus('analyzed')
+  pending[3].resolve({ ok: true, json: async () => ({ inventory: { matched: 0, items: [] } }) })
+  await new Promise(resolve => setImmediate(resolve))
+  pending[2].resolve({ ok: true, json: async () => ({ inventory: { matched: 1, items: [{ content_hash: 'old' }] } }) })
+  await third
+  assert.deepEqual(app.newsItems.value, [])
+})
+
+test('기사 선택은 상세 내용·스크롤을 교체하고 미분석을 방향 신호로 표시하지 않는다', async () => {
+  const app = new Function('computed', 'onMounted', 'ref', 'nextTick', `${source}
+    return { openArticle, selectedArticle, newsDialog, articleLabel, articleTone, newsDate, newsSource, articleSignalLabel }
+  `)(computed, () => {}, ref, nextTick)
+  let opened = 0
+  app.newsDialog.value = { showModal() { opened++ }, scrollTop: 400 }
+  const analyzed = { content_hash: 'a', analysis_status: 'analyzed', label: 'bearish' }
+  let triggerFocused = false
+  const opening = app.openArticle(analyzed, { focus() { triggerFocused = true } })
+  assert.equal(opened, 0, 'DOM 갱신 전에는 팝업을 열지 않는다')
+  await opening
+  assert.equal(triggerFocused, true)
+  assert.equal(app.selectedArticle.value.content_hash, 'a')
+  assert.equal(app.newsDialog.value.scrollTop, 0)
+  assert.equal(app.articleLabel(analyzed), '하락 압력')
+  assert.equal(app.articleTone(analyzed), 'bearish')
+  const pending = { content_hash: 'b', analysis_status: 'pending', label: 'bullish' }
+  await app.openArticle(pending)
+  assert.equal(app.selectedArticle.value.content_hash, 'b')
+  assert.equal(opened, 2)
+  assert.equal(app.articleLabel(pending), '미분석')
+  assert.equal(app.articleTone(pending), 'neutral')
+  assert.equal(app.articleTone({ analysis_status: 'analyzed', label: 'uncertain' }), 'neutral')
+  assert.equal(app.newsDate('2026-09-25T23:00:00Z'), '2026. 09. 26.')
+  assert.equal(app.newsDate(null), '날짜 없음')
+  const conflicting = { ...analyzed, label: 'bullish', p_bullish: .1, p_bearish: .7, p_neutral: .1, p_uncertain: .1, relevance: .8, confidence: .5 }
+  assert.equal(app.articleLabel(conflicting), '상승 압력')
+  assert.equal(app.articleSignalLabel(conflicting), '기사 신호: 하락 방향')
+  assert.equal(app.articleSignalLabel({ ...conflicting, p_bullish: .7 }), '기사 신호: 방향 반영 없음')
+  assert.equal(app.articleSignalLabel({}), '기사 신호 계산 불가')
+  assert.equal(app.newsSource('google_news_rss'), 'Google News')
+  assert.match(componentSource, /aria-labelledby="news-reader-title"/)
+  assert.match(componentSource, /autofocus aria-label="기사 상세 닫기"/)
 })

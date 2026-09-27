@@ -22,6 +22,8 @@ class DailyPipelineDeployTest(unittest.TestCase):
             (remote / "sources/coffee.parquet").write_text("old")
             (remote / "jev/responses.json").write_text("old")
             (remote / "models/production_dlinear_60.pt").write_text("model")
+            (remote / "models/selected_news").mkdir()
+            (remote / "models/selected_news/manifest.json").write_text("selected")
             commands = root / "commands"
             bin_dir = root / "bin"
             bin_dir.mkdir()

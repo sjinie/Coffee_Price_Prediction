@@ -17,6 +17,8 @@
 *.parquet
 data/raw/
 /data/jev/
+/data/processed/fixed_ensemble_news/
+/data/processed/news_feature_ensemble/
 
 ### Database ###
 *.accdb
@@ -268,5 +270,11 @@ pip-selfcheck.json
 
 .codex/
 
+# Local document editing inputs and intermediate outputs
+/_workspace/
+
 # Local frontend dependencies
 node_modules/
+
+# Exported selected model weights and preprocessing statistics
+/model_artifacts/selected_news/

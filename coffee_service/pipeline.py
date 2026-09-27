@@ -17,52 +17,24 @@ from . import db
 from .features import assemble_features, load_sources
 from .inference import generate_predictions
 from .ingestion import (
+    SOURCE_GROUPS,
     build_session,
-    fetch_cot,
-    fetch_fred,
-    fetch_initial_release,
-    fetch_weather,
-    fetch_yahoo,
+    collection_jobs,
     incremental_start,
     persist_increment,
+    source_lock,
 )
-from .modeling import DEFAULT_ARTIFACT, load_bundle
+from .modeling import load_bundle
+from .selected_models import DEFAULT_SELECTED as DEFAULT_ARTIFACT
 
 
 ROOT = Path(__file__).resolve().parents[1]
 WEATHER_BUFFER_DAYS = 90
-SOURCE_GROUPS = ("yahoo", "fred", "nasa", "cftc")
 REQUIRED_SOURCES = {
     "coffee", "alfred_dexbzus", "alfred_dff", "alfred_dcoilwtico",
 }
 REQUIRED_MACRO_SOURCES = tuple(sorted(REQUIRED_SOURCES - {"coffee"}))
 MAX_MACRO_STALENESS_DAYS = 14
-
-
-def collection_jobs(config, regions, session, selected_groups):
-    jobs = []
-    if "yahoo" in selected_groups:
-        jobs.extend([
-            ("coffee", "yahoo", fetch_yahoo, ("KC=F",)),
-            ("brl", "yahoo", fetch_yahoo, ("BRL=X",)),
-        ])
-    if "fred" in selected_groups:
-        jobs.extend(
-            (series.lower(), "fred", fetch_fred, (session, series))
-            for series in ("DFF", "DTWEXBGS", "DCOILWTICO")
-        )
-        jobs.extend(
-            (f"alfred_{series.lower()}", "fred", fetch_initial_release, (session, series))
-            for series in config["fred"]["initial_release_series"]
-        )
-    if "nasa" in selected_groups:
-        jobs.extend(
-            (f"weather_{region['region_id']}", "nasa", fetch_weather, (session, region))
-            for region in regions
-        )
-    if "cftc" in selected_groups:
-        jobs.append(("cot", "cftc", fetch_cot, (session,)))
-    return jobs
 
 
 def collect(
@@ -190,6 +162,7 @@ def run_pipeline(
     intelligence_artifact=None,
     ingest_news_source=False,
     news_availability="live",
+    jev_cache=None,
 ) -> dict:
     source_dir, artifact = Path(source_dir), Path(artifact)
     if news_availability not in {"live", "historical"}:
@@ -198,6 +171,16 @@ def run_pipeline(
         db.create_schema(connection)
         run_id = db.start_pipeline_run(connection, mode)
         try:
+            selected = artifact.suffix == ".json"
+            if selected:
+                from . import jev_store
+
+                cache = Path(jev_cache) if jev_cache else ROOT / "data/jev/responses.json"
+                records = jev_store.read_analyses(cache.parent, latest=True) if cache.exists() else []
+                db.upsert_jev_analyses(connection, records)
+                db.upsert_jev_selections(connection, jev_store.read_news(cache.parent)["selections"])
+                # Collected news remains inspectable even when numeric inputs fail.
+                connection.commit()
             if skip_ingestion:
                 statuses, failures = existing_source_status(source_dir, end), []
             else:
@@ -241,11 +224,23 @@ def run_pipeline(
                 raise RuntimeError("수집 실패: " + ", ".join(blocking_failures))
             sources = sources_as_of(source_dir, end)
             validate_macro_freshness(sources, end)
-            dataset = assemble_features(sources, fit_end=min("2023-12-31", end.isoformat()))
-            bundle = load_bundle(artifact)
-            predictions = generate_predictions(dataset, bundle)
+            if selected:
+                from .selected_models import SelectedBundle, assemble_selected, daily_news, load_weather, selected_predictions
+
+                if intelligence_artifact is not None:
+                    raise ValueError("선택 모델에는 별도 뉴스 잔차/분류 보정을 중복 적용하지 않습니다.")
+                bundle = SelectedBundle(artifact)
+                dataset = assemble_selected(load_weather(sources, source_dir, end), bundle.manifest["train_cutoff"])
+                news = daily_news(records, dataset.sessions)
+                predictions = selected_predictions(dataset, bundle, news)
+            else:
+                dataset = assemble_features(sources, fit_end=min("2023-12-31", end.isoformat()))
+                bundle = load_bundle(artifact)
+                predictions = generate_predictions(dataset, bundle)
             validate_latest_prediction_coverage(dataset, predictions)
-            if intelligence_artifact is None:
+            if selected:
+                db.upsert_intelligence_models(connection, bundle.model_records())
+            elif intelligence_artifact is None:
                 db.upsert_models(connection, bundle)
             else:
                 db.upsert_models(connection, bundle, activate=False)
@@ -373,10 +368,12 @@ def run_news_pipeline(source_dir, artifact, end, *, cache_path, limit=200,
             records = [record for record in records
                        if record["model"] == MODEL and record["prompt_version"] == PROMPT_VERSION]
             db.upsert_jev_analyses(connection, records)
+            if Path(cache_path).name == "responses.json":
+                from . import jev_store
+                db.upsert_jev_selections(connection, jev_store.read_news(Path(cache_path).parent)["selections"])
             # Analysis survives numeric-source/model failure and can be reused without a new API call.
             connection.commit()
             as_of = pd.Timestamp.now(tz="UTC")
-            from .refresh import source_lock
             with source_lock(source_dir):
                 sources = sources_as_of(Path(source_dir), end)
             validate_macro_freshness(sources, end)
@@ -448,8 +445,9 @@ def main(argv=None) -> int:
 
 
 def _run_command(args, start, end):
-    from .refresh import source_lock
     if args.mode == "news":
+        if args.artifact.suffix == ".json":
+            raise ValueError("선택 모델은 refresh에서 뉴스 feature를 사용합니다. 별도 잔차 보정은 지원하지 않습니다.")
         if not args.skip_ingestion:
             with source_lock(args.source_dir):
                 run_pipeline("incremental", args.source_dir, args.artifact, start, end,
@@ -464,6 +462,7 @@ def _run_command(args, start, end):
             result = run_pipeline(
                 args.mode, args.source_dir, args.artifact, start, end,
                 selected_groups=args.sources, selected_regions=args.regions,
+                jev_cache=args.jev_cache,
                 skip_ingestion=args.skip_ingestion, database_url=args.database_url,
                 news_path=args.news_path, intelligence_artifact=args.intelligence_artifact,
                 ingest_news_source=args.ingest_news, news_availability=args.news_availability,

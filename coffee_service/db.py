@@ -110,6 +110,11 @@ CREATE TABLE IF NOT EXISTS jev_analyses (
     CHECK (available_at >= event_at)
 );
 CREATE INDEX IF NOT EXISTS jev_analyses_event_idx ON jev_analyses (event_at DESC);
+CREATE TABLE IF NOT EXISTS jev_selections (
+    content_hash TEXT PRIMARY KEY,
+    available_at TIMESTAMPTZ NOT NULL,
+    document JSONB NOT NULL
+);
 CREATE TABLE IF NOT EXISTS news_forecast_runs (
     run_id UUID PRIMARY KEY REFERENCES pipeline_runs(run_id),
     as_of TIMESTAMPTZ NOT NULL,
@@ -528,6 +533,74 @@ def upsert_jev_analyses(connection, records: list[dict]) -> int:
               json.dumps(r, ensure_ascii=False, allow_nan=False)) for r in records],
         )
     return len(records)
+
+
+def upsert_jev_selections(connection, selections: dict) -> None:
+    """Project selected collection metadata for display; never schedule analysis."""
+    rows = {}
+    fields = ("content_hash", "article_id", "title", "url", "source", "event_at",
+              "collected_at", "available_at", "time_basis", "selection_date")
+    for group in selections.values():
+        for record in group:
+            key = record["content_hash"]
+            # Older selections can lack available_at. Use recorded timestamps,
+            # including collection time, without inventing a historical cutoff.
+            times = [datetime.fromisoformat(record[field].replace("Z", "+00:00"))
+                     for field in ("event_at", "modified_at", "discovered_at", "collected_at",
+                                   "selection_available_at", "available_at") if record.get(field)]
+            if not times or any(value.tzinfo is None for value in times):
+                raise ValueError("Jev selection needs timezone-aware availability timestamps")
+            available = max(times).astimezone(timezone.utc).isoformat()
+            # Repeated research/service selections represent the same content.
+            if key not in rows or available < rows[key]["available_at"]:
+                rows[key] = {**{field: record.get(field) for field in fields}, "available_at": available}
+    with connection.cursor() as cursor:
+        cursor.executemany(
+            """INSERT INTO jev_selections (content_hash, available_at, document)
+               VALUES (%s, %s, %s::jsonb) ON CONFLICT (content_hash) DO NOTHING""",
+            [(key, row["available_at"], json.dumps(row, ensure_ascii=False, allow_nan=False))
+             for key, row in rows.items()],
+        )
+
+
+def fetch_jev_inventory(connection, limit: int, offset: int, analysis_status: str) -> dict:
+    """One visible row per content, including selected items awaiting analysis."""
+    cte = """
+        WITH analyses AS (
+            SELECT DISTINCT ON (COALESCE(document->>'content_hash', analysis_id))
+                   COALESCE(document->>'content_hash', analysis_id) AS content_hash, document
+            FROM jev_analyses WHERE available_at <= now()
+            ORDER BY COALESCE(document->>'content_hash', analysis_id),
+                     (document->>'analyzed_at')::timestamptz DESC NULLS LAST, analysis_id
+        ), inventory AS (
+            SELECT COALESCE(s.content_hash, a.content_hash) AS content_hash,
+                   COALESCE(a.document, '{}'::jsonb) || COALESCE(s.document, '{}'::jsonb)
+                     || jsonb_build_object('available_at', GREATEST(
+                       s.available_at, (a.document->>'available_at')::timestamptz)) AS document,
+                   CASE WHEN a.content_hash IS NULL THEN 'pending' ELSE 'analyzed' END AS analysis_status
+            FROM (SELECT * FROM jev_selections WHERE available_at <= now()) s
+            FULL JOIN analyses a USING (content_hash)
+        )
+    """
+    summary = fetch_one(connection, cte + """
+        SELECT count(*) AS total,
+               count(*) FILTER (WHERE analysis_status = 'analyzed') AS analyzed,
+               count(*) FILTER (WHERE analysis_status = 'pending') AS pending,
+               max((document->>'collected_at')::timestamptz) AS last_collected_at,
+               max((document->>'analyzed_at')::timestamptz) AS last_analyzed_at,
+               count(*) FILTER (WHERE %s = 'all' OR analysis_status = %s) AS matched
+        FROM inventory""", (analysis_status, analysis_status))
+    rows = fetch_all(connection, cte + """
+        SELECT * FROM inventory WHERE %s = 'all' OR analysis_status = %s
+        ORDER BY (document->>'event_at')::timestamptz DESC NULLS LAST, content_hash
+        LIMIT %s OFFSET %s""", (analysis_status, analysis_status, limit, offset))
+    fields = ("article_id", "analysis_id", "title", "url", "source", "event_at", "time_basis",
+              "collected_at", "analyzed_at", "available_at", "label", "p_bullish", "p_bearish",
+              "p_neutral", "p_uncertain", "relevance", "confidence", "model", "prompt_version")
+    return {**summary, "limit": limit, "offset": offset, "items": [
+        {**{key: row["document"].get(key) for key in fields},
+         "content_hash": row["content_hash"], "analysis_status": row["analysis_status"]}
+        for row in rows]}
 
 
 def store_news_forecast(connection, run_id: str, document: dict) -> None:

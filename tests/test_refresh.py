@@ -20,7 +20,8 @@ def setup_cycle(monkeypatch, tmp_path, *, numeric_failure=False, worker_state='c
     def classify(data, **kwargs):
         calls.append(('classify', kwargs))
         doc = jev_store.read_document(data/'requests.json')
-        doc['worker_state'] = {'state': worker_state, 'next_attempt_epoch': refresh.time.time()+300}
+        doc['worker_state'] = {'state': worker_state, 'next_attempt_epoch': refresh.time.time()+300,
+                               'consecutive_failures': int(worker_state == 'retry_wait')}
         jev_store.write_document(data/'requests.json',doc)
         return 0
     monkeypatch.setattr(pipeline, 'run_pipeline', numeric)
@@ -34,7 +35,7 @@ def test_refresh_uses_all_numeric_sources_and_four_file_archive(monkeypatch,tmp_
     calls=setup_cycle(monkeypatch,tmp_path)
     result=refresh.run_cycle(tmp_path/'sources',tmp_path/'model',tmp_path/'jev',date(2014,7,1),end=date(2026,9,26))
     assert result['status']=='success'
-    assert calls[0]==('numeric','incremental',date(2014,7,1),date(2026,9,26),{'database_url':None})
+    assert calls[0]==('numeric','incremental',date(2014,7,1),date(2026,9,26),{'database_url':None, 'jev_cache':tmp_path/'jev/responses.json'})
     assert [c[0] for c in calls]==['numeric','collect','classify']
     assert set(p.name for p in (tmp_path/'jev').iterdir())=={'news.json','requests.json','responses.json','sentiment.csv'}
     assert result['next_run_epoch']-refresh.time.time()==pytest.approx(refresh.WEEK,abs=1)
@@ -169,5 +170,17 @@ def test_manual_news_cli_locks_numeric_phase_but_not_gateway_wait(monkeypatch, t
         return {'status': 'success', 'run_id': 'fixture', 'price_rows': 0, 'prediction_rows': 0}
     monkeypatch.setattr(pipeline, 'run_pipeline', numeric)
     monkeypatch.setattr(pipeline, 'run_news_pipeline', news)
-    assert pipeline.main(['news', '--source-dir', str(tmp_path)]) == 0
+    assert pipeline.main(['news', '--source-dir', str(tmp_path), '--artifact', str(tmp_path/'legacy.pt')]) == 0
     assert calls == ['numeric', 'news']
+
+
+@pytest.mark.parametrize('worker_state', ['stopped', 'retry_wait'])
+def test_selected_forecast_follows_news_attempt_even_when_delayed(monkeypatch, tmp_path, worker_state):
+    calls = setup_cycle(monkeypatch, tmp_path, worker_state=worker_state)
+    state = refresh.run_cycle(tmp_path/'sources', tmp_path/'manifest.json', tmp_path/'jev',
+                              date(2014, 7, 1), end=date(2026, 9, 26))
+    assert [call[0] for call in calls] == ['collect', 'classify', 'numeric']
+    assert state['numeric'] == 'success'
+    assert state['classification'] == worker_state
+    if worker_state == 'retry_wait':
+        assert state['next_run_epoch']-refresh.time.time() == pytest.approx(300, abs=1)
