@@ -1,5 +1,5 @@
 <script setup>
-import { computed, onMounted, ref } from 'vue'
+import { computed, nextTick, onMounted, ref } from 'vue'
 
 const prices = ref([])
 const predictions = ref([])
@@ -12,6 +12,27 @@ const newsLoading = ref(false)
 const newsStatus = ref('all')
 const newsOffset = ref(0)
 const newsLimit = 10
+const newsDialog = ref(null)
+const selectedArticle = ref(null)
+const newsCategories = [
+  { key: 'bullish', label: '상승 압력' }, { key: 'bearish', label: '하락 압력' },
+  { key: 'neutral', label: '중립' }, { key: 'uncertain', label: '판단 유보' },
+]
+async function openArticle(article, trigger) {
+  trigger?.focus()
+  selectedArticle.value = article
+  await nextTick()
+  newsDialog.value.showModal()
+  newsDialog.value.scrollTop = 0
+}
+const newsSource = value => ({ yahoo_kc_news: 'Yahoo Finance', google_news_rss: 'Google News' }[value] || value || '출처 없음')
+const newsDate = value => value ? new Intl.DateTimeFormat('ko-KR', {
+  year: 'numeric', month: '2-digit', day: '2-digit', timeZone: 'Asia/Seoul',
+}).format(new Date(value)) : '날짜 없음'
+const articleLabel = article => article.analysis_status === 'analyzed'
+  ? newsCategories.find(item => item.key === article.label)?.label || '미분류' : '미분석'
+const articleTone = article => article.analysis_status === 'analyzed' && ['bullish', 'bearish'].includes(article.label)
+  ? article.label : 'neutral'
 let newsRequest = 0
 const loading = ref(true)
 const error = ref('')
@@ -113,7 +134,6 @@ const newsItems = computed(() => newsInventory.value?.items || [])
 const newsPageEnd = computed(() => Math.min(newsOffset.value + newsLimit, newsInventory.value?.matched ?? 0))
 const newsForecasts = computed(() => newsView.value?.forecast?.forecasts || [])
 const jevModel = computed(() => newsView.value?.forecast?.model || null)
-const jevLabel = value => ({ bullish: 'Bullish · 상승 압력', bearish: 'Bearish · 하락 압력', neutral: '중립', uncertain: '판단 유보' }[value] || '미분류')
 const newsForecastLabel = value => ({ experimental: '실험적 보정', insufficient_data: '학습 데이터 부족', unavailable: '이용 불가', no_news: '반영 가능한 뉴스 없음', stale_price: '가격 갱신 필요' }[value] || value)
 const newsReason = item => ({
   insufficient_data: '평가 가능한 뉴스·후속 가격 이력이 부족합니다.',
@@ -151,6 +171,10 @@ const articlePressure = article => {
   const winners = values.filter(value => Math.abs(value - highest) <= 1e-8)
   return (winners.length === 1 && values[0] === highest ? 1
     : winners.length === 1 && values[1] === highest ? -1 : 0) * article.relevance * article.confidence
+}
+const articleSignalLabel = article => {
+  const score = articlePressure(article)
+  return score === null ? '기사 신호 계산 불가' : score > 0 ? '기사 신호: 상승 방향' : score < 0 ? '기사 신호: 하락 방향' : '기사 신호: 방향 반영 없음'
 }
 async function retry() {
   await loadData()
@@ -365,10 +389,10 @@ const ticks = domain => Array.from({ length: 5 }, (_, index) => domain[1] - (dom
       </section>
 
       <section class="panel news-panel" aria-labelledby="jev-title">
-        <div class="panel-heading"><h2 id="jev-title">{{ hasConditionalModels ? 'Jev 뉴스 분석' : 'Jev 뉴스 기반 실험적 가격 보정' }}</h2><span class="unit">아라비카 가격 압력</span></div>
+        <div class="panel-heading news-heading"><div><p class="news-eyebrow">커피 시장 · NEWSROOM</p><h2 id="jev-title">{{ hasConditionalModels ? 'Jev 뉴스 분석' : 'Jev 뉴스 기반 실험적 가격 보정' }}</h2><p class="news-intro">기사의 흐름을 읽고, 가격에 가해지는 압력을 확인하세요.</p></div><div v-if="newsInventory" class="news-total"><strong>{{ formatNumber(newsInventory.total) }}</strong><span>수집·선정 기사</span></div></div>
         <p v-if="newsError" role="status">{{ newsError }}</p>
         <p v-if="newsView?.latest_run" class="news-run-strip" role="status">최근 뉴스 처리 {{ statusLabel(newsView.latest_run.status) }} · {{ formatTime(newsView.latest_run.finished_at || newsView.latest_run.started_at) }}<span v-if="newsView.latest_run.status === 'failed'"> · 마지막 저장 결과를 표시합니다.</span><span v-else-if="newsView.latest_run.status === 'partial'"> · 일부만 처리되었습니다.</span></p>
-        <p v-if="hasConditionalModels" class="section-note">예측의 기사 수는 각 기준 거래일 23:00 UTC(다음 날 08:00 KST)까지 실제 이용 가능했던 뉴스 기준입니다. 아래는 현재 저장된 수집·선정 기사 전체의 조회 화면이므로, 그 이후 수집·분석된 기사가 있어도 이전 예측의 입력이었다는 뜻은 아닙니다.</p>
+        <p v-if="hasConditionalModels" class="news-context">이 목록은 현재 보관된 기사입니다. 각 예측에는 해당 기준일 마감까지 이용 가능했던 기사만 반영됩니다.</p>
         <p v-else class="section-note">뉴스의 분류 확률은 미래 가격의 상승 확률이 아닙니다. 실험적 보정의 개선 근거는 지평별 평가 상태를 확인하세요.</p>
         <p v-if="!hasConditionalModels && newsView?.selection?.selected_count != null" class="section-note">{{ newsView.selection.requested_start }} ~ {{ newsView.selection.requested_end }} · 뉴욕 날짜별 최대 1건 · 선정 {{ newsView.selection.selected_count }}건 · 분석 완료 {{ newsView.selection.selected_analysis_ids?.length ?? 0 }}건. 공급·작황·날씨·무역 관련성을 기준으로 선정합니다.</p>
         <template v-if="newsView?.forecast && !hasConditionalModels">
@@ -407,26 +431,71 @@ const ticks = domain => Array.from({ length: 5 }, (_, index) => domain[1] - (dom
         </template>
         <p v-else-if="newsLoading && !hasConditionalModels" class="empty-state" role="status">뉴스 분석 결과를 불러오는 중입니다.</p>
         <p v-else-if="!hasConditionalModels" class="empty-state">저장된 뉴스 보정 예측은 없습니다.</p>
-        <div v-if="newsInventory" class="news-inventory-heading">
-          <h3>수집·선정 기사</h3>
-          <p class="news-totals">전체 {{ formatNumber(newsInventory.total) }}건 · 분석 완료 {{ formatNumber(newsInventory.analyzed) }}건 · 미분석 {{ formatNumber(newsInventory.pending) }}건</p>
-          <p class="section-note">보관된 기사 마지막 수집 {{ formatTime(newsInventory.last_collected_at) }} · 마지막 분석 {{ formatTime(newsInventory.last_analyzed_at) }}</p>
-          <p class="section-note">과거 보관분을 포함한 선정·분석 기록을 기사별로 합친 수입니다. 미분석은 분석 결과가 없다는 뜻이며 현재 실행 중이라는 뜻은 아닙니다. 분류 확률은 미래 가격의 상승·하락 확률이 아닙니다.</p>
-          <div class="news-filter" role="group" aria-label="기사 분석 상태"><button v-for="option in [{ value: 'all', label: '전체' }, { value: 'analyzed', label: '분석 완료' }, { value: 'pending', label: '미분석' }]" :key="option.value" type="button" :aria-pressed="newsStatus === option.value" :disabled="newsLoading" @click="selectNewsStatus(option.value)">{{ option.label }}</button></div>
+        <div v-if="newsInventory" class="news-toolbar">
+          <div class="news-filter" role="group" aria-label="기사 분석 상태">
+            <button v-for="option in [{ value: 'all', label: '전체', count: newsInventory.total }, { value: 'analyzed', label: '분석 완료', count: newsInventory.analyzed }, { value: 'pending', label: '미분석', count: newsInventory.pending }]" :key="option.value" type="button" :aria-pressed="newsStatus === option.value" :disabled="newsLoading" @click="selectNewsStatus(option.value)">{{ option.label }} <span>{{ formatNumber(option.count) }}</span></button>
+          </div>
+          <span class="news-sort">최신 기사순 · 선택하여 분석 보기</span>
         </div>
-        <p v-if="newsLoading" class="empty-state" role="status">기사 목록을 불러오는 중입니다.</p>
-        <p v-else-if="newsView && !newsInventory && !newsError" class="empty-state">기사 목록 상태를 확인할 수 없습니다.</p>
-        <template v-else-if="newsInventory && !newsError">
-          <p v-if="!newsItems.length" class="empty-state">{{ newsStatus === 'all' ? '저장된 수집·선정 기사가 없습니다.' : '이 상태의 기사가 없습니다.' }}</p>
-          <div v-else class="news-list-region" role="region" aria-label="수집 기사 목록" tabindex="0"><ul class="news-list"><li v-for="article in newsItems" :key="article.content_hash">
-            <a v-if="/^https?:\/\//i.test(article.url)" :href="article.url" target="_blank" rel="noopener noreferrer">{{ article.title || '제목 없음' }}</a><strong v-else>{{ article.title || '제목 없음' }}</strong>
-            <span class="signal-status" :class="article.analysis_status === 'analyzed' ? 'news_feature' : ''">{{ article.analysis_status === 'analyzed' ? '분석 완료' : '미분석' }}</span>
-            <small>{{ article.source || '출처 없음' }} · {{ article.time_basis === 'published_at' ? '발행' : '발견' }} {{ formatTime(article.event_at) }} · 수집 {{ formatTime(article.collected_at) }}<template v-if="article.analysis_status === 'analyzed'"> · 분석 {{ formatTime(article.analyzed_at) }} · 이용 가능 {{ formatTime(article.available_at) }}</template></small>
-            <template v-if="article.analysis_status === 'analyzed'"><span>{{ jevLabel(article.label) }}</span><span class="news-probability-label">기사 분류 확률</span><dl class="news-probabilities" aria-label="기사 분류 확률"><div><dt>강세</dt><dd>{{ formatProbability(article.p_bullish) }}</dd></div><div><dt>약세</dt><dd>{{ formatProbability(article.p_bearish) }}</dd></div><div><dt>중립</dt><dd>{{ formatProbability(article.p_neutral) }}</dd></div><div><dt>판단 유보</dt><dd>{{ formatProbability(article.p_uncertain) }}</dd></div></dl><small>기사 방향값 × 관련성 × 확신도 <b>{{ formatNumber(articlePressure(article)) }}</b> (−1~1) · 커피 관련성 {{ formatProbability(article.relevance) }} · Jev 분류 확신도 {{ formatProbability(article.confidence) }}</small></template>
-            <small v-else>분석 결과 없음</small>
-          </li></ul></div>
-          <div v-if="newsInventory.matched" class="news-pagination"><span>{{ newsOffset + 1 }}–{{ newsPageEnd }} / {{ formatNumber(newsInventory.matched) }}건</span><button type="button" :disabled="newsLoading || newsOffset === 0" @click="moveNewsPage(-1)">이전</button><button type="button" :disabled="newsLoading || newsPageEnd >= newsInventory.matched" @click="moveNewsPage(1)">다음</button></div>
-        </template>
+        <p v-if="newsError" class="news-retry"><button type="button" :disabled="newsLoading" @click="loadNews">뉴스 다시 불러오기</button></p>
+        <div class="news-library" :aria-busy="newsLoading">
+          <p v-if="newsLoading" class="empty-state" role="status">기사 목록을 불러오는 중입니다.</p>
+          <p v-else-if="newsView && !newsInventory && !newsError" class="empty-state">기사 목록 상태를 확인할 수 없습니다.</p>
+          <template v-else-if="newsInventory && !newsError">
+            <p v-if="!newsItems.length" class="empty-state">{{ newsStatus === 'all' ? '저장된 수집·선정 기사가 없습니다.' : '이 상태의 기사가 없습니다.' }}</p>
+            <ul v-else class="news-feed" aria-label="수집 기사 목록">
+              <li v-for="(article, index) in newsItems" :key="article.content_hash" :style="{ '--row-index': index }">
+                <button type="button" class="news-row" aria-haspopup="dialog" @click="openArticle(article, $event.currentTarget)">
+                  <span class="news-row-date"><time :datetime="article.event_at">{{ newsDate(article.event_at) }}</time><small>{{ article.time_basis === 'published_at' ? '발행 · KST' : '발견 · KST' }}</small></span>
+                  <span class="news-row-story"><span class="news-source">{{ newsSource(article.source) }}</span><strong>{{ article.title || '제목 없음' }}</strong></span>
+                  <span class="news-pressure" :data-tone="articleTone(article)"><span class="news-pressure-label"><i aria-hidden="true"></i>{{ articleLabel(article) }}</span><small>{{ article.analysis_status === 'analyzed' ? '분석 완료' : '분석 결과 없음' }}</small></span>
+                  <span class="news-row-arrow" aria-hidden="true">↗</span>
+                  <span class="sr-only">감성분석 상세 보기</span>
+                </button>
+              </li>
+            </ul>
+          </template>
+        </div>
+        <div v-if="newsInventory?.matched && !newsError" class="news-pagination" aria-label="뉴스 목록 페이지">
+          <span aria-live="polite">{{ newsOffset + 1 }}–{{ newsPageEnd }} <span class="news-page-total">/ {{ formatNumber(newsInventory.matched) }}건</span></span>
+          <button type="button" :disabled="newsLoading || newsOffset === 0" @click="moveNewsPage(-1)"><span aria-hidden="true">←</span> 이전</button>
+          <button type="button" :disabled="newsLoading || newsPageEnd >= newsInventory.matched" @click="moveNewsPage(1)">다음 <span aria-hidden="true">→</span></button>
+        </div>
+        <div v-if="newsInventory" class="news-archive-note">
+          <p>마지막 수집 {{ formatTime(newsInventory.last_collected_at) }}<span>마지막 분석 {{ formatTime(newsInventory.last_analyzed_at) }}</span></p>
+          <p>과거 보관분을 포함해 중복 기사를 합친 목록입니다. 미분석은 현재 실행 중이라는 뜻이 아닙니다.</p>
+        </div>
+        <dialog ref="newsDialog" class="news-reader" aria-labelledby="news-reader-title" @click.self="newsDialog.close()">
+          <div class="news-reader-top"><span class="news-eyebrow">JEV · 기사 분석</span><button type="button" class="news-close" autofocus aria-label="기사 상세 닫기" @click="newsDialog.close()">닫기 <span aria-hidden="true">×</span></button></div>
+          <article v-if="selectedArticle" class="news-reader-body" :data-tone="articleTone(selectedArticle)">
+            <div class="news-reader-meta"><span>{{ newsSource(selectedArticle.source) }}</span><span>{{ selectedArticle.time_basis === 'published_at' ? '발행' : '발견' }} {{ newsDate(selectedArticle.event_at) }}</span></div>
+            <h2 id="news-reader-title">{{ selectedArticle.title || '제목 없음' }}</h2>
+            <a v-if="/^https?:\/\//i.test(selectedArticle.url)" class="news-original" :href="selectedArticle.url" target="_blank" rel="noopener noreferrer">기사 원문 읽기 <span aria-hidden="true">↗</span><span class="sr-only"> (새 탭)</span></a>
+            <template v-if="selectedArticle.analysis_status === 'analyzed'">
+              <section class="news-signal" aria-label="기사 감성분석 신호">
+                <div><span class="news-eyebrow">Jev 응답 분류</span><h3>{{ articleLabel(selectedArticle) }}</h3><span class="news-signal-caption">{{ articleSignalLabel(selectedArticle) }}</span></div>
+                <div class="news-signal-value" :data-tone="articlePressure(selectedArticle) > 0 ? 'bullish' : articlePressure(selectedArticle) < 0 ? 'bearish' : 'neutral'"><strong>{{ formatSignedNumber(articlePressure(selectedArticle)) }}</strong><span>기사 신호 sᵢ · −1 ~ 1</span></div>
+              </section>
+              <section class="news-reader-section" aria-labelledby="news-probability-title">
+                <h3 id="news-probability-title">Jev는 이 기사를 어떻게 읽었나요?</h3>
+                <dl class="news-probability-bars" aria-label="기사 분류 확률">
+                  <div v-for="category in newsCategories" :key="category.key" :data-tone="category.key">
+                    <dt>{{ category.label }}</dt><dd><span class="news-bar-track" aria-hidden="true"><span :style="{ transform: `scaleX(${boundedWeight(selectedArticle['p_' + category.key]) ? selectedArticle['p_' + category.key] : 0})` }"></span></span><b>{{ formatProbability(selectedArticle['p_' + category.key]) }}</b></dd>
+                  </div>
+                </dl>
+                <p class="news-help">분류 확률은 미래 가격의 상승·하락 확률이 아닙니다.</p>
+              </section>
+              <dl class="news-strength"><div><dt>커피 관련성</dt><dd>{{ formatProbability(selectedArticle.relevance) }}</dd></div><div><dt>Jev 분류 확신도</dt><dd>{{ formatProbability(selectedArticle.confidence) }}</dd></div></dl>
+              <p class="news-help">기사 신호 = 방향값 × 관련성 × 확신도. 응답 분류는 Jev가 반환한 이름이며, 신호 방향은 4개 확률의 최댓값으로 정합니다. 중립·판단 유보 또는 동률이면 방향값은 0입니다. 가격의 예상 변동률을 뜻하지 않습니다.</p>
+            </template>
+            <section v-else class="news-pending"><span class="news-eyebrow">분석 결과 없음</span><h3>아직 감성분석 결과가 없습니다.</h3><p>기사는 수집·선정되어 보관 중입니다. 분석 완료 전에는 뉴스 신호로 사용하지 않습니다.</p></section>
+            <section class="news-reader-section" aria-labelledby="news-timeline-title"><h3 id="news-timeline-title">기사 처리 기록</h3><dl class="news-timeline">
+              <div><dt>{{ selectedArticle.time_basis === 'published_at' ? '발행' : '발견' }}</dt><dd>{{ formatTime(selectedArticle.event_at) }}</dd></div>
+              <div><dt>수집</dt><dd>{{ formatTime(selectedArticle.collected_at) }}</dd></div>
+              <template v-if="selectedArticle.analysis_status === 'analyzed'"><div><dt>분석</dt><dd>{{ formatTime(selectedArticle.analyzed_at) }}</dd></div><div><dt>이용 가능</dt><dd>{{ formatTime(selectedArticle.available_at) }}</dd></div></template>
+            </dl><p class="news-help">시각은 모두 한국 시간(KST)입니다. 분석 완료 여부와 예측 기준일에 실제 반영됐는지는 다를 수 있습니다.</p></section>
+          </article>
+        </dialog>
         <details v-if="hasConditionalModels" class="news-details"><summary>뉴스 피처 계산 기준</summary><p class="section-note">기준 거래일 UTC 23:00까지 공개·수정·선정·분석이 완료된 기사만 사용합니다. 실제 이용 가능해진 첫 거래일에 반영하며, 기사 발생 후 7일을 넘겨 분석한 기록은 새 뉴스로 넣지 않습니다. 기사별 방향값(+1/−1/0) × 관련성 × 분류 확신도를 합산한 뒤 tanh를 적용합니다. 해당 날짜의 점수가 없거나 0이면 수치 피처 모델로 예측합니다.</p></details>
       </section>
 

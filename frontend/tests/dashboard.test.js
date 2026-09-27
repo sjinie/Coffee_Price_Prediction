@@ -1,7 +1,7 @@
 import { readFileSync } from 'node:fs'
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { computed, ref } from 'vue'
+import { computed, nextTick, ref } from 'vue'
 
 // 실제 SFC의 조회·계산 로직을 실행한다. 화면 배치는 브라우저에서 별도로 확인한다.
 const componentSource = readFileSync(new URL('../src/App.vue', import.meta.url), 'utf8')
@@ -285,10 +285,10 @@ test('수집·선정 기사 목록은 서버 필터와 10건 페이지를 쓰고
   assert.equal(app.newsItems.value[0].content_hash, 'pending-0')
   app.moveNewsPage(1)
   assert.equal(requests.length, 3)
-  assert.match(componentSource, /v-for="article in newsItems"/)
+  assert.match(componentSource, /v-for="\(article, index\) in newsItems"/)
   assert.match(componentSource, /article\.analysis_status === 'analyzed'/)
-  assert.match(componentSource, /aria-label="수집 기사 목록" tabindex="0"/)
-  assert.match(componentSource, /class="news-probabilities" aria-label="기사 분류 확률"/)
+  assert.match(componentSource, /aria-haspopup="dialog"/)
+  assert.match(componentSource, /aria-label="기사 분류 확률"/)
   assert.match(componentSource, /분류 확률은 미래 가격의 상승·하락 확률이 아닙니다/)
   assert.match(componentSource, /news_article_count\) === 0"><a href="#jev-title"/)
 })
@@ -317,4 +317,39 @@ test('늦게 끝난 이전 뉴스 응답과 오류는 최신 목록·상태를 �
   pending[2].resolve({ ok: true, json: async () => ({ inventory: { matched: 1, items: [{ content_hash: 'old' }] } }) })
   await third
   assert.deepEqual(app.newsItems.value, [])
+})
+
+test('기사 선택은 상세 내용·스크롤을 교체하고 미분석을 방향 신호로 표시하지 않는다', async () => {
+  const app = new Function('computed', 'onMounted', 'ref', 'nextTick', `${source}
+    return { openArticle, selectedArticle, newsDialog, articleLabel, articleTone, newsDate, newsSource, articleSignalLabel }
+  `)(computed, () => {}, ref, nextTick)
+  let opened = 0
+  app.newsDialog.value = { showModal() { opened++ }, scrollTop: 400 }
+  const analyzed = { content_hash: 'a', analysis_status: 'analyzed', label: 'bearish' }
+  let triggerFocused = false
+  const opening = app.openArticle(analyzed, { focus() { triggerFocused = true } })
+  assert.equal(opened, 0, 'DOM 갱신 전에는 팝업을 열지 않는다')
+  await opening
+  assert.equal(triggerFocused, true)
+  assert.equal(app.selectedArticle.value.content_hash, 'a')
+  assert.equal(app.newsDialog.value.scrollTop, 0)
+  assert.equal(app.articleLabel(analyzed), '하락 압력')
+  assert.equal(app.articleTone(analyzed), 'bearish')
+  const pending = { content_hash: 'b', analysis_status: 'pending', label: 'bullish' }
+  await app.openArticle(pending)
+  assert.equal(app.selectedArticle.value.content_hash, 'b')
+  assert.equal(opened, 2)
+  assert.equal(app.articleLabel(pending), '미분석')
+  assert.equal(app.articleTone(pending), 'neutral')
+  assert.equal(app.articleTone({ analysis_status: 'analyzed', label: 'uncertain' }), 'neutral')
+  assert.equal(app.newsDate('2026-09-25T23:00:00Z'), '2026. 09. 26.')
+  assert.equal(app.newsDate(null), '날짜 없음')
+  const conflicting = { ...analyzed, label: 'bullish', p_bullish: .1, p_bearish: .7, p_neutral: .1, p_uncertain: .1, relevance: .8, confidence: .5 }
+  assert.equal(app.articleLabel(conflicting), '상승 압력')
+  assert.equal(app.articleSignalLabel(conflicting), '기사 신호: 하락 방향')
+  assert.equal(app.articleSignalLabel({ ...conflicting, p_bullish: .7 }), '기사 신호: 방향 반영 없음')
+  assert.equal(app.articleSignalLabel({}), '기사 신호 계산 불가')
+  assert.equal(app.newsSource('google_news_rss'), 'Google News')
+  assert.match(componentSource, /aria-labelledby="news-reader-title"/)
+  assert.match(componentSource, /autofocus aria-label="기사 상세 닫기"/)
 })
