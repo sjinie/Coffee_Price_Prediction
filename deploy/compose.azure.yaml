@@ -1,0 +1,58 @@
+# Run from the repository root with: docker compose --env-file /srv/coffee/.env -f deploy/compose.azure.yaml
+# pipeline runs on GitHub-hosted runners; only its state is stored on this VM.
+services:
+  postgres:
+    image: postgres:17.11-bookworm@sha256:639ab7ceb90e13123085b741fb31ef493fba25463002f6da665352e7b534b652
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: coffee_price
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: ${POSTGRES_ADMIN_PASSWORD:?required}
+    ports:
+      - "127.0.0.1:15432:5432"
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres -d coffee_price"]
+      interval: 5s
+      timeout: 5s
+      retries: 12
+
+  api:
+    image: coffee-api:${COFFEE_SOURCE_SHA:?required}
+    build:
+      context: ..
+      target: api
+    restart: unless-stopped
+    # Schema migration is an explicit deployment step using the database owner.
+    command: ["uvicorn", "coffee_service.api:app", "--host", "0.0.0.0", "--port", "8000"]
+    environment:
+      PGHOST: postgres
+      PGPORT: "5432"
+      PGDATABASE: coffee_price
+      PGUSER: coffee_api
+      PGPASSWORD: ${COFFEE_API_DB_PASSWORD:?required}
+    depends_on:
+      postgres:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/health')"]
+      interval: 5s
+      timeout: 5s
+      retries: 12
+
+  web:
+    image: coffee-web:${COFFEE_SOURCE_SHA:?required}
+    build:
+      context: ../frontend
+    restart: unless-stopped
+    environment:
+      API_UPSTREAM: http://api:8000
+    depends_on:
+      api:
+        condition: service_healthy
+    ports:
+      - "80:80"
+
+volumes:
+  postgres-data:

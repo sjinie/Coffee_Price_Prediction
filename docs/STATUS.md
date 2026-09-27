@@ -1,5 +1,16 @@
 # 작업 상태
 
+## 2026-09-27 — Azure VM 생성·서비스 기동·일일 Actions 연결 준비
+
+- 사용자 승인으로 Korea Central `rg-coffee-demo/vm-coffee-demo` 생성 완료. Azure for Students, Ubuntu 24.04 x64 Gen2/Trusted Launch, B2ats_v2(2 vCPU/1 GiB), P6 64 GiB, IPv4 `52.141.6.78`. 포털에서 B2ats_v2 Linux 750시간/월·P6 무료 사용량을 확인했지만 실제 청구액·잔여 크레딧은 미확인이다. 유료 구독 전환은 하지 않았다.
+- 실제 VM에 공식 apt 경로로 Docker 29.8.1·Compose 5.5.1과 2 GiB swap 설치. 소스 `388cd691441e231ecafc389dc1aac1c3d80522c7`에서 API·web을 순차 build하고 `deploy/start-azure.sh`로 DB 계정/스키마와 postgres/api/web 기동(exit 0). 이미지 ID는 API `sha256:3939db849013f77144a05558367fc10f596ab35094bd504148fe462a21b1ed17`, web `sha256:2cae1d31f1980e262188ab607e323cf6e9b5e602d649edf04d28bb1049f320b2`; 새 GHCR 게시를 뜻하지 않는다. PostgreSQL 기존 17.11-bookworm digest를 유지했다.
+- HTTP 80·키 기반 SSH 22 공개. DB는 호스트 loopback 15432, API는 컨테이너 내부 8000이다. 실제 DB 조회로 `coffee_api` SELECT 9개 테이블, API/pipeline 역할 모두 비-superuser·CREATEDB/CREATEROLE 없음 확인. Actions 계정은 sudo/docker 그룹·Docker socket·운영 env 접근 권한이 없다. Azure Run Command로 SSH 호스트 ED25519 fingerprint를 대조해 고정했고 `sshd -t` 및 실제 키 로그인·제한된 DB 터널을 검증했다. HTTPS·도메인은 미설정이다.
+- GitHub `production` 환경(main만 허용)에 전용 SSH key/known_hosts, pipeline DB password, FRED/Gateway key와 host/user/state/DB 변수를 등록했다. `daily-pipeline.yml`은 기존 Actions SHA·Python 3.12/requirements-pipeline을 재사용하며 UTC 06:17/KST 15:17 하루 한 번 실행한다. NY 겨울 01:17·여름 02:17을 직접 계산해 완료된 전날 자료가 포함됨을 확인했다. 동시 실행을 제한하고 배치 종료·실패·SIGINT/SIGTERM 뒤 상태를 VM에 복사한다. workflow push·main 반영·GitHub-hosted 실행은 아직 하지 않았다.
+- 실제 동일 script를 Mac Python 3.12.14에서 Actions용 키·DB 계정으로 실행: 수치 수집·추론·DB 적재 성공(커피 3,083행, 최신 2026-09-25), 뉴스 수집 성공. Gateway의 Jev `typesafe-ai/jev` 요청은 HTTP 403 `RestrictedModelsError`(free tier model access denied, providerAttemptCount=0)로 stopped. 전체 refresh는 partial/exit 1이며 실패 뒤 VM sources/jev 동기화 확인. 기존 분석 1,445건과 대기 2건, 응답 감사 기록을 보존했고 유료 결제·모델 교체·중단 상태 해제는 하지 않았다. 60일 모델은 기존 DLinear를 유지했다.
+- 외부 HTTP 검증: `/health`, `/api/v1/prices/latest`, 5/20/60일 predictions 모두 200. 최신 종가 278.1000061035156, 60일 target 2026-12-21/예측 361.39453125 확인. HTML도 200이며 Aside는 해당 URL을 `ERR_BLOCKED_BY_CLIENT`로 막아 최종 화면 렌더링은 미검증이다. 저부하 관측 web 7.496 MiB/API 60.77 MiB/PostgreSQL 44.95 MiB, 호스트 used 532 MiB/available 310 MiB, swap 69 MiB이며 부하 보장은 아니다.
+- 검증: 전송·실패·중단 보존 mock 회귀 4 passed(신호 2 subtests), Bash 문법·Compose/YAML 정적 검사·diff check 통과. 독립 리뷰의 뉴욕 날짜 경계 지적을 예약 시간 수정으로 해결했고 최종 추가 결함 없음. 실제 Linux 컨테이너 build·DB·외부 HTTP·SSH 데이터 경로는 확인했지만 GitHub runner E2E 및 예약 실행 성공은 미확인이다.
+- 공식 근거 확인(2026-09-27): [Docker Ubuntu apt 설치](https://docs.docker.com/engine/install/ubuntu/), [Actions schedule](https://docs.github.com/en/actions/reference/workflows-and-actions/events-that-trigger-workflows#schedule), [환경 Secrets](https://docs.github.com/en/actions/how-tos/write-workflows/choose-what-workflows-do/use-secrets), [Azure Students](https://azure.microsoft.com/en-us/free/students/). 기존 사용자 문서·연구·데이터·secret은 보존한다. 후속은 workflow main 반영 후 실제 Actions 실행, Jev 접근 권한 결정이다.
+
 ## 2026-09-27 — 분리된 pipeline의 서버 시작·주간 갱신
 
 - 사용자 요청에 따라 기존 네 컨테이너와 FastAPI/수집·분석 경계를 유지했다. `compose.yaml`의 수동 pipeline profile을 기본 `refresh` 실행으로 바꾸고, 시작 시 한 번 처리한 뒤 완료로부터 7일마다 다시 갱신한다. 종료 중 놓친 스케줄 횟수를 재생하지 않고 체크포인트 이후 기간을 보충한다. 기존 `jev` 30분 Codex 자동화 삭제 API는 `not_found`를 반환했으며 이미 존재하지 않음을 확인했다. 대체 Codex 자동화는 만들지 않았다.

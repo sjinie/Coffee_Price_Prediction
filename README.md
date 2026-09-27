@@ -327,7 +327,31 @@ PR과 main push에서 `CI`가 Python·PostgreSQL fixture 테스트, Vue 테스�
 
 `Publish GHCR images`의 **Run workflow**에서 `publish=false`(기본값)로 실행해도 같은 커밋의 CI 전체를 실행합니다. `publish=true`를 선택한 main 실행만 검증 성공 후 GHCR에 SHA 태그 이미지를 게시합니다. 다른 브랜치에서는 게시 job을 건너뜁니다. Azure 배포는 포함하지 않습니다.
 
-## GHCR digest로 첫 VM 배포 준비
+## Azure 운영: 상시 웹·DB와 일일 Actions 배치
+
+2026-09-27 기준 [배포 화면](http://52.141.6.78/)과 `/health`, 최신 가격·5/20/60일 예측 API의 HTTP 응답을 확인했습니다. Azure for Students의 Korea Central `vm-coffee-demo`는 Ubuntu 24.04 x64, B2ats_v2(2 vCPU/1 GiB), P6 64 GiB 디스크를 사용합니다. API·PostgreSQL·Vue/Nginx만 상시 실행하고, 수집·분석은 GitHub-hosted runner에서 하루 한 번 실행 후 종료하는 구성입니다. VM을 끄면 API·DB도 중단됩니다.
+
+- VM 구성은 [`deploy/compose.azure.yaml`](deploy/compose.azure.yaml), 초기 설치는 [`deploy/prepare-vm.sh`](deploy/prepare-vm.sh), DB 권한·스키마 초기화와 서비스 시작은 [`deploy/start-azure.sh`](deploy/start-azure.sh)입니다. 현재 API·web 이미지는 소스 `388cd691441e231ecafc389dc1aac1c3d80522c7`에서 VM 내부 build했으며 아래 기존 GHCR digest Compose와 별개입니다.
+- VM의 `/srv/coffee/app`에 소스·배포 파일, root 전용 `/srv/coffee/.env`에 `COFFEE_SOURCE_SHA`와 각각 64자리 hex인 `POSTGRES_ADMIN_PASSWORD`, `COFFEE_PIPELINE_DB_PASSWORD`, `COFFEE_API_DB_PASSWORD`를 둡니다. `sudo bash /srv/coffee/app/deploy/start-azure.sh`로 순차 build·DB 초기화·기동합니다. 이 스크립트는 외부 데이터나 모델을 다운로드하지 않습니다.
+- `/srv/coffee/pipeline/{sources,jev,models}`는 `coffee-actions` 소유 0700입니다. 검증된 소스 Parquet, Jev 통합 네 파일, `production_dlinear_60.pt`를 최초 제공하고 이후 배치가 상태를 갱신합니다. PostgreSQL은 별도 named volume에 보존하며 동일 VM의 초기 입력 백업은 디스크 장애에 대한 외부 백업이 아닙니다.
+- 공개 포트는 SSH 22·웹 HTTP 80입니다. DB는 호스트 `127.0.0.1:15432`, API는 Docker 내부 8000이며 웹이 `/api`를 전달합니다. `coffee_api`는 테이블 SELECT 권한만, `coffee_pipeline`은 DB 소유자 권한을 사용합니다. 전용 Actions SSH 계정은 sudo/docker 권한이 없고 DB 터널과 상태 복사에만 사용합니다. HTTPS·도메인은 아직 설정하지 않았습니다.
+
+[`Daily production pipeline`](.github/workflows/daily-pipeline.yml)은 UTC 06:17(한국 15:17, 뉴욕 자정 이후)에 `refresh --once`를 실행합니다. `production` 환경과 main 브랜치만 사용하며 동시 실행을 막습니다. 필요한 환경 설정은 다음과 같습니다. 실제 값·개인 키는 커밋하지 않습니다.
+
+| 구분 | 이름 |
+|---|---|
+| Secrets | `COFFEE_SSH_KEY`, `COFFEE_KNOWN_HOSTS`, `COFFEE_PIPELINE_DB_PASSWORD`, `FRED_API_KEY`, `AI_GATEWAY_API_KEY` |
+| Variables | `COFFEE_HOST`, `COFFEE_SSH_USER`, `COFFEE_STATE_DIR`, `COFFEE_DB_NAME`, `COFFEE_DB_USER` |
+
+SSH 호스트 키를 고정하고 runner의 loopback 터널로 DB에 연결합니다. [`run-daily-pipeline.sh`](deploy/run-daily-pipeline.sh)는 실패나 SIGINT/SIGTERM에서도 확보한 체크포인트를 VM에 동기화한 뒤 임시 키를 삭제하며, 강제 종료·runner 소실 시에는 마지막 동기화 이후 상태가 유실될 수 있습니다. API·web 소스 변경의 자동 재배포는 포함하지 않습니다.
+
+**현재 연결 상태:** GitHub 환경·Secrets·Variables 등록과 같은 배치 스크립트의 Mac→VM 실행은 확인했습니다. workflow는 아직 원격 main에 반영하지 않아 GitHub 예약·수동 실행은 미검증입니다. main 반영 후 Actions에서 수동 실행을 확인해야 하며 [예약 실행은 기본 브랜치 기준이고 지연될 수 있습니다](https://docs.github.com/en/actions/reference/workflows-and-actions/events-that-trigger-workflows#schedule).
+
+**현재 배치 제한:** 수치 수집·추론·DB 적재와 뉴스 수집은 성공했습니다. Jev는 Gateway HTTP 403 `RestrictedModelsError`(무료 계정의 해당 모델 사용 불가)로 중단돼 전체 상태는 `partial`/종료 코드 1입니다. 기존 결과 1,445건과 새 대기 2건을 보존하며, 유료 전환·모델 변경·중단 상태 해제는 자동 수행하지 않았습니다.
+
+학생 구독의 B2ats_v2 Linux 월 750시간·P6 혜택을 포털에서 확인했지만 실제 청구액은 아직 확인하지 않았습니다. IP·디스크·트래픽 등은 구독의 무료 사용량과 Cost Management에서 별도로 확인합니다. 실측 메모리는 상시 컨테이너 합계 약 113 MiB, OS 포함 사용 532 MiB와 swap 69 MiB였으며 부하 시험 결과가 아닙니다.
+
+## GHCR digest 기반 복원 경로
 
 [`compose.deploy.yaml`](compose.deploy.yaml)은 기존 로컬 Compose와 별개입니다. API·pipeline·web은 게시 run [35455393542](https://github.com/sjinie/Coffee_Price_Prediction/actions/runs/35455393542), 소스 `fab81c0cb2f72a58eab9244976a333940bae99d2`의 **linux/amd64** 이미지를 digest로 고정합니다. PostgreSQL은 기존 공식 `17.11-bookworm`의 확인한 digest를 사용합니다. VM에서 build하지 않으며, Docker Engine·Compose v2 이상(`up --wait` 지원)·호스트 Python 3.10 이상 stdlib가 필요합니다. 로컬 검증 환경은 Docker 29.8.0/Compose 5.5.1이며 대상 VM 버전·CPU·메모리는 별도 확인합니다.
 
@@ -337,7 +361,7 @@ PR과 main push에서 `CI`가 Python·PostgreSQL fixture 테스트, Vue 테스�
 | `pipeline` | `sha256:031348602cf120e12a1ada64b7111bbf3968fcb4fc51426f63332410c588da1e` |
 | `web` | `sha256:db82b1088695602333e138331436eccd0f3e62f82290052ca0420cd8f4eedf72` |
 
-현재 가격 복원 실측은 상시 컨테이너 약 130MiB, batch 포함 관측 최대 약 478MiB였습니다. OS·Docker·순간 피크는 별도이므로 소수 사용자·단일 batch의 시작 사양으로 **x86-64 2 vCPU/4GiB RAM, 32~64GiB SSD**를 제안합니다. VM 자체 실측이나 최대 부하 보장은 아니며 LLM·학습은 포함하지 않습니다. 이미지 4개는 약 3.44GB를 차지합니다. Azure의 [B2ls_v2](https://learn.microsoft.com/en-us/azure/virtual-machines/sizes/general-purpose/bsv2-series)는 2vCPU/4GiB이며, B 계열은 장시간 높은 CPU 사용 시 credit 소진에 따른 성능 제한을 확인해야 합니다. VM은 아직 생성하지 않았으며 지역·quota·가격과 생성 승인이 필요합니다.
+현재 가격 복원 실측은 상시 컨테이너 약 130MiB, batch 포함 관측 최대 약 478MiB였습니다. OS·Docker·순간 피크는 별도이므로 소수 사용자·단일 batch의 시작 사양으로 **x86-64 2 vCPU/4GiB RAM, 32~64GiB SSD**를 제안합니다. VM 자체 실측이나 최대 부하 보장은 아니며 LLM·학습은 포함하지 않습니다. 이미지 4개는 약 3.44GB를 차지합니다. Azure의 [B2ls_v2](https://learn.microsoft.com/en-us/azure/virtual-machines/sizes/general-purpose/bsv2-series)는 2vCPU/4GiB이며, B 계열은 장시간 높은 CPU 사용 시 credit 소진에 따른 성능 제한을 확인해야 합니다. 이는 pipeline까지 동일 VM에서 실행하는 초기 제안입니다. 현재 운영은 위 Azure 구성처럼 batch를 Actions runner로 분리했으며 별도 1 GiB VM을 실측했습니다.
 
 ### 입력 준비: 복원과 신규 수집 구분
 
