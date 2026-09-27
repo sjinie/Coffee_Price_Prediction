@@ -17,52 +17,23 @@ from . import db
 from .features import assemble_features, load_sources
 from .inference import generate_predictions
 from .ingestion import (
+    SOURCE_GROUPS,
     build_session,
-    fetch_cot,
-    fetch_fred,
-    fetch_initial_release,
-    fetch_weather,
-    fetch_yahoo,
+    collection_jobs,
     incremental_start,
     persist_increment,
+    source_lock,
 )
 from .modeling import DEFAULT_ARTIFACT, load_bundle
 
 
 ROOT = Path(__file__).resolve().parents[1]
 WEATHER_BUFFER_DAYS = 90
-SOURCE_GROUPS = ("yahoo", "fred", "nasa", "cftc")
 REQUIRED_SOURCES = {
     "coffee", "alfred_dexbzus", "alfred_dff", "alfred_dcoilwtico",
 }
 REQUIRED_MACRO_SOURCES = tuple(sorted(REQUIRED_SOURCES - {"coffee"}))
 MAX_MACRO_STALENESS_DAYS = 14
-
-
-def collection_jobs(config, regions, session, selected_groups):
-    jobs = []
-    if "yahoo" in selected_groups:
-        jobs.extend([
-            ("coffee", "yahoo", fetch_yahoo, ("KC=F",)),
-            ("brl", "yahoo", fetch_yahoo, ("BRL=X",)),
-        ])
-    if "fred" in selected_groups:
-        jobs.extend(
-            (series.lower(), "fred", fetch_fred, (session, series))
-            for series in ("DFF", "DTWEXBGS", "DCOILWTICO")
-        )
-        jobs.extend(
-            (f"alfred_{series.lower()}", "fred", fetch_initial_release, (session, series))
-            for series in config["fred"]["initial_release_series"]
-        )
-    if "nasa" in selected_groups:
-        jobs.extend(
-            (f"weather_{region['region_id']}", "nasa", fetch_weather, (session, region))
-            for region in regions
-        )
-    if "cftc" in selected_groups:
-        jobs.append(("cot", "cftc", fetch_cot, (session,)))
-    return jobs
 
 
 def collect(
@@ -376,7 +347,6 @@ def run_news_pipeline(source_dir, artifact, end, *, cache_path, limit=200,
             # Analysis survives numeric-source/model failure and can be reused without a new API call.
             connection.commit()
             as_of = pd.Timestamp.now(tz="UTC")
-            from .refresh import source_lock
             with source_lock(source_dir):
                 sources = sources_as_of(Path(source_dir), end)
             validate_macro_freshness(sources, end)
@@ -448,7 +418,6 @@ def main(argv=None) -> int:
 
 
 def _run_command(args, start, end):
-    from .refresh import source_lock
     if args.mode == "news":
         if not args.skip_ingestion:
             with source_lock(args.source_dir):

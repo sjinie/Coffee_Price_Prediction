@@ -1,5 +1,13 @@
 # 작업 상태
 
+## 2026-09-27 — 기존 역할 경계 검토·기능 보존 리팩토링
+
+- 검토 범위: 수치·뉴스 수집/저장/추론/CLI, FastAPI·DB 접근, Vue·테스트, Docker/Compose와 배포/Actions 경로. 논리 경계는 pipeline 수집·분석·DB 적재 → PostgreSQL 저장 → api 조회/응답 → Vue 표시다. 로컬 Compose의 pipeline 컨테이너와 Azure의 외부 Actions Python 배치는 실행 위치가 다르며 기존 운영 계약을 변경하지 않았다.
+- 중복 제거: `collection_jobs`·`SOURCE_GROUPS`를 ingestion에 모아 수집 전용 CLI와 pipeline이 재사용한다. `source_lock`도 ingestion으로 옮겨 pipeline/seed가 scheduler에 의존하던 경로를 제거했다. 기존 import 호환·소스 순서·CLI 옵션·legacy 기상 앞뒤 30일/pipeline 과거 90일·증분 7일 overlap은 유지한다. Jev JSON writer 세 곳은 기존 `_write_records`를 사용하도록 통합했다. 실행 코드 순감소 31줄이며 새 모듈·의존성·API·DB schema·모델·일정은 추가/변경하지 않았다.
+- 검증: 외부 Python 3.12.14·임시 PostgreSQL 17.11에서 **186 passed, 2 subtests passed, 경고 3건**, Vue **8 passed + build 통과**. Python은 `test_core4_environment.py`(기존 연구 환경 전용)만 제외하고 DB 통합 검사까지 실행했다. 경고는 기존 sklearn 단일 클래스·Starlette/httpx·AnyIO deprecation이며 숨기지 않았다. 독립 최종 diff 리뷰에서 추가 확정 결함 없음. Jev 네 JSON 저장 경로는 변경 전후 UTF-8 bytes가 같고, rename 실패 시 기존 내용이 보존됨을 임시 파일로 대조했다. 원본·Jev·모델·노트북 27개 파일의 SHA-256이 동일하다. 실제 외부 수집·Gateway 요청·운영 DB·VM·GitHub 상태 변경은 하지 않았다.
+- 남은 결함: `frontend/src/App.vue:69`의 뉴스 새로고침에서 이전 요청이 나중에 완료되면 최신 응답을 덮는다. 응답 순서를 제어한 로컬 fixture로 재현했다. 요청 순서 제어는 동작 변경이므로 이번 기능 보존 리팩토링에서 적용하지 않았고 후속 버그 수정 대상으로 남긴다. API/Vue 분리나 DB 계층 추가를 강제할 근거는 확인하지 못했다.
+- 한계: 활성 Docker desktop-linux 엔진 소켓이 없어 이번 컨테이너 build/start는 미검증이다. 기존 Azure/CI 실행 기록을 이번 변경의 실행 증거로 대신하지 않는다. 기존 사용자 변경은 별도로 보존하며 push·배포하지 않는다.
+
 ## 2026-09-27 — Azure VM 생성·서비스 기동·일일 Actions 연결 준비
 
 - 사용자 승인으로 Korea Central `rg-coffee-demo/vm-coffee-demo` 생성 완료. Azure for Students, Ubuntu 24.04 x64 Gen2/Trusted Launch, B2ats_v2(2 vCPU/1 GiB), P6 64 GiB, IPv4 `52.141.6.78`. 포털에서 B2ats_v2 Linux 750시간/월·P6 무료 사용량을 확인했지만 실제 청구액·잔여 크레딧은 미확인이다. 유료 구독 전환은 하지 않았다.

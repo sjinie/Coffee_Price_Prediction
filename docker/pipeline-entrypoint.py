@@ -56,7 +56,7 @@ def main() -> None:
     arguments = sys.argv[1:]
     if "--help" in arguments or "-h" in arguments:
         os.execvp("python", ["python", "-m", "coffee_service.pipeline", *arguments])
-    from coffee_service.refresh import source_lock
+    from coffee_service.ingestion import source_lock
     with source_lock(DATA_DIR):
         with source_lock(SOURCES_DIR):
             seed_sources()

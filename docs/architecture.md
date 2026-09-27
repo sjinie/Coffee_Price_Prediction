@@ -199,3 +199,10 @@ API·Vue는 최종 가격·수익률·방향과 별도 상승 확률, 뉴스 영
 프로세스 시작 → 소스별 저장일 이후 수치 보충·고정 모델 추론·DB 적재 → 뉴스 조회 날짜 이후 기간별 보충 → 미분류 Jev 요청·네 파일 저장 → 7일 대기 순서다. 오프라인 기간의 주간 실행 횟수를 재생하지 않고 날짜 범위를 합쳐 처리한다. refresh 상태는 `requests.json.refresh_state`, 뉴스 조회 완료 범위와 제한은 `news.json.selection_metadata.incremental`에 보관한다. 수치 source directory 잠금으로 CLI 수치 작업 충돌을 막으며 뉴스 조회·Jev 대기 중에는 이 잠금을 해제한다. 보조 소스를 포함한 수치 수집 또는 뉴스 조회 실패는 1시간 뒤 재시도한다. 뉴스 조회 체크포인트는 동시 실행에도 뒤로 돌아가지 않는다. Jev 원문 저장·재시도·비용 중단은 기존 archive 코드가 담당한다.
 
 `/seed`와 `/seed-jev`는 읽기 전용 초기 자료이며 `/data/sources`와 `/data/jev`가 영구 작업 자료다. Jev 네 파일은 최초에 원자적으로 복사하고 기존 archive를 재시작 때 덮어쓰지 않는다. 최신 뉴스 CSV를 서빙 앙상블에 자동 채택하지 않는다. 소스별 API 범위·응답 상한 때문에 조회 성공과 전 세계 뉴스 완전 확보는 다르다. 이 구현의 컨테이너 실동작·GHCR/VM 검증 범위는 STATUS를 따른다.
+
+
+## 2026-09-27 — 구조 리뷰 후 공용 코드 위치
+
+기존 실행 경계는 유지한다. `ingestion.py`는 원천 수집 함수·공용 작업 목록(`collection_jobs`, `SOURCE_GROUPS`)·source 디렉터리 잠금을 가진다. 수집 전용 CLI와 `pipeline.collect`는 이 작업 목록을 함께 쓰되, 각 CLI의 기상 buffer와 증분 정책은 그대로 둔다. `pipeline.py`는 수집·추론·DB 적재 조합과 CLI 분기, `refresh.py`는 시작/주간 실행 조정, Docker entrypoint는 seed 준비만 담당한다. 공용 잠금 사용 때문에 스케줄러를 import하던 역방향 의존은 제거했다.
+
+Jev의 원자적 JSON 쓰기는 기존 `_write_records`를 재사용하며 파일 이름·schema·원문·시각 필드는 바꾸지 않는다. api의 요청 처리는 DB 조회만 수행하고 API 이미지에 수집/ML 모듈을 추가하지 않는다. Vue에는 분석·DB 접근 로직을 넣지 않는다. PostgreSQL은 별도 저장 서비스다. 로컬 Compose는 pipeline 컨테이너를, Azure 배포는 기존 Actions Python 배치를 사용한다. 이 실행 위치 차이와 일정은 이번 리팩토링의 변경 대상이 아니다.

@@ -1,9 +1,7 @@
 """Refresh on process start, then once a week while the server stays running."""
 from __future__ import annotations
 
-from contextlib import contextmanager
 from datetime import datetime, timedelta
-import fcntl
 import os
 from pathlib import Path
 import signal
@@ -11,25 +9,10 @@ from threading import Event
 import time
 
 from . import jev, jev_store, news_backfill
+from .ingestion import source_lock
 
 WEEK = 7 * 24 * 60 * 60
 SOURCE_RETRY = 60 * 60
-
-
-@contextmanager
-def source_lock(directory):
-    """Serialize CLI collectors without adding a permanent lock file."""
-    directory = Path(directory)
-    directory.mkdir(parents=True, exist_ok=True)
-    descriptor = os.open(directory, os.O_RDONLY)
-    try:
-        try:
-            fcntl.flock(descriptor, fcntl.LOCK_EX | fcntl.LOCK_NB)
-        except BlockingIOError:
-            raise RuntimeError("A pipeline already owns this source directory") from None
-        yield
-    finally:
-        os.close(descriptor)
 
 
 def save_state(data, state):
