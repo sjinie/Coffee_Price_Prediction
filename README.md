@@ -430,6 +430,7 @@ python3 deploy/deploy.py --env-file /path/outside/repo/coffee.env --project coff
 | [03_5_fixed_ensemble_news.ipynb](data_code/03_5_fixed_ensemble_news.ipynb) | 이전 잔차 계수 실험 기록: argmax 뉴스, 초기 0.5 적합과 0계수 원인; 현재 선택에는 미사용 |
 | [03_6_news_feature_ensemble.ipynb](data_code/03_6_news_feature_ensemble.ipynb) | 현재 뉴스 feature 실험: 분석이 있을 때만 28개 입력 모델 사용, 결측/0이면 27개 기본 예측 유지; 2022~2023 선택·2024~2026 평가 |
 | [03_7_news_weight_grid.ipynb](data_code/03_7_news_weight_grid.ipynb) | 20일 DLinear/NLinear 뉴스 가격 비중 5개 비교; Validation 고정 선택과 방향 우선 해석, 상승 precision·신호 건수 |
+| [03_8_expanding_news_benchmark.ipynb](data_code/03_8_expanding_news_benchmark.ipynb) | 2022~2026 확장 학습: 뉴스 포함 6개 단일 모델, 2024·2025 선택 후 2026 평가, 균형정확도1위+RMSE1위 가격 평균 |
 | `configs/` | 수집 소스와 기상 좌표 |
 | `coffee_service/`, `model_artifacts/` | Notebook 없이 실행하는 수집·피처·추론·PostgreSQL·FastAPI와 저장 모델 |
 | `frontend/` | Vue 대시보드와 Vite 개발 서버 |
