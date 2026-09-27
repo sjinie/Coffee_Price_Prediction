@@ -161,13 +161,13 @@ test('뉴스 장애는 가격 조회를 막지 않고 별도로 표시한다', a
     ? { ok: false, status: 503 }
     : { ok: true, json: async () => path.includes('/prices') ? [{ date: '2026-09-25', close: 300 }] : [] }
   const app = new Function('computed', 'onMounted', 'ref', 'fetch', `${source}
-    return { loadData, error, newsError, prices, newsForecastLabel, newsArticles }
+    return { loadData, error, newsError, prices, newsForecastLabel, newsItems }
   `)(computed, () => {}, ref, fetch)
   await app.loadData()
   assert.equal(app.error.value, '')
   assert.equal(app.prices.value[0].close, 300)
   assert.match(app.newsError.value, /뉴스 조회에 실패/)
-  assert.deepEqual(app.newsArticles.value, [])
+  assert.deepEqual(app.newsItems.value, [])
   assert.equal(app.newsForecastLabel('insufficient_data'), '학습 데이터 부족')
 })
 
@@ -194,7 +194,8 @@ test('선택 모델은 현재 버전만 표시하고 뉴스 피처·수치 복�
   ]
   assert.equal(app.hasConditionalModels.value, true)
   assert.deepEqual(app.futurePredictions.value.map(item => item.predicted_price), [278.213619])
-  assert.match(app.newsUseLabel(app.futurePredictions.value[0]), /이용 가능한 기사 없음/)
+  assert.equal(app.newsUseLabel(app.futurePredictions.value[0]), '해당 기준일에 반영할 기사 0건 · 수치 피처로 예측')
+  assert.match(app.newsUseLabel({ signal_status: 'numeric_fallback', news_article_count: null }), /확인 불가/)
   assert.match(app.newsUseLabel({ signal_status: 'numeric_fallback', news_article_count: 2, news_impact_score: 0 }), /집계 점수 0/)
   assert.match(app.newsUseLabel({ signal_status: 'news_feature', news_article_count: 2, news_impact_score: .3 }), /뉴스 피처 사용/)
   assert.equal(app.signalStatusLabel('numeric_fallback'), '수치 피처로 예측')
@@ -251,4 +252,69 @@ test('Jev 보정은 legacy 신호와 분리하며 0 계수를 숨기지 않는�
   app.newsView.value = { forecast: { model: {} } }
   assert.equal(app.zeroNewsWeights.value, false)
   assert.equal(app.noExperimentalChange({ status: 'experimental', news_correction: 0 }), false)
+})
+
+test('수집·선정 기사 목록은 서버 필터와 10건 페이지를 쓰고 상태 변경 시 첫 페이지로 돌아간다', async () => {
+  const requests = []
+  const fetch = async path => {
+    requests.push(path)
+    const params = new URL(path, 'http://localhost').searchParams
+    const offset = Number(params.get('offset'))
+    const status = params.get('analysis_status')
+    return { ok: true, json: async () => ({ inventory: {
+      total: 25, analyzed: 20, pending: 5, matched: status === 'pending' ? 5 : 25,
+      offset, limit: 10, items: [{ content_hash: `${status}-${offset}`, analysis_status: status }],
+    } }) }
+  }
+  const app = new Function('computed', 'onMounted', 'ref', 'fetch', `${source}
+    return { loadNews, selectNewsStatus, moveNewsPage, newsInventory, newsItems, newsOffset, newsStatus, newsPageEnd }
+  `)(computed, () => {}, ref, fetch)
+  await app.loadNews()
+  assert.match(requests[0], /limit=10&offset=0&analysis_status=all$/)
+  assert.equal(app.newsInventory.value.total, 25)
+  assert.equal(app.newsPageEnd.value, 10)
+  app.moveNewsPage(1)
+  await new Promise(resolve => setImmediate(resolve))
+  assert.equal(app.newsOffset.value, 10)
+  assert.equal(app.newsItems.value[0].content_hash, 'all-10')
+  app.selectNewsStatus('pending')
+  await new Promise(resolve => setImmediate(resolve))
+  assert.equal(app.newsOffset.value, 0)
+  assert.equal(app.newsStatus.value, 'pending')
+  assert.equal(app.newsPageEnd.value, 5)
+  assert.equal(app.newsItems.value[0].content_hash, 'pending-0')
+  app.moveNewsPage(1)
+  assert.equal(requests.length, 3)
+  assert.match(componentSource, /v-for="article in newsItems"/)
+  assert.match(componentSource, /article\.analysis_status === 'analyzed'/)
+  assert.match(componentSource, /aria-label="수집 기사 목록" tabindex="0"/)
+  assert.match(componentSource, /class="news-probabilities" aria-label="기사 분류 확률"/)
+  assert.match(componentSource, /분류 확률은 미래 가격의 상승·하락 확률이 아닙니다/)
+  assert.match(componentSource, /news_article_count\) === 0"><a href="#jev-title"/)
+})
+
+test('늦게 끝난 이전 뉴스 응답과 오류는 최신 목록·상태를 덮어쓰지 않는다', async () => {
+  const pending = []
+  const fetch = path => new Promise((resolve, reject) => pending.push({ path, resolve, reject }))
+  const app = new Function('computed', 'onMounted', 'ref', 'fetch', `${source}
+    return { loadNews, selectNewsStatus, newsItems, newsError, newsLoading }
+  `)(computed, () => {}, ref, fetch)
+  const first = app.loadNews()
+  app.selectNewsStatus('pending')
+  assert.equal(app.newsLoading.value, true)
+  pending[1].resolve({ ok: true, json: async () => ({ inventory: { matched: 1, items: [{ content_hash: 'new' }] } }) })
+  await new Promise(resolve => setImmediate(resolve))
+  assert.equal(app.newsItems.value[0].content_hash, 'new')
+  pending[0].reject(new Error('stale failure'))
+  await first
+  assert.equal(app.newsError.value, '')
+  assert.equal(app.newsLoading.value, false)
+  assert.equal(app.newsItems.value[0].content_hash, 'new')
+  const third = app.loadNews()
+  app.selectNewsStatus('analyzed')
+  pending[3].resolve({ ok: true, json: async () => ({ inventory: { matched: 0, items: [] } }) })
+  await new Promise(resolve => setImmediate(resolve))
+  pending[2].resolve({ ok: true, json: async () => ({ inventory: { matched: 1, items: [{ content_hash: 'old' }] } }) })
+  await third
+  assert.deepEqual(app.newsItems.value, [])
 })

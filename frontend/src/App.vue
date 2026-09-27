@@ -9,6 +9,10 @@ const sources = ref([])
 const newsView = ref(null)
 const newsError = ref('')
 const newsLoading = ref(false)
+const newsStatus = ref('all')
+const newsOffset = ref(0)
+const newsLimit = 10
+let newsRequest = 0
 const loading = ref(true)
 const error = ref('')
 const selectedHorizon = ref(60)
@@ -19,8 +23,8 @@ const formatter = new Intl.NumberFormat('ko-KR', { maximumFractionDigits: 2 })
 const dateFormatter = new Intl.DateTimeFormat('ko-KR', { dateStyle: 'medium' })
 const formatDate = value => value ? dateFormatter.format(new Date(`${value}T00:00:00`)) : '-'
 const formatTime = value => value ? new Intl.DateTimeFormat('ko-KR', {
-  dateStyle: 'medium', timeStyle: 'short',
-}).format(new Date(value)) : '-'
+  dateStyle: 'medium', timeStyle: 'short', timeZone: 'Asia/Seoul',
+}).format(new Date(value)) + ' KST' : '-'
 const finiteNumber = value => value !== null && value !== '' && Number.isFinite(Number(value)) ? Number(value) : null
 const formatNumber = value => {
   const number = finiteNumber(value)
@@ -45,9 +49,13 @@ const conditionalModel = model => model?.metrics?.news_policy === 'conditional_f
 const hasConditionalModels = computed(() => models.value.some(conditionalModel))
 const newsUseLabel = item => {
   if (item.signal_status === 'news_feature') return `뉴스 피처 사용 · ${formatNumber(item.news_article_count)}건 · 점수 ${formatNumber(item.news_impact_score)}`
-  if (item.signal_status === 'numeric_fallback') return finiteNumber(item.news_article_count) > 0
-    ? `분석 기사 ${formatNumber(item.news_article_count)}건 · 집계 점수 0, 수치 피처로 예측`
-    : '이용 가능한 기사 없음 · 수치 피처로 예측'
+  if (item.signal_status === 'numeric_fallback') {
+    const count = finiteNumber(item.news_article_count)
+    if (count === null) return '해당 기준일의 반영 기사 수 확인 불가 · 수치 피처로 예측'
+    return count > 0
+      ? `해당 기준일 분석 기사 ${formatNumber(count)}건 · 집계 점수 0, 수치 피처로 예측`
+      : '해당 기준일에 반영할 기사 0건 · 수치 피처로 예측'
+  }
   return '뉴스 피처 사용 여부 확인 불가'
 }
 
@@ -76,18 +84,34 @@ async function loadData() {
   }
 }
 async function loadNews() {
+  const request = ++newsRequest
   newsError.value = ''
   newsLoading.value = true
   try {
-    newsView.value = await get('/api/v1/news/jev?limit=50')
+    const result = await get(`/api/v1/news/jev?limit=${newsLimit}&offset=${newsOffset.value}&analysis_status=${newsStatus.value}`)
+    if (request === newsRequest) newsView.value = result
   } catch {
-    newsError.value = '뉴스 조회에 실패했습니다. 가격과 기존 예측은 계속 확인할 수 있습니다.'
+    if (request === newsRequest) newsError.value = '뉴스 조회에 실패했습니다. 가격과 기존 예측은 계속 확인할 수 있습니다.'
   } finally {
-    newsLoading.value = false
+    if (request === newsRequest) newsLoading.value = false
   }
 }
+function selectNewsStatus(status) {
+  if (status === newsStatus.value) return
+  newsStatus.value = status
+  newsOffset.value = 0
+  void loadNews()
+}
+function moveNewsPage(step) {
+  const next = newsOffset.value + step * newsLimit
+  if (next < 0 || next >= (newsView.value?.inventory?.matched ?? 0)) return
+  newsOffset.value = next
+  void loadNews()
+}
+const newsInventory = computed(() => newsView.value?.inventory)
+const newsItems = computed(() => newsInventory.value?.items || [])
+const newsPageEnd = computed(() => Math.min(newsOffset.value + newsLimit, newsInventory.value?.matched ?? 0))
 const newsForecasts = computed(() => newsView.value?.forecast?.forecasts || [])
-const newsArticles = computed(() => newsView.value?.articles || [])
 const jevModel = computed(() => newsView.value?.forecast?.model || null)
 const jevLabel = value => ({ bullish: 'Bullish · 상승 압력', bearish: 'Bearish · 하락 압력', neutral: '중립', uncertain: '판단 유보' }[value] || '미분류')
 const newsForecastLabel = value => ({ experimental: '실험적 보정', insufficient_data: '학습 데이터 부족', unavailable: '이용 불가', no_news: '반영 가능한 뉴스 없음', stale_price: '가격 갱신 필요' }[value] || value)
@@ -96,7 +120,6 @@ const newsReason = item => ({
   no_news: '해당 시점에 반영할 뉴스 신호가 없습니다.',
   unavailable: '자료 시점 또는 처리 상태를 확인해 주세요.',
 }[item.status] || '')
-const usedByForecast = article => newsForecasts.value.some(row => (row.article_ids || []).includes(article.article_id) || (row.article_ids || []).includes(article.analysis_id))
 const hasLegacyDirection = item => finiteNumber(item.probability_up) !== null || ['UP', 'DOWN', 'FLAT'].includes(item.final_direction)
 const hasLegacyNews = item => finiteNumber(item.news_impact_score) !== null || finiteNumber(item.news_article_count) !== null || Boolean(item.news_updated_at)
 const formatCoefficient = value => {
@@ -344,11 +367,10 @@ const ticks = domain => Array.from({ length: 5 }, (_, index) => domain[1] - (dom
       <section class="panel news-panel" aria-labelledby="jev-title">
         <div class="panel-heading"><h2 id="jev-title">{{ hasConditionalModels ? 'Jev 뉴스 분석' : 'Jev 뉴스 기반 실험적 가격 보정' }}</h2><span class="unit">아라비카 가격 압력</span></div>
         <p v-if="newsError" role="status">{{ newsError }}</p>
-        <p v-if="newsView?.latest_run?.status === 'failed'" role="status">최근 뉴스 처리에 실패했습니다. 아래는 마지막 저장 결과입니다.</p>
-        <p v-else-if="newsView?.latest_run?.status === 'partial'" role="status">일부 뉴스만 처리되었습니다. 뉴스 분석의 수집 범위를 확인해 주세요.</p>
-        <p v-if="hasConditionalModels" class="section-note">선택 모델은 기준 거래일 UTC 23:00까지 공개·수정·선정·분석이 완료된 기사만 뉴스 피처에 사용합니다. 실제 이용 가능해진 첫 거래일에 반영하며, 기사 발생 후 7일을 넘겨 분석한 기록은 새 뉴스로 넣지 않습니다. 기사별 방향값(+1/−1/0) × 관련성 × 분류 확신도를 합산한 뒤 tanh를 적용하며, 해당 날짜의 점수가 없거나 0이면 수치 피처 모델로 예측합니다. 아래 기사 목록은 분석 증거이며 현재 예측의 입력 기사 목록과 같지 않을 수 있습니다.</p>
+        <p v-if="newsView?.latest_run" class="news-run-strip" role="status">최근 뉴스 처리 {{ statusLabel(newsView.latest_run.status) }} · {{ formatTime(newsView.latest_run.finished_at || newsView.latest_run.started_at) }}<span v-if="newsView.latest_run.status === 'failed'"> · 마지막 저장 결과를 표시합니다.</span><span v-else-if="newsView.latest_run.status === 'partial'"> · 일부만 처리되었습니다.</span></p>
+        <p v-if="hasConditionalModels" class="section-note">예측의 기사 수는 각 기준 거래일 23:00 UTC(다음 날 08:00 KST)까지 실제 이용 가능했던 뉴스 기준입니다. 아래는 현재 저장된 수집·선정 기사 전체의 조회 화면이므로, 그 이후 수집·분석된 기사가 있어도 이전 예측의 입력이었다는 뜻은 아닙니다.</p>
         <p v-else class="section-note">뉴스의 분류 확률은 미래 가격의 상승 확률이 아닙니다. 실험적 보정의 개선 근거는 지평별 평가 상태를 확인하세요.</p>
-        <p v-if="newsView?.selection?.selected_count != null" class="section-note">{{ newsView.selection.requested_start }} ~ {{ newsView.selection.requested_end }} · 뉴욕 날짜별 최대 1건 · 선정 {{ newsView.selection.selected_count }}건 · 분석 완료 {{ newsView.selection.selected_analysis_ids?.length ?? 0 }}건. 공급·작황·날씨·무역 관련성을 기준으로 선정합니다.</p>
+        <p v-if="!hasConditionalModels && newsView?.selection?.selected_count != null" class="section-note">{{ newsView.selection.requested_start }} ~ {{ newsView.selection.requested_end }} · 뉴욕 날짜별 최대 1건 · 선정 {{ newsView.selection.selected_count }}건 · 분석 완료 {{ newsView.selection.selected_analysis_ids?.length ?? 0 }}건. 공급·작황·날씨·무역 관련성을 기준으로 선정합니다.</p>
         <template v-if="newsView?.forecast && !hasConditionalModels">
           <p class="section-note">실행 {{ formatTime(newsView.forecast.as_of) }} · 가격 기준 {{ formatDate(newsView.forecast.price_date) }} · {{ newsView.forecast.training_availability === 'research' ? '연구용 시점 기준 · 과거 기사 재분류' : '실제 이용 가능 시각 기준' }}</p>
           <p class="section-note">이 예측을 만들 때 수집한 후보 {{ newsView.forecast.source_status.source_count ?? '-' }}건 · 수집처의 표본으로, 기간 내 모든 뉴스를 포함하지 않습니다.</p>
@@ -383,21 +405,36 @@ const ticks = domain => Array.from({ length: 5 }, (_, index) => domain[1] - (dom
             <p class="section-note">방향 일치율은 상승·하락·보합을 모두 비교합니다. Persistence는 항상 보합을 예측하므로 이 수치만으로 뉴스의 개선을 판단하지 않습니다.</p>
           </details>
         </template>
-        <p v-else-if="newsLoading" class="empty-state" role="status">뉴스 분석 결과를 불러오는 중입니다.</p>
-        <p v-else-if="!hasConditionalModels" class="empty-state">아직 뉴스 분석·보정 결과가 없습니다.</p>
-        <details v-if="newsArticles.length" class="news-details"><summary>분석한 최근 뉴스 {{ newsArticles.length }}건</summary><ul class="news-list"><li v-for="article in newsArticles" :key="article.analysis_id">
-          <a v-if="/^https?:\/\//.test(article.url)" :href="article.url" target="_blank" rel="noopener noreferrer">{{ article.title }}</a><span v-else>{{ article.title }}</span>
-          <small>{{ article.source }} · {{ article.time_basis === 'published_at' ? '발행' : '발견' }} {{ formatTime(article.event_at) }} · 분석 {{ formatTime(article.analyzed_at) }}</small>
-          <span>{{ jevLabel(article.label) }} · 분류 확률 강세 {{ formatProbability(article.p_bullish) }} / 약세 {{ formatProbability(article.p_bearish) }} / 중립 {{ formatProbability(article.p_neutral) }} / 판단 유보 {{ formatProbability(article.p_uncertain) }}</span>
-          <small v-if="hasConditionalModels">기사 방향값 × 관련성 × 확신도 {{ formatNumber(articlePressure(article)) }} (−1~1) · 커피 관련성 {{ formatProbability(article.relevance) }} · Jev 분류 확신도 {{ formatProbability(article.confidence) }}</small><small v-else-if="jevModel?.horizon_models">기사 방향 신호 {{ formatNumber(article.p_bullish - article.p_bearish) }} × 관련성 {{ formatProbability(article.relevance) }} · Jev 분류 확신도 {{ formatProbability(article.confidence) }} (참고용)</small><small v-if="!hasConditionalModels && usedByForecast(article)">이번 보정의 뉴스 입력에 포함</small>
-        </li></ul></details>
+        <p v-else-if="newsLoading && !hasConditionalModels" class="empty-state" role="status">뉴스 분석 결과를 불러오는 중입니다.</p>
+        <p v-else-if="!hasConditionalModels" class="empty-state">저장된 뉴스 보정 예측은 없습니다.</p>
+        <div v-if="newsInventory" class="news-inventory-heading">
+          <h3>수집·선정 기사</h3>
+          <p class="news-totals">전체 {{ formatNumber(newsInventory.total) }}건 · 분석 완료 {{ formatNumber(newsInventory.analyzed) }}건 · 미분석 {{ formatNumber(newsInventory.pending) }}건</p>
+          <p class="section-note">보관된 기사 마지막 수집 {{ formatTime(newsInventory.last_collected_at) }} · 마지막 분석 {{ formatTime(newsInventory.last_analyzed_at) }}</p>
+          <p class="section-note">과거 보관분을 포함한 선정·분석 기록을 기사별로 합친 수입니다. 미분석은 분석 결과가 없다는 뜻이며 현재 실행 중이라는 뜻은 아닙니다. 분류 확률은 미래 가격의 상승·하락 확률이 아닙니다.</p>
+          <div class="news-filter" role="group" aria-label="기사 분석 상태"><button v-for="option in [{ value: 'all', label: '전체' }, { value: 'analyzed', label: '분석 완료' }, { value: 'pending', label: '미분석' }]" :key="option.value" type="button" :aria-pressed="newsStatus === option.value" :disabled="newsLoading" @click="selectNewsStatus(option.value)">{{ option.label }}</button></div>
+        </div>
+        <p v-if="newsLoading" class="empty-state" role="status">기사 목록을 불러오는 중입니다.</p>
+        <p v-else-if="newsView && !newsInventory && !newsError" class="empty-state">기사 목록 상태를 확인할 수 없습니다.</p>
+        <template v-else-if="newsInventory && !newsError">
+          <p v-if="!newsItems.length" class="empty-state">{{ newsStatus === 'all' ? '저장된 수집·선정 기사가 없습니다.' : '이 상태의 기사가 없습니다.' }}</p>
+          <div v-else class="news-list-region" role="region" aria-label="수집 기사 목록" tabindex="0"><ul class="news-list"><li v-for="article in newsItems" :key="article.content_hash">
+            <a v-if="/^https?:\/\//i.test(article.url)" :href="article.url" target="_blank" rel="noopener noreferrer">{{ article.title || '제목 없음' }}</a><strong v-else>{{ article.title || '제목 없음' }}</strong>
+            <span class="signal-status" :class="article.analysis_status === 'analyzed' ? 'news_feature' : ''">{{ article.analysis_status === 'analyzed' ? '분석 완료' : '미분석' }}</span>
+            <small>{{ article.source || '출처 없음' }} · {{ article.time_basis === 'published_at' ? '발행' : '발견' }} {{ formatTime(article.event_at) }} · 수집 {{ formatTime(article.collected_at) }}<template v-if="article.analysis_status === 'analyzed'"> · 분석 {{ formatTime(article.analyzed_at) }} · 이용 가능 {{ formatTime(article.available_at) }}</template></small>
+            <template v-if="article.analysis_status === 'analyzed'"><span>{{ jevLabel(article.label) }}</span><span class="news-probability-label">기사 분류 확률</span><dl class="news-probabilities" aria-label="기사 분류 확률"><div><dt>강세</dt><dd>{{ formatProbability(article.p_bullish) }}</dd></div><div><dt>약세</dt><dd>{{ formatProbability(article.p_bearish) }}</dd></div><div><dt>중립</dt><dd>{{ formatProbability(article.p_neutral) }}</dd></div><div><dt>판단 유보</dt><dd>{{ formatProbability(article.p_uncertain) }}</dd></div></dl><small>기사 방향값 × 관련성 × 확신도 <b>{{ formatNumber(articlePressure(article)) }}</b> (−1~1) · 커피 관련성 {{ formatProbability(article.relevance) }} · Jev 분류 확신도 {{ formatProbability(article.confidence) }}</small></template>
+            <small v-else>분석 결과 없음</small>
+          </li></ul></div>
+          <div v-if="newsInventory.matched" class="news-pagination"><span>{{ newsOffset + 1 }}–{{ newsPageEnd }} / {{ formatNumber(newsInventory.matched) }}건</span><button type="button" :disabled="newsLoading || newsOffset === 0" @click="moveNewsPage(-1)">이전</button><button type="button" :disabled="newsLoading || newsPageEnd >= newsInventory.matched" @click="moveNewsPage(1)">다음</button></div>
+        </template>
+        <details v-if="hasConditionalModels" class="news-details"><summary>뉴스 피처 계산 기준</summary><p class="section-note">기준 거래일 UTC 23:00까지 공개·수정·선정·분석이 완료된 기사만 사용합니다. 실제 이용 가능해진 첫 거래일에 반영하며, 기사 발생 후 7일을 넘겨 분석한 기록은 새 뉴스로 넣지 않습니다. 기사별 방향값(+1/−1/0) × 관련성 × 분류 확신도를 합산한 뒤 tanh를 적용합니다. 해당 날짜의 점수가 없거나 0이면 수치 피처 모델로 예측합니다.</p></details>
       </section>
 
       <div class="workspace">
         <section class="panel future" aria-labelledby="forecast-title">
           <div class="panel-heading"><h2 id="forecast-title">{{ hasConditionalModels ? '선택 모델 예측' : '기본 모델 예측' }}</h2><span class="unit">¢/lb</span></div>
-          <p class="section-note">각 지평의 가장 최근 예측 기준일<span v-if="hasConditionalModels"> · 방향은 예측 가격과 기준일 가격의 비교이며 상승 확률이 아닙니다. 뉴스 이용 가능 시각은 각 기준 거래일 23:00 UTC까지입니다.</span></p>
-          <table v-if="futurePredictions.length" class="forecast-table"><caption class="sr-only">거래일 지평별 예측 가격, 방향, 뉴스 사용 상태</caption><thead><tr><th scope="col">지평 / 모델</th><th scope="col">목표일</th><th scope="col" class="number">예측가 / 방향·뉴스</th></tr></thead><tbody><tr v-for="item in futurePredictions" :key="item.horizon"><th scope="row">{{ item.horizon }}거래일<small>{{ currentModelForHorizon(item.horizon)?.name || '모델 정보 없음' }}</small></th><td>{{ formatDate(item.target_date) }}<small>기준 {{ formatDate(item.origin_date) }}</small></td><td class="number forecast-number">{{ formatNumber(item.predicted_price) }}<small>예상 단순수익률 {{ formatPercent(finiteNumber(item.predicted_return) === null ? null : Math.expm1(Number(item.predicted_return))) }}</small><template v-if="conditionalModel(currentModelForHorizon(item.horizon))"><small>가격 예측 방향 <b>{{ directionSignalLabel(signalDirection(item)) }}</b> · 상승 확률 없음</small><span class="signal-status" :class="item.signal_status">{{ signalStatusLabel(item.signal_status) }}</span><small>{{ newsUseLabel(item) }}</small></template><template v-else-if="hasLegacyDirection(item)"><span class="signal-status" :class="item.signal_status">{{ signalStatusLabel(item.signal_status) }}</span><small title="실제 보합 사례를 제외한 상승 확률">보합 제외 상승 확률 {{ formatProbability(item.probability_up) }} · 방향 {{ directionSignalLabel(signalDirection(item)) }}</small></template><small v-else>별도 상승 확률·방향 분류 결과 없음</small><template v-if="!conditionalModel(currentModelForHorizon(item.horizon))"><template v-if="hasLegacyNews(item)"><small>뉴스 {{ newsImpactLabel(item.news_impact_score) }} · {{ finiteNumber(item.news_article_count) === null ? '이용 불가' : formatNumber(item.news_article_count) + '건' }} · {{ formatTime(item.news_updated_at) }}</small><small>{{ newsModeLabel(item.news_availability) }}</small></template><small v-else><a href="#jev-title">Jev 뉴스 기반 실험적 보정 보기</a></small></template><details v-if="item.classifier_version || item.model_version" class="forecast-version"><summary>모델 버전</summary><small v-if="!conditionalModel(currentModelForHorizon(item.horizon))">분류 {{ item.classifier_version || '이용 불가' }}</small><small>모델 {{ item.model_version || '이용 불가' }}</small></details></td></tr></tbody></table>
+          <p class="section-note">각 지평의 가장 최근 예측 기준일<span v-if="hasConditionalModels"> · 방향은 예측 가격과 기준일 가격의 비교이며 상승 확률이 아닙니다. 뉴스 반영 마감은 각 기준 거래일 23:00 UTC(다음 날 08:00 KST)입니다. <a href="#jev-title">현재 수집·분석 기사 보기</a></span></p>
+          <table v-if="futurePredictions.length" class="forecast-table"><caption class="sr-only">거래일 지평별 예측 가격, 방향, 뉴스 사용 상태</caption><thead><tr><th scope="col">지평 / 모델</th><th scope="col">목표일</th><th scope="col" class="number">예측가 / 방향·뉴스</th></tr></thead><tbody><tr v-for="item in futurePredictions" :key="item.horizon"><th scope="row">{{ item.horizon }}거래일<small>{{ currentModelForHorizon(item.horizon)?.name || '모델 정보 없음' }}</small></th><td>{{ formatDate(item.target_date) }}<small>기준 {{ formatDate(item.origin_date) }}</small></td><td class="number forecast-number">{{ formatNumber(item.predicted_price) }}<small>예상 단순수익률 {{ formatPercent(finiteNumber(item.predicted_return) === null ? null : Math.expm1(Number(item.predicted_return))) }}</small><template v-if="conditionalModel(currentModelForHorizon(item.horizon))"><small>가격 예측 방향 <b>{{ directionSignalLabel(signalDirection(item)) }}</b> · 상승 확률 없음</small><span class="signal-status" :class="item.signal_status">{{ signalStatusLabel(item.signal_status) }}</span><small>{{ newsUseLabel(item) }}</small><small v-if="item.signal_status === 'numeric_fallback' && finiteNumber(item.news_article_count) === 0"><a href="#jev-title">현재 수집·분석 기사 보기</a></small></template><template v-else-if="hasLegacyDirection(item)"><span class="signal-status" :class="item.signal_status">{{ signalStatusLabel(item.signal_status) }}</span><small title="실제 보합 사례를 제외한 상승 확률">보합 제외 상승 확률 {{ formatProbability(item.probability_up) }} · 방향 {{ directionSignalLabel(signalDirection(item)) }}</small></template><small v-else>별도 상승 확률·방향 분류 결과 없음</small><template v-if="!conditionalModel(currentModelForHorizon(item.horizon))"><template v-if="hasLegacyNews(item)"><small>뉴스 {{ newsImpactLabel(item.news_impact_score) }} · {{ finiteNumber(item.news_article_count) === null ? '이용 불가' : formatNumber(item.news_article_count) + '건' }} · {{ formatTime(item.news_updated_at) }}</small><small>{{ newsModeLabel(item.news_availability) }}</small></template><small v-else><a href="#jev-title">Jev 뉴스 기반 실험적 보정 보기</a></small></template><details v-if="item.classifier_version || item.model_version" class="forecast-version"><summary>모델 버전</summary><small v-if="!conditionalModel(currentModelForHorizon(item.horizon))">분류 {{ item.classifier_version || '이용 불가' }}</small><small>모델 {{ item.model_version || '이용 불가' }}</small></details></td></tr></tbody></table>
           <p v-else class="empty-state">표시할 미성숙 예측이 없습니다.</p>
           <p class="footnote">표시된 기준일의 예측입니다. 현재 시점의 실시간 예측이 아닐 수 있습니다.</p>
         </section>

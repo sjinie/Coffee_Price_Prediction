@@ -1,5 +1,14 @@
 # 작업 상태
 
+## 2026-09-28 — 대시보드 뉴스 수집·분석 조회 개선
+
+- 예측별 뉴스 없음 문구를 해당 기준일 반영 기사0건으로 명확히 하고, 전체 보관 뉴스와 다른 시점임을 설명한다. 뉴스 목록은 기본 펼침, 상태 필터·10건 페이지와 확률/관련성/확신도/s_i 및 KST 시각을 제공한다. 기존 Vue/native CSS/색상·테마·anchor를 유지한다.
+- pipeline이 기존 `news.json` 선정 자료를 `jev_selections`에 내용 hash 기준으로 적재한다. 중복 연구/서비스 선정을 합치고, 과거 `available_at=null`은 기록된 수집·발생·수정·선정 시각의 최대값으로 보완한다. 원본 파일은 수정하지 않는다. 기존 분석·모델·예측 UPSERT 의미는 유지한다. `/api/v1/news/jev`의 기존 응답에 `inventory`와 상태/offset 조회를 추가하며 API는 파일·LLM을 호출하지 않는다.
+- 실제 VM 검증용 DB에서 보관 수집·선정1,448건/분석1,446건/미분석2건을 확인했다. 최근 수집9월27일14:01KST, 분석11:21KST다. 9월25일 예측의 입력 마감은9월26일08:00KST여서 이후 분석을 과거 예측에 소급하지 않는다. 적재 전후 예측 fingerprint가 같고 원본 archive는 read-only mount로 사용했다.
+- 독립 리뷰의 두 사항을 보완했다. 수치 수집·추론 실패 전에 뉴스 투영을 별도 commit하고, 기사 메타데이터는 선정 기록/감성 수치는 분석 기록에서 가져온다. 가용 시각은 두 기록의 최대값을 유지한다. 해당 실패·중복 메타데이터 회귀를 실제 DB로 검사했다.
+- 검증: 외부 Python3.12·임시 UTF8 PostgreSQL17에서 관련 **23 passed**, Vue **11 passed**, Vite build 및 VM API/pipeline/web 이미지 build 통과. 기존 Starlette/httpx·AnyIO deprecation 2건은 남았다. 최초 임시 DB가 SQL_ASCII여서 한글 JSON 검사3건이 실패했으며 UTF8 DB로 교정 후 전부 통과했다. 브라우저에서 분석 완료/미분석 필터,10건 페이지, 확률·시각·기준일 문구를 확인했다. 1280/390px viewport에서 가로 넘침 없음, 밝은/어두운 테마와 키보드 동작 확인, console error/warn 없음.
+- 현재 localhost18808 검증 화면을 갱신했다. 운영 DB·운영 컨테이너·일일 workflow·원격 Git은 변경하지 않았으며 새 LLM 요청도 없다. 신규 API 이전 schema 생성 및 읽기 역할의 SELECT 권한이 필요하다. 기존 사용자 문서 변경은 별도로 보존한다.
+
 ## 2026-09-28 — 사용자 확정 모델 운영 적용
 
 - 5일 **LightGBM300 + DLinear10**, 20일 **LightGBM100 + XGBoost100**의 가격 50:50 평균, 60일 **DLinear30**을 사용한다. 모두 가격·기후·거시 27개 + 조건부 뉴스 feature이며 Naive는 구성원에 없다.

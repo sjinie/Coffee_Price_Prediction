@@ -188,6 +188,8 @@ API·Vue는 최종 가격·수익률·방향과 별도 상승 확률, 뉴스 영
 
 기존 가격 산출물과 새 뉴스 산출물은 독립적으로 보존한다. `pipeline news`는 기존 수집·feature·가격 모델을 재사용하며, `jev_analyses`에는 content/model/prompt 기반 불변 분석을, `news_forecast_runs`에는 발행 시각별 별도 예측 snapshot을 저장한다. 기사 조회가 느리거나 실패해도 가격 화면은 계속 로드된다. 실패한 뉴스 run은 마지막 정상/부분 성공 snapshot을 대체하지 않는다.
 
+뉴스 보관 조회는 `jev_selections`(content_hash PK, 이용 가능 시각, 공개 기사 메타데이터)를 추가한다. pipeline이 기존 네 파일의 선정 기사를 적재하고, API는 이용 가능 시각이 현재 이하인 선정 기사와 저장 분석을 내용 hash별로 합친 `inventory`를 반환한다. 분석 결과는 저장된 버전 중 가장 최근 분석 시각을 표시하며, 이 목록을 과거 예측에 실제 반영된 기사 목록으로 해석하지 않는다. 전체/분석 완료/미분석 수와 최근 기록 시각, 상태 필터·offset/limit을 제공하고 프론트는 10건씩 표시한다. 수집 후보 전체나 작업 큐의 실행 상태는 나타내지 않는다. API 교체 전 pipeline 권한으로 schema를 갱신하고 API 조회 역할에 신규 테이블 SELECT 권한이 있어야 한다.
+
 - 입력: Yahoo KC=F의 제목(최대 512자)·공급자 요약(최대 1,200자), URL, 출처, 발행/수집/분석 시각. 선택적 GDELT는 발행 대신 발견 시각을 사용한다. URL·내용·제목 중복을 제거하고 모델/프롬프트 버전별 분류 캐시를 재사용한다. 원문 본문은 수집하지 않는다.
 - TypeSafe: `POST https://ai-gateway.vercel.sh/typesafe/v1/systemone`, model `typesafe-ai/jev`, `state`와 `questions`. `choice`는 bullish/bearish/neutral/uncertain, `noul`은 아라비카 선물 관련성이다. 텍스트의 일반 감성과 가격 압력을 구분하고 기사 내용은 지시가 아닌 데이터로 취급한다. 응답의 확률·confidence·relevance·토큰·비용을 보존한다. 분류 확률은 미래 가격 상승 확률이 아니다.
 - 시점: `event_at`은 발행(없으면 발견), `available_at`은 발행/수정/발견/수집/분석 중 가장 늦은 시각이다. live에서는 cutoff 이전에 이용 가능해진 기사만 쓴다. 연구 모드는 과거 발행 시각으로 재분류 결과를 붙이므로 실시간 성과로 해석하지 않는다.

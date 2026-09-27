@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import os
 from datetime import date
+from typing import Literal
 
 from . import db
 
@@ -95,7 +96,8 @@ def create_app(connection_factory=db.connect):
         return row
 
     @app.get("/api/v1/news/jev")
-    def jev_news(limit: int = Query(50, ge=1, le=200)):
+    def jev_news(limit: int = Query(50, ge=1, le=200), offset: int = Query(0, ge=0),
+                 analysis_status: Literal['all', 'analyzed', 'pending'] = 'all'):
         with connection_factory() as connection:
             latest_run = db.fetch_one(connection,
                 """SELECT run_id, status, started_at, finished_at, message
@@ -117,11 +119,12 @@ def create_app(connection_factory=db.connect):
                        SELECT 1 FROM models WHERE is_current
                          AND metrics->>'news_policy' = 'conditional_feature'))
                    ORDER BY event_at DESC, analysis_id LIMIT %s""", (selected_ids, limit))
+            inventory = db.fetch_jev_inventory(connection, limit, offset, analysis_status)
         return {"latest_run": latest_run,
                 "forecast": forecast["document"] if forecast else None,
                 "selection": {**attempt["document"].get("source_status", {}),
                               "selected_analysis_ids": selected_ids} if attempt else None,
-                "articles": [row["document"] for row in articles]}
+                "articles": [row["document"] for row in articles], "inventory": inventory}
 
     @app.get("/api/v1/models/current")
     def current_models():

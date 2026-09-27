@@ -171,6 +171,16 @@ def run_pipeline(
         db.create_schema(connection)
         run_id = db.start_pipeline_run(connection, mode)
         try:
+            selected = artifact.suffix == ".json"
+            if selected:
+                from . import jev_store
+
+                cache = Path(jev_cache) if jev_cache else ROOT / "data/jev/responses.json"
+                records = jev_store.read_analyses(cache.parent, latest=True) if cache.exists() else []
+                db.upsert_jev_analyses(connection, records)
+                db.upsert_jev_selections(connection, jev_store.read_news(cache.parent)["selections"])
+                # Collected news remains inspectable even when numeric inputs fail.
+                connection.commit()
             if skip_ingestion:
                 statuses, failures = existing_source_status(source_dir, end), []
             else:
@@ -214,17 +224,13 @@ def run_pipeline(
                 raise RuntimeError("수집 실패: " + ", ".join(blocking_failures))
             sources = sources_as_of(source_dir, end)
             validate_macro_freshness(sources, end)
-            selected = artifact.suffix == ".json"
             if selected:
-                from . import jev_store
                 from .selected_models import SelectedBundle, assemble_selected, daily_news, load_weather, selected_predictions
 
                 if intelligence_artifact is not None:
                     raise ValueError("선택 모델에는 별도 뉴스 잔차/분류 보정을 중복 적용하지 않습니다.")
                 bundle = SelectedBundle(artifact)
                 dataset = assemble_selected(load_weather(sources, source_dir, end), bundle.manifest["train_cutoff"])
-                cache = Path(jev_cache) if jev_cache else ROOT / "data/jev/responses.json"
-                records = jev_store.read_analyses(cache.parent, latest=True) if cache.exists() else []
                 news = daily_news(records, dataset.sessions)
                 predictions = selected_predictions(dataset, bundle, news)
             else:
@@ -234,7 +240,6 @@ def run_pipeline(
             validate_latest_prediction_coverage(dataset, predictions)
             if selected:
                 db.upsert_intelligence_models(connection, bundle.model_records())
-                db.upsert_jev_analyses(connection, records)
             elif intelligence_artifact is None:
                 db.upsert_models(connection, bundle)
             else:
@@ -363,6 +368,9 @@ def run_news_pipeline(source_dir, artifact, end, *, cache_path, limit=200,
             records = [record for record in records
                        if record["model"] == MODEL and record["prompt_version"] == PROMPT_VERSION]
             db.upsert_jev_analyses(connection, records)
+            if Path(cache_path).name == "responses.json":
+                from . import jev_store
+                db.upsert_jev_selections(connection, jev_store.read_news(Path(cache_path).parent)["selections"])
             # Analysis survives numeric-source/model failure and can be reused without a new API call.
             connection.commit()
             as_of = pd.Timestamp.now(tz="UTC")

@@ -111,3 +111,71 @@ def test_news_snapshot_does_not_replace_price_run_and_keeps_first_analysis(isola
     assert failure["status"] == "failed"
     assert client.get("/api/v1/news/jev").json()["latest_run"]["status"] == "failed"
     assert client.get("/api/v1/news/jev").json()["forecast"]["run_id"] == replay["run_id"]
+
+
+def test_inventory_deduplicates_content_and_exposes_unanalyzed_collection(isolated_database):
+    from fastapi.testclient import TestClient
+
+    old = "2026-01-01T10:00:00Z"
+    newer = "2026-01-02T10:00:00Z"
+    future = "2099-01-01T10:00:00Z"
+    article = dict(content_hash="same", article_id="article", title="Coffee supply",
+                   url="https://example.test/coffee", event_at=old, collected_at=old, available_at=old)
+    analysis = {**article, "analysis_id": "analysis", "analyzed_at": old,
+                "label": "bullish", "p_bullish": .8, "raw_response": "not public",
+                "url": "https://example.test/analysis-variant", "collected_at": newer}
+    with db.connect(isolated_database) as connection:
+        db.create_schema(connection)
+        db.upsert_jev_selections(connection, {"research": [article], "service": [article,
+            {**article, "content_hash": "pending", "event_at": newer, "available_at": None},
+            {**article, "content_hash": "future", "available_at": future}]})
+        db.upsert_jev_analyses(connection, [analysis,
+            {**analysis, "analysis_id": "new-analysis", "analyzed_at": newer, "p_bullish": .7},
+            {**analysis, "analysis_id": "future-analysis", "content_hash": "pending", "available_at": future}])
+        connection.commit()
+        db.upsert_jev_selections(connection, {"service": [{**article, "title": "changed"}]})
+        assert db.fetch_one(connection, "SELECT document FROM jev_selections WHERE content_hash='same'")["document"]["title"] == article["title"]
+
+    @contextmanager
+    def factory():
+        with db.connect(isolated_database) as connection:
+            yield connection
+
+    client = TestClient(create_app(factory))
+    response = client.get("/api/v1/news/jev?limit=1").json()
+    view = response["inventory"]
+    assert (view["total"], view["analyzed"], view["pending"], view["matched"]) == (2, 1, 1, 2)
+    assert view["items"][0]["content_hash"] == "pending"
+    assert view["items"][0]["analysis_status"] == "pending"
+    assert view["items"][0]["p_bullish"] is None
+    second = client.get("/api/v1/news/jev?limit=1&offset=1").json()["inventory"]
+    assert second["items"][0]["analysis_id"] == "new-analysis"
+    assert second["items"][0]["p_bullish"] == .7
+    assert second["items"][0]["url"] == article["url"]
+    assert second["items"][0]["collected_at"] == article["collected_at"]
+    assert "raw_response" not in second["items"][0]
+    filtered = client.get("/api/v1/news/jev?analysis_status=analyzed").json()["inventory"]
+    assert filtered["matched"] == 1 and filtered["total"] == 2
+    assert client.get("/api/v1/news/jev?offset=999").json()["inventory"]["items"] == []
+    assert client.get("/api/v1/news/jev?analysis_status=invalid").status_code == 422
+    assert client.get("/api/v1/news/jev?offset=-1").status_code == 422
+
+
+def test_selected_pipeline_keeps_news_inventory_when_numeric_sources_fail(isolated_database, monkeypatch, tmp_path):
+    from coffee_service import jev_store
+
+    article = dict(content_hash="pending", article_id="article", title="Coffee harvest",
+                   event_at="2026-01-01T10:00:00Z", collected_at="2026-01-02T10:00:00Z")
+    monkeypatch.setattr(jev_store, "read_news", lambda *_: {"selections": {"service": [article]}})
+    monkeypatch.setattr(pipeline, "existing_source_status", lambda *_: [])
+    def failed_source(*_):
+        raise ValueError("missing numeric source")
+    monkeypatch.setattr(pipeline, "sources_as_of", failed_source)
+    with pytest.raises(RuntimeError, match="ValueError"):
+        pipeline.run_pipeline("incremental", tmp_path, tmp_path / "manifest.json", date(2022, 1, 1),
+                              date(2026, 1, 2), skip_ingestion=True, database_url=isolated_database,
+                              jev_cache=tmp_path / "responses.json")
+    with db.connect(isolated_database) as connection:
+        assert db.fetch_jev_inventory(connection, 10, 0, "all")["pending"] == 1
+        assert db.fetch_one(connection, "SELECT status FROM pipeline_runs")["status"] == "failed"
+        assert db.fetch_one(connection, "SELECT count(*) AS n FROM predictions")["n"] == 0
