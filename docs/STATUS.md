@@ -1,5 +1,17 @@
 # 작업 상태
 
+## 2026-09-27 — Jev 네 파일 통합·삭제·품질 및 이용 시점 점검
+
+- 사용자 승인 범위는 Jev 자료 통합과 재생성 가능한 캐시·빌드·임시 산출물 및 참조 없는 중복 파일이다. 저장소 코드·설정·문서·노트북 참조 점검에서 그 밖의 삭제 가능한 추적 파일은 확인하지 못해 보존했다. 옛 Jev 경로의 394개와 `.pytest_cache`, 지정 Python `__pycache__`, `frontend/dist`의 63개 파일(총 457개·27,751,531바이트)을 삭제했다. 개별 해시·미추적 여부·symlink 부재·백필 프로세스 부재를 확인했고 삭제 전 임시 복구본을 `/tmp/coffee-jev-before-cleanup.tar.gz`에 만들었다. `node_modules`, `.agents`, `.codex`, lockfile, `.env`, 기존 연구/old 디렉터리·가격 모델은 이 정리 대상에 넣지 않았다.
+- `data/jev/news.json`에 수집 원본 360개 스냅샷·선정·출처를, `requests.json`에 요청 본문/감사/worker 상태를, `responses.json`에 응답 본문/분석 원기록을, `sentiment.csv`에 모든 분석 시도를 통합했다. 과거 분석 파일 7개를 인덱스로 정확히 재구성할 수 있고 정규화 메타데이터 변형 2,958개를 보존했다. JSON·Parquet 원본(스키마·값·attrs)·선정·감사 기록 왕복 대조를 통과했다. 과거 HTTP 본문은 애초 미보관이므로 legacy 상태를 명시하며 만들어낸 요청/응답을 원본으로 부르지 않는다.
+- CSV는 `(analysis_id, analyzed_at)` 1,449행, 최신 연구 선정은 1,445행(연도별 189/213/256/383/404)이다. 과거 prompt·미선정 probe·재분석 이전 결과도 남기고 최신/연구/제목 단독/라벨 확률 일치 여부를 구분한다. 기존 1,445행의 분류·확률·관련성·confidence·분석 시각·비용/usage 및 서비스 88건은 이전과 동일하다. 원래 선정 960건(1건/일)·549건(2건/일), 날짜가 다른 제목 중복의 앞선 재분류와 단일 대표 날짜 정책을 유지한다. 합집합의 최대 3건/일을 과거 1건/일 실험으로 오해하지 않는다.
+- 후속 요청은 `news_backfill --input <기사목록.json> --once`, API 없는 CSV 재생성은 `news_unify`다. 실제 요청 본문을 전송 전에, 응답 본문을 파싱 전에 저장한다. HTTP 200 원문 저장 후 중단된 분석은 재요청 없이 복구하며 응답 미보관/비용 불명은 중단한다. 429/일시 오류 60초·성공 300초·더 긴 Retry-After를 재시작 후에도 지키고 대기 중에는 공통 잠금을 해제한다. API 원문은 mock으로 검증했으며 이번 정리의 실제 HTTP 요청은 0회다. 기록된 전체 분석 비용 합계 $0.019455030은 계정 청구액이 아니다. Gateway $1 설정과 완료된 heartbeat 일시정지는 유지하고, 30분 확인 프롬프트의 경로를 새 네 파일로 갱신했다.
+- **분류 품질:** 1,445개 중 uncertain 864(59.8%), bullish 307, bearish 187, neutral 87; 요약이 빈 제목 단독 1,321(91.4%)다. 유한 확률·범위·합계 검사를 통과했으나 `Nespresso to supply coffee to The Renaissance Club`(2023-04-20)은 neutral 0.48/uncertain 0.49인데 label이 neutral인 1건이 있다(허용오차 1e-8; 미세한 부동소수 동률 2건 제외). 원값은 수정하지 않고 `label_matches_probabilities=False`로 표시한다. 방향 라벨인데 relevance<0.5인 11건도 재검토 대상이며 이 수치만으로 오답이라고 확정하지 않는다.
+- 연도×라벨 각 1개(seed42)의 20건을 모델 보조로 정성 점검했다. `Brazil’s Safrinha crop improves with each day`는 제목에 커피가 없는데 bearish/relevance 0.76/confidence 0.89이고, `Business: Global coffee prices slide as robusta, arabica fut`는 신규 기초여건 없이 가격 움직임만 있는 불완전 제목인데 bearish다. Yemen 경매 고가 제목도 KC 전체 방향 근거가 약하다. 이들은 검토 후보이며 사람 정답 기반 정확도·Brier score·calibration이나 배치 크기별 품질을 검증한 결과는 아니다. 사용자가 추가 비용을 승인한 것으로 해석해 재분류하지 않았다.
+- **시점별 이용 가능성:** 실제 `available_at`은 2026-09-26T09:12:42Z~2026-09-27T02:21:29Z다. 대표 기사 날짜 당시 이용 가능했던 분류는 0건이다. `research_available_at`은 사건·수정·일별 선정 완료 시각의 보수적 최댓값이며 수집/분석이 과거에 이루어졌다는 증거가 아니다. 2022~23 Validation/이미 본 2024~25 Test 표시를 유지하고, 소급 분류·모델 사전학습 오염 및 시점별 배포 가능성 한계를 구분한다. 앙상블 학습·채택·DB 변경은 하지 않았다.
+- 검증: Mac 외부 Python 3.12에서 **71 passed, 4 skipped**(DB URL 미설정). 비용의 NaN/음수/boolean·비정상 metadata 및 401/402/403 응답 직후 중단 복구 검사 포함. 실제 자료 export 재실행 바이트 동일, 외부 HTTP 차단 transport로 완료 상태 재확인, 서비스 88건/노트북 CSV 읽기 구간 실행 및 기존 모든 output 보존. 독립 리뷰의 잠금 유지·새 import 누락 지적을 수정하고 회귀 검사를 추가했다. DB 통합 검사의 환경 미설정 skip은 실제 DB 실행으로 주장하지 않는다. 의존성·서빙 가격 모델·배포는 변경하지 않았으며 Docker/CI/VM 검증은 이번 범위가 아니다.
+- 공식 근거(2026-09-27): [Choice](https://docs.typesafe.ai/primitives/choice)의 최고확률 라벨·확률합·confidence 정의와 [Noul](https://docs.typesafe.ai/primitives/noul)의 yes 확률 정의를 대조했다. relevance는 영향 크기의 직접 측정값이 아니다.
+
 ## 2026-09-27 — 2022~2026 Jev 뉴스 결과 통합
 
 - 원자료·선정·요청 체크포인트는 `data/raw/jev/`에 보존하고, 통합 분석 산출물은 `data/processed/jev_news/articles.json`·`articles.csv`에 둔다. 재생성 명령은 `python -m coffee_service.news_unify`다. 추가 뉴스 수집·DB 적재·가격 모델 변경은 없다.

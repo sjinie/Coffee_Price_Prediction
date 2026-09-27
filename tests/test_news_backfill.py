@@ -2,145 +2,189 @@ from datetime import datetime, timezone
 from email.utils import format_datetime
 import json
 
-from coffee_service import jev, news_backfill as worker
+import pytest
+
+from coffee_service import jev, jev_store, news_backfill as worker
 
 
 def article():
-    result = jev._article_fields({"url": "https://example.com/coffee", "title": "Brazil coffee crop falls",
-                                  "published_at": "2025-10-01T12:00:00Z"})
-    result.update(selection_date="2025-10-01", selection_available_at="2025-10-02T04:00:00Z")
-    return result
+    row = jev._article_fields({'url': 'https://example.com/coffee', 'title': 'Brazil coffee crop falls',
+                               'published_at': '2025-10-01T12:00:00Z'})
+    row.update(selection_date='2025-10-01', selection_available_at='2025-10-02T04:00:00Z')
+    return row
 
 
-def result(row):
-    return jev._response_record(row, {"answers": {
-        "price_pressure": {"type": "choice", "choice": "bullish", "confidence": .7,
-                           "probabilities": {"bullish": .7, "bearish": .1, "neutral": .1, "uncertain": .1}},
-        "relevance": {"type": "noul", "noul": .9}}, "usage": {"input_tokens": 100},
-        "provider_metadata": {"gateway": {"cost": ".001"}}}, jev._now())
+def setup_store(path):
+    jev_store.initialize(path)
+    news = jev_store.read_document(path/'news.json')
+    news['selections'] = {'historical': [article()], 'recent': [article()]}
+    jev_store.write_document(path/'news.json', news)
 
 
-def setup_jobs(tmp_path):
-    for name, _ in worker.JOBS:
-        worker.write_json(tmp_path / name / "selected.json", [article()])
+class Session:
+    def __init__(self, statuses):
+        self.statuses = iter(statuses)
+        self.calls = 0
+
+    def post(self, url, **kwargs):
+        self.calls += 1
+        status = next(self.statuses)
+        answers = {}
+        for name in kwargs['json']['questions']:
+            answers[name] = ({'type': 'choice', 'choice': 'bullish', 'confidence': .7,
+                              'probabilities': {'bullish': .7, 'bearish': .1, 'neutral': .1, 'uncertain': .1}}
+                             if name.endswith('price_pressure') else {'type': 'noul', 'noul': .9})
+        body = {'answers': answers, 'usage': {'input_tokens': 100},
+                'provider_metadata': {'gateway': {'cost': '.001'}}} if status == 200 else {'error': {'code': 'limited'}}
+        class Response:
+            status_code = status
+            headers = {'Retry-After': '60'}
+            text = json.dumps(body)
+            def json(self):
+                return body
+        return Response()
 
 
-def test_batch_packs_multiple_articles_to_request_ceiling():
-    rows = [{**article(), "title": f"Brazil coffee crop falls {index}"} for index in range(150)]
+def test_retry_cadence_capture_and_reuse_without_sidecar_files(tmp_path, monkeypatch):
+    setup_store(tmp_path)
+    session = Session([429, 200])
+    assert worker.run(tmp_path, once=True, transport=session, api_key='fixture') == 0
+    state = jev_store.read_document(tmp_path/'requests.json')['worker_state']
+    assert state['last_response']['status'] == 429 and state['interval_seconds'] == 60
+    assert worker.run(tmp_path, once=True, transport=session, api_key='fixture') == 0
+    assert session.calls == 1
+    future = worker.time.time() + 61
+    monkeypatch.setattr(worker.time, "time", lambda: future)
+    state['next_attempt_epoch'] = 0
+    state['last_response']['at'] = '2020-01-01T00:00:00Z'
+    doc = jev_store.read_document(tmp_path/'requests.json'); doc['worker_state'] = state
+    jev_store.write_document(tmp_path/'requests.json', doc)
+    assert worker.run(tmp_path, once=True, transport=session, api_key='fixture') == 0
+    state = jev_store.read_document(tmp_path/'requests.json')['worker_state']
+    assert state['interval_seconds'] == 300 and state['next_attempt_epoch'] > worker.time.time()+290
+    assert worker.run(tmp_path, once=True, transport=session, api_key='fixture') == 0
+    assert session.calls == 2
+    assert len(jev_store.read_analyses(tmp_path)) == 1
+    assert set(p.name for p in tmp_path.iterdir()) == {'news.json', 'requests.json', 'responses.json', 'sentiment.csv'}
+    assert len(jev_store.read_document(tmp_path/'responses.json')['attempts']) == 2
+
+
+def test_budget_stop_is_persisted_and_not_retried(tmp_path):
+    import pytest
+    setup_store(tmp_path)
+    session = Session([402])
+    assert worker.run(tmp_path, once=True, transport=session, api_key='fixture') == 1
+    with pytest.raises(RuntimeError, match='Inspect requests.json'):
+        worker.run(tmp_path, once=True, transport=session, api_key='fixture')
+    assert session.calls == 1
+
+
+def test_request_bytes_and_retry_after_contract():
+    rows = [{**article(), 'title': f'Brazil coffee crop falls {i}'} for i in range(150)]
     batch = worker.pack_batch(rows)
     assert 20 < len(batch) < len(rows)
-    assert len(jev._batch_payload(batch)["questions"]) == len(batch) * 2
     assert len(json.dumps(jev._batch_payload(batch), ensure_ascii=False).encode()) <= jev.MAX_BATCH_BYTES
-    assert len(json.dumps(jev._batch_payload(batch + [rows[len(batch)]]), ensure_ascii=False).encode()) > jev.MAX_BATCH_BYTES
-
-
-def test_retry_after_floor_dates_and_uncapped_delay():
-    assert worker.retry_delay(None) == 60
-    assert worker.retry_delay("NaN") == 60
-    assert worker.retry_delay("-1") == 60
-    assert worker.retry_delay("7200") == 7200
+    assert len(json.dumps(jev._batch_payload(batch+[rows[len(batch)]]), ensure_ascii=False).encode()) > jev.MAX_BATCH_BYTES
+    assert worker.retry_delay('NaN') == worker.retry_delay('-1') == 60
+    assert worker.retry_delay('7200') == 7200
     date = format_datetime(datetime.fromtimestamp(10000, timezone.utc), usegmt=True)
     assert worker.retry_delay(date, now=1000) == 9000
 
 
-def test_rate_limit_checkpoints_and_restart_does_not_send_early(tmp_path, monkeypatch):
-    setup_jobs(tmp_path)
-    calls = []
-    def limited(rows, session):
-        calls.append(rows)
-        session.status, session.delay = 429, 120
-        raise jev.JevRateLimitError(120)
-    monkeypatch.setattr(jev, "classify_articles", limited)
-    assert worker.run(tmp_path, once=True) == 0
-    state = json.loads((tmp_path / "backfill-status.json").read_text())
-    assert state["pending"] == 1 and state["consecutive_failures"] == 1
-    assert state["next_attempt_epoch"] > worker.time.time() + 110
-    assert worker.run(tmp_path, once=True) == 0
-    assert len(calls) == 1
+def test_directory_lock_survives_atomic_json_replacement(tmp_path):
+    import pytest
+    setup_store(tmp_path)
+    with jev._cache_lock(tmp_path/'responses.json'):
+        jev._write_records(tmp_path/'responses.json', {'schema_version': 1, 'analyses': [], 'attempts': []})
+        with pytest.raises(jev.JevError, match='already'):
+            with jev._cache_lock(tmp_path/'responses.json'):
+                pass
 
 
-def test_restart_honors_saved_429_retry_slot(tmp_path, monkeypatch):
-    setup_jobs(tmp_path)
-    worker.write_json(tmp_path / "backfill-status.json", {
-        "state": "waiting", "next_attempt_epoch": worker.time.time() + 1,
-        "last_response": {"at": jev._now(), "status": 429}})
-    def unexpected(*args, **kwargs):
-        raise AssertionError("Old short interval must not trigger a request")
-    monkeypatch.setattr(jev, "classify_articles", unexpected)
-    assert worker.run(tmp_path, once=True) == 0
-    state = json.loads((tmp_path / "backfill-status.json").read_text())
-    assert state["interval_seconds"] == 60
-    assert state["next_attempt_epoch"] > worker.time.time() + 50
+def test_saved_success_is_recovered_without_resending(tmp_path):
+    setup_store(tmp_path)
+    session = Session([200])
+    capture = jev_store.CaptureSession(tmp_path, session)
+    capture.articles = [article()]
+    jev.classify_articles(capture.articles, session=capture, api_key='fixture')
+    assert jev_store.read_analyses(tmp_path) == []
+    assert worker.run(tmp_path, once=True, transport=session, api_key='fixture') == 0
+    assert session.calls == 1
+    assert len(jev_store.read_analyses(tmp_path)) == 1
 
 
-def test_429_retries_each_minute_then_200_waits_five_minutes(tmp_path, monkeypatch):
-    setup_jobs(tmp_path)
-    calls = []
-    def classify(rows, session):
-        calls.append(rows)
-        if len(calls) == 1:
-            session.status, session.delay = 429, 60
-            raise jev.JevRateLimitError(60)
-        session.status = 200
-        return [result(row) for row in rows]
-    monkeypatch.setattr(jev, "classify_articles", classify)
-    assert worker.run(tmp_path, once=True) == 0
-    state = json.loads((tmp_path / "backfill-status.json").read_text())
-    assert state["interval_seconds"] == 60
-    assert 50 < state["next_attempt_epoch"] - worker.time.time() <= 60
-    state["next_attempt_epoch"] = worker.time.time() - 1
-    state["last_response"]["at"] = "2020-01-01T00:00:00Z"
-    worker.write_json(tmp_path / "backfill-status.json", state)
-    assert worker.run(tmp_path, once=True) == 0
-    state = json.loads((tmp_path / "backfill-status.json").read_text())
-    assert state["interval_seconds"] == 300
-    assert 290 < state["next_attempt_epoch"] - worker.time.time() <= 300
-    assert worker.run(tmp_path, once=True) == 0
-    assert len(calls) == 2
+def test_unanswered_request_stops_before_new_spending(tmp_path):
+    setup_store(tmp_path)
+    doc = jev_store.read_document(tmp_path/'requests.json')
+    doc['attempts'].append({'request_id': 'interrupted'})
+    jev_store.write_document(tmp_path/'requests.json', doc)
+    session = Session([])
+    assert worker.run(tmp_path, once=True, transport=session, api_key='fixture') == 1
+    assert session.calls == 0
+    assert jev_store.read_document(tmp_path/'requests.json')['worker_state']['state'] == 'cost_unknown'
 
 
-def test_success_reused_between_jobs_without_second_call(tmp_path, monkeypatch):
-    setup_jobs(tmp_path)
-    calls = []
-    def classify(rows, session):
-        calls.append(rows)
-        return [result(row) for row in rows]
-    monkeypatch.setattr(jev, "classify_articles", classify)
-    assert worker.run(tmp_path, once=True) == 0
-    assert worker.run(tmp_path, once=True) == 0
-    assert len(calls) == 1
-    state = json.loads((tmp_path / "backfill-status.json").read_text())
-    assert state["state"] == "completed"
-    for name, _ in worker.JOBS:
-        records = jev.read_records(tmp_path / name / "results.json")
-        assert len(records) == 1 and records[0]["available_at"] >= records[0]["analyzed_at"]
+def test_service_collection_uses_unified_archive_and_reuses_selection(tmp_path):
+    from datetime import date
+    data = tmp_path/'archive'
+    candidates = tmp_path/'candidates.json'
+    candidates.write_text(json.dumps([article()]))
+    session = Session([200])
+    rows, status = jev.collect_and_classify(data/'responses.json', date(2025,10,1),
+        date(2025,10,2), limit=1, source='yahoo', candidates_path=candidates, session=session, api_key='fixture')
+    assert len(rows) == 1 and session.calls == 1
+    assert status['classification_status'] == 'success'
+    again, status = jev.collect_and_classify(data/'responses.json', date(2025,10,1),
+        date(2025,10,2), limit=1, source='yahoo', candidates_path=candidates, session=session, api_key='fixture')
+    assert again == rows and status['api_attempts'] == 0 and session.calls == 1
+    assert len(list(data.iterdir())) == 4
 
 
-def test_budget_error_stops_and_does_not_retry(tmp_path, monkeypatch):
-    setup_jobs(tmp_path)
-    def stopped(rows, session):
-        session.status = 402
-        raise jev.JevStopError("HTTP 402")
-    monkeypatch.setattr(jev, "classify_articles", stopped)
-    assert worker.run(tmp_path, once=True) == 1
-    state = json.loads((tmp_path / "backfill-status.json").read_text())
-    assert state["state"] == "stopped" and state["last_response"]["status"] == 402
+def test_wait_releases_archive_lock(tmp_path, monkeypatch):
+    import pytest
+    setup_store(tmp_path)
+    session = Session([429])
+    class StopWait(Exception):
+        pass
+    def sleep(seconds):
+        assert seconds > 0
+        with jev._cache_lock(tmp_path/'responses.json'):
+            pass
+        raise StopWait
+    monkeypatch.setattr(worker.time, 'sleep', sleep)
+    with pytest.raises(StopWait):
+        worker.run(tmp_path, transport=session, api_key='fixture')
+    assert session.calls == 1
 
 
-def test_reused_analysis_retains_selected_source_and_later_availability():
-    original = article()
-    cached = result(original)
-    cached.update(analyzed_at="2026-01-01T00:00:00Z", available_at="2026-01-01T00:00:00Z",
-                  publisher="Original publisher")
-    selected = {**original, "url": "https://other.example.com/reprint", "source": "other_publisher",
-                "published_at": "2025-10-02T12:00:00Z", "collected_at": "2026-02-01T00:00:00Z",
-                "selection_date": "2025-10-02", "selection_available_at": "2025-10-03T04:00:00Z"}
-    row = worker.results_for([selected], {worker.key(cached): cached})[0]
-    assert row["url"] == selected["url"] and row["source"] == "other_publisher"
-    assert row["article_id"] != cached["article_id"]
-    assert row["published_at"] == selected["published_at"]
-    assert row["available_at"] == selected["collected_at"]
-    assert row["analysis_id"] == cached["analysis_id"]
-    assert row["publisher"] is None
-    selected["publisher"] = "Selected publisher"
-    assert worker.results_for([selected], {worker.key(cached): cached})[0]["publisher"] == "Selected publisher"
+@pytest.mark.parametrize('metadata', [
+    {'gateway': {'cost': 'NaN'}}, {'gateway': {'cost': -1}},
+    {'gateway': {'cost': True}}, {'gateway': 'invalid'}, 'invalid',
+    False, [], 0, {'gateway': False}, {'gateway': []}, {'gateway': 0},
+])
+def test_invalid_cost_stops_but_keeps_raw_response(tmp_path, metadata):
+    setup_store(tmp_path)
+    class BadCostSession(Session):
+        def post(self, *args, **kwargs):
+            response = super().post(*args, **kwargs)
+            response.json()['provider_metadata'] = metadata
+            return response
+    session = BadCostSession([200])
+    assert worker.run(tmp_path, once=True, transport=session, api_key='fixture') == 1
+    assert len(jev_store.read_document(tmp_path/'responses.json')['attempts']) == 1
+    assert jev_store.read_analyses(tmp_path) == []
+    assert jev_store.read_document(tmp_path/'requests.json')['worker_state']['state'] == 'stopped'
+
+
+@pytest.mark.parametrize('status', [401, 402, 403])
+def test_saved_denied_response_stops_after_crash(tmp_path, status):
+    setup_store(tmp_path)
+    session = Session([status])
+    capture = jev_store.CaptureSession(tmp_path, session)
+    capture.articles = [article()]
+    with pytest.raises(jev.JevStopError):
+        jev.classify_articles(capture.articles, session=capture, api_key='fixture')
+    assert worker.run(tmp_path, once=True, transport=session, api_key='fixture') == 1
+    assert session.calls == 1
+    state = jev_store.read_document(tmp_path/'requests.json')['worker_state']
+    assert state['state'] == 'stopped' and str(status) in state['error']

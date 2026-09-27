@@ -418,10 +418,15 @@ python3 deploy/deploy.py --env-file /path/outside/repo/coffee.env --project coff
 "$HOME/.virtualenvs/coffee-price-prediction/bin/python" -m coffee_service.pipeline news \
   --source-dir data/processed/jev_live --jev-source market --jev-days 200 --jev-batch-size 20
 
-# 이번에 저장한 200일 후보로 미완료 분류를 재개합니다. 성공 분석은 재사용합니다.
-"$HOME/.virtualenvs/coffee-price-prediction/bin/python" -m coffee_service.pipeline news \
-  --source-dir data/processed/jev_live --skip-ingestion --end 2026-09-26 \
-  --jev-candidates data/raw/jev/combined-200d.json --jev-days 200
+# 미완료 연구 선정을 재개합니다. 요청 가능한 시각에 최대 한 번 호출합니다.
+"$HOME/.virtualenvs/coffee-price-prediction/bin/python" -m coffee_service.news_backfill --once
+
+# 검토한 새 기사 목록(JSON 배열: url/title/published_at, 선택 summary)을 추가합니다.
+# --once를 생략하면 Python이 재시도 간격을 지키며 완료까지 실행합니다.
+"$HOME/.virtualenvs/coffee-price-prediction/bin/python" -m coffee_service.news_backfill --input /path/to/articles.json --once
+
+# HTTP 요청 없이 통합 CSV만 재생성합니다.
+"$HOME/.virtualenvs/coffee-price-prediction/bin/python" -m coffee_service.news_unify
 
 # 가격 자료와 완료된 뉴스 분류만 재사용합니다. 외부 API를 호출하지 않습니다.
 "$HOME/.virtualenvs/coffee-price-prediction/bin/python" -m coffee_service.pipeline news \
@@ -430,9 +435,22 @@ python3 deploy/deploy.py --env-file /path/outside/repo/coffee.env --project coff
 
 중요도는 수집된 제목·요약의 공급·작황·날씨·수출·재고·선물·가격 관련 단어 점수이며, 카페·장비·개별 기업 주가 기사는 제외합니다. 전체 시장에서 객관적으로 가장 중요한 기사를 보장하지 않습니다. 정규화 URL과 내용, 제목·요약의 높은 텍스트 유사도로 재게시를 제거하되 숫자·방향이 바뀐 후속 보도는 보존합니다. 표현이 크게 다른 의미상 중복은 남을 수 있습니다. 적합한 기사가 없는 날과 아직 끝나지 않은 뉴욕 날짜는 비워 둡니다.
 
-한 번 선정한 날짜는 같은 선택 정책에서 고정합니다. `--jev-days`는 1~200일, `--jev-limit`는 신규 HTTP 요청 상한(1~200), `--jev-batch-size`는 요청당 기사 수(1~20)입니다. 배치의 공통 state에는 시장만 넣고 각 질문에 해당 기사만 넣어, 다른 날짜의 기사로 판단하지 않게 합니다. 요청 본문이 보수적인 크기 상한을 넘으면 배치를 줄여야 합니다. 429는 현재 실행을 종료하며, 재실행은 최근 미완료 기사부터 이어갑니다. `partial`/`failed` 종료 코드는 1이고 캐시 재사용도 마지막 수집 상태를 유지합니다.
+한 번 선정한 날짜는 같은 선택 정책에서 고정합니다. `--jev-days`는 1~200일, `--jev-limit`는 신규 HTTP 요청 상한(1~200), `--jev-batch-size`는 요청당 기사 수(1~20)입니다. 배치의 공통 state에는 시장만 넣고 각 질문에 해당 기사만 넣어, 다른 날짜의 기사로 판단하지 않게 합니다. 요청 본문이 보수적인 크기 상한을 넘으면 배치를 줄여야 합니다. 통합 저장소는 429·일시 오류 후 60초, HTTP 200 후 300초 대기하고 더 긴 `Retry-After`를 지킵니다. 대기 중에는 파일 잠금을 풀고 다음 요청 직전에 상태·캐시·비용을 재확인합니다. 인증·예산 오류와 비용 미확인 상태에서는 중단합니다. `partial`/`failed` 종료 코드는 1이고 캐시 재사용도 마지막 수집 상태를 유지합니다.
 
-기본 캐시 `data/raw/jev/articles.json`은 분석 버전별 불변 기록입니다. `articles.json.collected.json`은 후보, `articles.json.selection.json`은 일별 선정 이력, `articles.json.status.json`은 실행 상태, `articles.model.json`은 보정 artifact입니다. 전체 본문은 크롤링하지 않습니다. 원본·분류 자료는 Git에서 제외합니다. `/api/v1/news/jev`와 대시보드는 현재 기간에 선정된 분석만 표시합니다.
+과거·현재 Jev 자료는 `data/jev/`의 네 파일에 통합합니다. 실행 코드는 `coffee_service/`에 둡니다.
+
+| 파일 | 저장 내용 |
+|---|---|
+| `news.json` | 수집한 원본 메타데이터 스냅샷, 고정된 선정 목록·출처 |
+| `requests.json` | 보낸 JSON 본문, 요청 ID·시각, 과거 요청 감사 기록·재시도 상태 |
+| `responses.json` | 받은 JSON 본문과 정규화 분석 결과 전체 이력 |
+| `sentiment.csv` | 분석 시도별 결과·원본 선정 날짜·실제 이용 가능 시각·검토 표시 |
+
+과거 실행은 HTTP 요청·응답 본문을 저장하지 않았으므로 해당 기록은 `legacy_*`로 구분합니다. 원문을 복원했다고 표시하지 않습니다. 새 요청부터 실제 본문을 먼저 저장하고 응답의 secret 반향은 가립니다. 성공 응답 저장 후 중단되면 재요청 없이 복구하며, 응답 저장 자체가 없으면 비용 확인 전 중단합니다. `requests.json.worker_state`가 상태 기록이며 중단 원인을 확인하지 않고 강제 재개하지 않습니다. $1 비용 상한은 유지합니다.
+
+CSV의 `selected_for_research=True`는 연구 선정의 최신 분석입니다. `is_latest_analysis`와 `backfill_jobs`로 분석 이력·서비스 선정을 구분합니다. 같은 내용의 대표 날짜는 가장 이른 선정일이고 원본 날짜는 `source_selections`에 남습니다. 서로 다른 선정 정책의 합집합에는 날짜당 최대 3건이 있을 수 있어, 과거 하루 1건 평가에는 `backfill_jobs`의 `validation-2022-2025`를 필터합니다. `available_at`은 실제 확보·분석 완료 이후이며 `research_available_at`은 소급 연구용 시각으로 당시 live 이용 가능성을 증명하지 않습니다.
+
+전체 본문은 크롤링하지 않았으며 원자료·분류 자료는 Git에서 제외합니다. `/api/v1/news/jev`와 대시보드는 기존 서비스 선정만 표시합니다. 보정 모델은 DB의 예측 문서에 함께 저장하므로 별도 모델 JSON을 만들지 않습니다.
 
 `news-residual-v2`는 방향과 반영 강도를 분리합니다.
 

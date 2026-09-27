@@ -8,6 +8,7 @@ import json
 from pathlib import Path
 import re
 import time
+import tempfile
 import xml.etree.ElementTree as ET
 
 import pandas as pd
@@ -210,7 +211,22 @@ def prepare_historical(output_dir: Path) -> list[dict]:
 
 
 if __name__ == "__main__":
-    output_dir = Path(__file__).resolve().parents[1] / "data/raw/jev/validation-2022-2025"
-    with jev._cache_lock(output_dir / "selected.json"):
-        selected = prepare_historical(output_dir)
+    from coffee_service import jev_store
+    name = "validation-2022-2025"
+    with jev._cache_lock(jev_store.DATA / "responses.json"):
+        document = jev_store.read_document(jev_store.DATA / "news.json")
+        selected = document.get("selections", {}).get(name)
+        if selected is None:
+            with tempfile.TemporaryDirectory(prefix="coffee-sources-") as temporary:
+                output_dir = Path(temporary)
+                for source, value in document.get("sources", {}).items():
+                    if source.startswith(name + "/sources/"):
+                        jev._write_records(output_dir / "sources" / Path(source).name, value)
+                try:
+                    selected = prepare_historical(output_dir)
+                    document.setdefault("selections", {})[name] = selected
+                finally:
+                    for path in (output_dir / "sources").glob("*.json"):
+                        document.setdefault("sources", {})[name + "/sources/" + path.name] = json.loads(path.read_text())
+                    jev_store.write_document(jev_store.DATA / "news.json", document)
     print(f"Historical selection ready: {len(selected)} articles", flush=True)

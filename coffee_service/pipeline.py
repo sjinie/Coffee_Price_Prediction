@@ -307,7 +307,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--ingest-news", action="store_true", help="numeric 수집 여부와 독립적으로 뉴스 수집")
     parser.add_argument("--news-availability", choices=("live", "historical"), default="live",
                         help="live는 실제 수집 시각도 제한; historical은 공개/수정 시각 기반 연구 재생")
-    parser.add_argument("--jev-cache", type=Path, default=ROOT / "data/raw/jev/articles.json")
+    parser.add_argument("--jev-cache", type=Path, default=ROOT / "data/jev/responses.json")
     parser.add_argument("--jev-limit", type=int, default=200, help="신규 Jev 요청 상한(재시도 포함, 최대 200)")
     parser.add_argument("--jev-source", choices=("market", "yahoo", "gdelt"), default="market")
     parser.add_argument("--jev-days", type=int, default=200, help="뉴스 수집 기간(달력일, 최대 200)")
@@ -324,7 +324,7 @@ def run_news_pipeline(source_dir, artifact, end, *, cache_path, limit=200,
                       days=200, candidates_path=None, batch_size=20):
     """Collect decisions and store a separately issued, auditable news forecast."""
     from .jev import MODEL, PROMPT_VERSION, collect_and_classify, read_selected_records
-    from .news_residual import fit_residual, predict_residual, save_residual
+    from .news_residual import fit_residual, predict_residual
 
     if not 1 <= limit <= 200:
         raise ValueError("jev-limit must be between 1 and 200")
@@ -343,8 +343,14 @@ def run_news_pipeline(source_dir, artifact, end, *, cache_path, limit=200,
                           "source_count": len(records), "api_attempts": 0,
                           "coverage_complete": False, "errors": []}
                 status_path = Path(cache_path).with_suffix(Path(cache_path).suffix + ".status.json")
-                if status_path.exists():
-                    status.update(json.loads(status_path.read_text(encoding="utf-8")))
+                stored_status = None
+                if Path(cache_path).name == "responses.json":
+                    from coffee_service import jev_store
+                    stored_status = jev_store.read_document(Path(cache_path).parent / "news.json").get("service_status")
+                elif status_path.exists():
+                    stored_status = json.loads(status_path.read_text(encoding="utf-8"))
+                if stored_status:
+                    status.update(stored_status)
                     status["previous_api_attempts"] = status.get("api_attempts", 0)
                     status["api_attempts"] = 0
                     status["cache_replay"] = True
@@ -357,7 +363,7 @@ def run_news_pipeline(source_dir, artifact, end, *, cache_path, limit=200,
                     status["requested_start"], status["requested_end"] = start.isoformat(), end.isoformat()
                     status["missing_days"] = [day for day in status.get("missing_days", [])
                                               if start.isoformat() <= day <= end.isoformat()]
-                if not records and not status_path.exists():
+                if not records and not stored_status:
                     raise ValueError("저장된 Jev 분석 또는 실행 상태가 없습니다.")
             else:
                 records, status = collect_and_classify(cache_path, start, end, limit,
@@ -390,7 +396,7 @@ def run_news_pipeline(source_dir, artifact, end, *, cache_path, limit=200,
                         "selected_analysis_ids": [record["analysis_id"] for record in records],
                         "training_availability": training_availability,
                         "source_status": status, "model": residual, "forecasts": forecasts}
-            save_residual(residual, Path(cache_path).with_suffix(".model.json"))
+            # The full residual model is already retained in the DB forecast document.
             db.store_news_forecast(connection, run_id, document)
             db.upsert_source_status(connection, [{"source": "jev_news", "status": "failed" if failed else "partial" if partial else "success",
                 "last_data_date": max((pd.Timestamp(r["event_at"]).date() for r in records), default=None),

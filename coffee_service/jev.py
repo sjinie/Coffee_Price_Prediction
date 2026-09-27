@@ -339,11 +339,24 @@ def _response_record(article: dict[str, Any], response: Mapping[str, Any], analy
     usage = response.get("usage") or {}
     if not isinstance(usage, Mapping):
         raise JevStopError("Jev response has invalid usage")
-    cost = ((response.get("provider_metadata") or {}).get("gateway") or {}).get("cost")
-    if cost is not None and not isinstance(cost, (str, int, float)):
-        raise JevStopError("Jev response has invalid cost")
-    if isinstance(cost, float) and not math.isfinite(cost):
-        raise JevStopError("Jev response has invalid cost")
+    metadata = response.get("provider_metadata")
+    if metadata is None:
+        metadata = {}
+    if not isinstance(metadata, Mapping):
+        raise JevStopError("Jev response has invalid provider metadata")
+    gateway = metadata.get("gateway")
+    if gateway is None:
+        gateway = {}
+    if not isinstance(gateway, Mapping):
+        raise JevStopError("Jev response has invalid Gateway metadata")
+    cost = gateway.get("cost")
+    if cost is not None:
+        try:
+            valid = not isinstance(cost, bool) and isinstance(cost, (str, int, float)) and math.isfinite(float(cost)) and float(cost) >= 0
+        except (ValueError, OverflowError):
+            valid = False
+        if not valid:
+            raise JevStopError("Jev response has invalid cost")
     try:
         json.dumps(usage)
     except (TypeError, ValueError) as exc:
@@ -389,25 +402,29 @@ def classify_articles(records, *, session=None, api_key: str | None = None) -> l
             payload = response.json()
         except ValueError as exc:
             raise JevStopError("Jev Gateway returned invalid JSON") from exc
-        answers = payload.get("answers") if isinstance(payload, Mapping) else None
-        if not isinstance(answers, Mapping):
-            raise JevStopError("Jev response is missing required answers")
-        analyzed_at, results = _now(), []
-        for index, article in enumerate(articles):
-            prefix = f"article_{index}"
-            if f"{prefix}_price_pressure" not in answers or f"{prefix}_relevance" not in answers:
-                raise JevStopError("Jev batch response is incomplete")
-            item_payload = {"answers": {"price_pressure": answers[f"{prefix}_price_pressure"], "relevance": answers[f"{prefix}_relevance"]}, "usage": payload.get("usage") if index == 0 else {}, "provider_metadata": payload.get("provider_metadata") if index == 0 else {}}
-            result = _response_record(article, item_payload, analyzed_at)
-            result["request_format"], result["batch_size"] = "batch", len(articles)
-            results.append(result)
-        return results
+        return _parse_batch_response(articles, payload, _now())
     except requests.RequestException as exc:
         raise JevTransientError("Jev Gateway connection failed") from exc
     finally:
         if owns_session:
             client.close()
 
+
+
+def _parse_batch_response(articles, payload, analyzed_at):
+    answers = payload.get("answers") if isinstance(payload, Mapping) else None
+    if not isinstance(answers, Mapping):
+        raise JevStopError("Jev response is missing required answers")
+    results = []
+    for index, article in enumerate(articles):
+        prefix = f"article_{index}"
+        if f"{prefix}_price_pressure" not in answers or f"{prefix}_relevance" not in answers:
+            raise JevStopError("Jev batch response is incomplete")
+        item_payload = {"answers": {"price_pressure": answers[f"{prefix}_price_pressure"], "relevance": answers[f"{prefix}_relevance"]}, "usage": payload.get("usage") if index == 0 else {}, "provider_metadata": payload.get("provider_metadata") if index == 0 else {}}
+        result = _response_record(article, item_payload, analyzed_at)
+        result["request_format"], result["batch_size"] = "batch", len(articles)
+        results.append(result)
+    return results
 
 def classify_article(record: Mapping[str, Any], *, session=None, api_key: str | None = None) -> dict[str, Any]:
     return classify_articles([record], session=session, api_key=api_key)[0]
@@ -532,6 +549,9 @@ def _valid_record(record: Mapping[str, Any]) -> dict[str, Any]:
 def read_records(path: Path) -> list[dict[str, Any]]:
     """Read and validate the JSON cache; an invalid cache is never silently used."""
     path = Path(path)
+    if path.name == "responses.json":
+        from coffee_service import jev_store
+        return jev_store.read_analyses(path.parent, latest=True)
     if not path.exists():
         return []
     try:
@@ -618,6 +638,12 @@ def _matching_selection(path: Path, start: date, end: date, *, include_prior: bo
 def read_selected_records(path: Path, start: date, end: date) -> list[dict[str, Any]]:
     """Return successful analyses for the manifest's one-record-per-day selection."""
     cached = read_records(path)
+    if Path(path).name == "responses.json":
+        from coffee_service import jev_store, news_backfill
+        document = jev_store.read_document(Path(path).parent / "news.json")
+        wanted = [row for row in document.get("selections", {}).get("service", [])
+                  if start.isoformat() <= row["selection_date"] <= end.isoformat()]
+        return news_backfill.results_for(wanted, {news_backfill.key(row): row for row in cached})
     selected = _matching_selection(Path(path), start, end)
     if selected is None:
         wanted, _ = select_daily_articles(cached, start, end)
@@ -654,6 +680,19 @@ def _write_status(path: Path, status: Mapping[str, Any]) -> None:
 @contextmanager
 def _cache_lock(path: Path):
     """Serialize whole cache runs so two processes cannot spend the same call budget."""
+    if path.name == "responses.json":
+        # Lock the stable directory inode: atomic JSON replacements do not replace this lock.
+        path.parent.mkdir(parents=True, exist_ok=True)
+        descriptor = os.open(path.parent, os.O_RDONLY)
+        try:
+            try:
+                fcntl.flock(descriptor, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            except BlockingIOError as exc:
+                raise JevError("Jev cache is already being collected") from exc
+            yield
+        finally:
+            os.close(descriptor)
+        return
     lock_path = path.with_suffix(path.suffix + ".lock")
     lock_path.parent.mkdir(parents=True, exist_ok=True)
     with lock_path.open("a+") as lock:
@@ -681,6 +720,10 @@ def collect_and_classify(path: Path, start: date, end: date, limit: int = 200, *
     if source not in {"market", "yahoo", "gdelt"}:
         raise ValueError("source must be market, yahoo, or gdelt")
     path = Path(path)
+    if path.name == "responses.json":
+        from coffee_service.news_backfill import collect
+        return collect(path.parent, start, end, limit=limit, source=source,
+                       candidates_path=candidates_path, session=session, api_key=api_key, batch_size=batch_size)
     with _cache_lock(path):
         cached = read_records(path)
         status: dict[str, Any] = {
