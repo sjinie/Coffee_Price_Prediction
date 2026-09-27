@@ -156,6 +156,7 @@ def test_pipeline_records_optional_failure_without_blocking_serving(tmp_path, mo
     assert result["status"] == "success"
     assert completed[0] == statuses
     failed_sources = "news, weather_br_sul_minas" if news_failure else "weather_br_sul_minas"
+    assert result["source_failures"] == failed_sources.split(", ")
     assert completed[1] == ("success", f"가격 3행, 예측 2행 UPSERT | 보조 수집 실패: {failed_sources}")
     if news_failure:
         assert completed[0][-1]["source"] == "news"

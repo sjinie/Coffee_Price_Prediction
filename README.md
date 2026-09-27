@@ -211,38 +211,44 @@ export COFFEE_TEST_DATABASE_URL="postgresql://localhost/coffee_price_test"
 
 ## Docker Compose로 로컬 실행
 
-Docker Engine과 Docker Compose가 필요합니다. 명령은 사용자가 활성화한 Docker 엔진을 사용합니다. 검증에서는 `docker --context colima-coffee-e2e`와 Compose project `coffee-docker-e2e`를 사용했지만, 둘은 실행 전제 조건이 아닙니다.
+`pipeline`(수집·분석)과 `api`(FastAPI)는 별도 컨테이너입니다. `docker compose up`은 기존 네 서비스(`postgres`, `api`, `web`, `pipeline`)를 시작합니다. API는 DB를 조회하고, pipeline은 시작할 때 한 번 갱신한 뒤 실행 중에는 갱신 종료로부터 7일마다 다시 실행합니다. 여러 주 꺼져 있어도 재시작 시 밀린 기간을 한 번의 작업으로 보충합니다.
 
-새 clone에는 운영 Parquet가 포함되지 않습니다. `data/processed/2014-07-01_2025-12-31/`의 검증된 별도 제공본을 준비합니다. 현재 `fab81c0`에는 `model_artifacts/production_dlinear_60.pt`가 Git에 추적되어 있지만 애플리케이션 이미지에는 포함되지 않으므로 실행 호스트에서 별도로 마운트해야 합니다. 저장 자료의 기준일은 2025-12-31이며, 이번 절차는 외부 API를 다시 호출하지 않습니다.
-
-실제 `.env`는 건드리지 않고 Docker 전용 파일을 만듭니다. `.env.docker`의 `POSTGRES_PASSWORD`에는 로컬 비밀번호를 직접 설정합니다. 예시 값과 비밀번호를 저장소에 기록하지 않습니다.
+모델 artifact와 수치 원본 디렉터리를 준비합니다. 기본 경로는 `model_artifacts/production_dlinear_60.pt`와 `data/processed/2014-07-01_2025-12-31/`이며, 후자는 검증된 Parquet seed 또는 빈 디렉터리일 수 있습니다. 빈 상태의 수치 수집은 설정의 2014-07-01부터 시작하므로 더 오래 걸립니다. `data/jev/`에는 기존 네 파일을 준비하거나 새 수집용 빈 디렉터리를 둡니다. 기존 `.env`를 바꾸지 않고 Docker 전용 설정을 사용합니다.
 
 ```sh
 test -e .env.docker || cp .env.example .env.docker
-# .env.docker에서 POSTGRES_PASSWORD를 로컬 값으로 설정
-
+# .env.docker의 POSTGRES_PASSWORD, FRED_API_KEY, AI_GATEWAY_API_KEY를 설정합니다.
+# PIPELINE_SOURCE_DIR, PIPELINE_ARTIFACT, PIPELINE_JEV_DIR의 실제 경로도 확인합니다.
 docker compose --env-file .env.docker up --build -d --wait
-docker compose --env-file .env.docker run --rm --build pipeline backfill --skip-ingestion --end 2025-12-31
-docker compose --env-file .env.docker run --rm --build pipeline incremental --skip-ingestion --end 2025-12-31
+docker compose --env-file .env.docker logs -f pipeline
 ```
 
-같은 `incremental` 명령을 반복해도 됩니다. `daily` 별칭은 제공하지 않습니다. 웹은 `http://localhost:8080`, 호스트 API는 `http://localhost:8001`에서 확인하며, `WEB_PORT`와 `API_PORT`로 바꿀 수 있습니다.
+`--wait`는 컨테이너 준비 상태를 기다리며 초기 데이터 갱신 완료를 보장하지 않습니다. 웹은 `http://localhost:8080`, API는 `http://localhost:8001`에서 확인합니다. 수집 중에도 FastAPI는 기존 DB 결과를 제공합니다. 실패한 초기 수집에서 결과가 아직 없다면 새 결과를 만들어내지 않습니다.
 
-Compose는 PostgreSQL healthcheck 뒤 API가 스키마를 생성하고 Uvicorn을 실행하며, Nginx 웹 컨테이너는 런타임 `API_UPSTREAM=http://api:8000`으로 API를 프록시합니다. DB 연결 변수와 `POSTGRES_PASSWORD`는 컨테이너 런타임에만 전달되고 호스트 `DATABASE_URL`은 전달하지 않습니다. FRED 키는 라이브 수집을 실행할 때만 필요합니다.
+- 수치 자료: Yahoo 가격·환율, FRED/ALFRED, NASA 기후, CFTC를 원본별 마지막 저장일과 기존 7일 겹침 규칙으로 갱신하고 고정된 가격 모델로 추론·DB UPSERT합니다. 기존 모델을 재학습하거나 교체하지 않습니다.
+- 뉴스: 완료된 뉴욕 날짜까지만, 마지막으로 조회한 날짜 다음부터 최대 7일 구간으로 수집합니다. RSS가 한도에 걸리면 일별까지 나눠 조회하고 일별 한도도 남으면 제한을 기록합니다. 조회 범위는 모든 기사 확보를 보장하지 않습니다. 기존 선정과 중복은 보존·재사용하며 새 날짜는 하루 최대 2건을 선정합니다.
+- Jev: 새 선정의 미완료 분석만 요청하고 네 파일에 누적합니다. HTTP 429/일시 오류는 60초, 성공은 300초 이후에 요청하며 더 긴 Retry-After를 지킵니다. 기존 $1 한도·인증/비용 중단 정책은 유지합니다. 키가 없으면 뉴스 수집은 보존하고 분류를 보류합니다. 신규 CSV 자료의 앙상블 채택·재학습·뉴스 예측 snapshot 반영은 별도 평가 과정입니다.
+- 실패·종료: 숫자 수집 실패가 뉴스 보존을 막지 않습니다. 수치 수집이나 뉴스 조회가 실패하면 1시간 뒤 다시 시도하며, 서버 재시작 때에도 누락 구간을 보충합니다. 대기 중 종료 신호에 응답하고, 진행 중 요청은 기존 저장·복구 규칙을 따릅니다. 상태는 `/data/jev/requests.json`의 `refresh_state`, 뉴스 조회 범위는 `news.json.selection_metadata.incremental`에 남깁니다.
 
-파이프라인은 Parquet와 artifact를 읽기 전용으로 마운트하고, PostgreSQL과 작업 데이터는 named volume에 보관합니다. 작업 볼륨에 없는 파일만 원본에서 임시 파일을 거쳐 복사합니다. 따라서 빈·부분 원본은 다음 실행에서 보완할 수 있으며, 같은 이름의 원본 수정본은 기존 작업 파일을 자동으로 덮어쓰지 않습니다. 학습과 model artifact 변경은 이 실행에 포함하지 않습니다.
-
-중지 후에도 volume을 유지하려면 아래 명령을 사용합니다. `down -v`는 DB와 작업 데이터를 삭제하므로 보존하려면 사용하지 않습니다.
+원본은 read-only로 마운트하고 누적 작업 자료는 `pipeline-data` volume의 `/data/sources`, `/data/jev`에 저장합니다. Jev seed 네 파일은 최초에 함께 복사하며 기존 작업 archive를 덮어쓰지 않습니다. DB는 `postgres-data`에 보관합니다. 호스트의 Jev seed는 컨테이너 실행으로 갱신되지 않습니다. `down -v`는 이 작업 자료를 삭제하므로 일반 중지에는 사용하지 않습니다.
 
 ```sh
-docker compose --env-file .env.docker restart api web
 docker compose --env-file .env.docker down
 docker compose --env-file .env.docker up -d --wait
+
+# 전체 자동 갱신을 한 번만 수동 실행하려면 먼저 상시 worker를 멈춥니다.
+docker compose --env-file .env.docker stop pipeline
+docker compose --env-file .env.docker run --rm pipeline refresh --once
+
+# 외부 수집 없는 기존 자료 재처리는 별도 명령입니다.
+docker compose --env-file .env.docker run --rm pipeline backfill --skip-ingestion --end 2025-12-31
 ```
 
-`PIPELINE_SOURCE_DIR`·`PIPELINE_ARTIFACT`로 호스트 입력 경로를 지정합니다. API image에는 pandas·PyTorch가 없고, pipeline image만 CPU PyTorch와 수집·추론 의존성을 포함합니다. Node 빌드 결과만 Nginx image에 복사합니다. `.env*`, Notebook, 데이터, artifact, 로컬 의존성은 build context에서 제외합니다.
+Native에서는 기존 FastAPI 실행과 별도로 `"$HOME/.virtualenvs/coffee-price-prediction/bin/python" -m coffee_service.pipeline refresh`를 실행합니다(`--once`는 한 주기만). CLI 수집은 같은 원본 디렉터리에서 동시 실행하지 못하도록 잠급니다. FastAPI에 수집 의존성이나 스케줄러를 넣지 않습니다.
 
-참고: [Compose 시작 순서](https://docs.docker.com/compose/how-tos/startup-order/), [multi-stage build](https://docs.docker.com/build/building/multi-stage/).
+API image에는 pandas·PyTorch가 없고 pipeline image에만 수집·추론 의존성이 있습니다. secret은 런타임에만 주입하며 `.env*`, 운영 데이터, artifact, Notebook은 build context에서 제외합니다. 이 동작은 현재 소스로 build하는 `compose.yaml`의 계약입니다. `compose.deploy.yaml`의 과거 digest 고정 GHCR 이미지는 새 코드를 포함하지 않으며 새 이미지 게시·검증 전까지 이전 배포 제한을 유지합니다.
+
+참고: [Compose 시작 순서](https://docs.docker.com/compose/how-tos/startup-order/), [restart 정책](https://docs.docker.com/reference/compose-file/services/#restart).
 
 <a id="news-intelligence"></a>
 

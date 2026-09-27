@@ -54,7 +54,14 @@ def _rss_items(xml: bytes, collected_at: str) -> list[dict]:
 
 def _fetch_rss(session: requests.Session, month: date, query: str, collected_at: str) -> list[dict]:
     next_month = date(month.year + (month.month == 12), month.month % 12 + 1, 1)
-    params = {"q": f"{query} after:{month - timedelta(days=1)} before:{next_month + timedelta(days=1)}",
+    return _fetch_rss_range(session, month, next_month - timedelta(days=1), query, collected_at)
+
+
+def _fetch_rss_range(session: requests.Session, start: date, end: date, query: str, collected_at: str) -> list[dict]:
+    """Fetch a NY-date window with a UTC publication-date pad at both edges."""
+    if start > end:
+        raise ValueError("RSS start must not be after end")
+    params = {"q": f"{query} after:{start - timedelta(days=1)} before:{end + timedelta(days=2)}",
               "hl": "en-US", "gl": "US", "ceid": "US:en"}
     for attempt in range(3):
         try:

@@ -1,5 +1,13 @@
 # 작업 상태
 
+## 2026-09-27 — 분리된 pipeline의 서버 시작·주간 갱신
+
+- 사용자 요청에 따라 기존 네 컨테이너와 FastAPI/수집·분석 경계를 유지했다. `compose.yaml`의 수동 pipeline profile을 기본 `refresh` 실행으로 바꾸고, 시작 시 한 번 처리한 뒤 완료로부터 7일마다 다시 갱신한다. 종료 중 놓친 스케줄 횟수를 재생하지 않고 체크포인트 이후 기간을 보충한다. 기존 `jev` 30분 Codex 자동화 삭제 API는 `not_found`를 반환했으며 이미 존재하지 않음을 확인했다. 대체 Codex 자동화는 만들지 않았다.
+- 수치 자료는 기존 모든 소스 그룹·원본별 7일 overlap·고정 모델 추론·DB UPSERT를 재사용한다. 뉴스는 원본·선정·조회 범위를 `news.json`에 누적하고 미분류만 기존 Jev worker로 보낸다. 요청·응답 원문/비용/대기 상태는 기존 JSON에 보존하고 CSV를 재생성한다. 새 뉴스는 연구용 CSV이며 새 앙상블 학습·채택이나 기존 뉴스 예측 snapshot 자동 변경은 포함하지 않는다.
+- `/data` named volume에 수치 자료와 네 Jev 파일을 보관한다. read-only Jev seed는 완전한 네 파일을 함께 복사하고 기존 archive를 덮어쓰지 않는다. numeric CLI와 seed가 같은 디렉터리 잠금을 공유하며 뉴스 조회·Jev 대기에는 수치 잠금을 해제한다. 보조 소스를 포함한 수치·뉴스 조회 실패는 1시간 뒤 재시도하고 정상 주기는 7일이다. 동시 뉴스 수집의 조회 완료일 회귀와 동일 완료일의 미완료 실패 기록 유실을 방지했다. 수동 news CLI도 numeric 작업과 source snapshot 읽기에만 잠금을 건다. FastAPI에는 ML 의존성·스케줄러를 추가하지 않았다. 키가 없으면 수집한 뉴스를 보존하고 분류를 보류하며 기존 Gateway $1 예산을 변경하지 않는다.
+- 검증: **118 passed, 4 skipped**(테스트 DB 미설정), 기존 deprecation 2건. 독립 리뷰의 잠금 범위·실패 재시도·동시 체크포인트 지적을 수정했고 재검토에서 추가 결함은 없었다. Compose 5.5.1에서 fixture 환경으로 config를 해석해 기존 네 서비스·별도 API/worker build·자동 refresh 명령·의존 healthcheck·read-only seed와 영구 volume을 확인했다. 275일 미운영·조회 실패 후 재개·동시 수집·mock HTTP 원문→CSV→재시작 재사용·종료 신호·잠금 충돌을 검증했다. 실제 데이터/DB/LLM에 새 요청을 보내거나 server worker를 현재 실행하지 않았다. 활성 `desktop-linux` Docker 엔진 소켓이 없어 컨테이너 build/start는 미검증이다. 기존 Starlette/httpx·AnyIO deprecation 안내는 숨기지 않았다.
+- 공식 근거 확인(2026-09-27): [Compose startup](https://docs.docker.com/compose/how-tos/startup-order/)·[restart](https://docs.docker.com/reference/compose-file/services/#restart), Python 3.12 표준 라이브러리. 설치 FastAPI 0.141.1/Uvicorn 0.53.0/requests 2.34.2/pandas 2.3.3/yfinance 1.7.0을 유지했고 의존성 추가는 없다. 기존 digest 고정 GHCR 배포 경로는 새 코드를 포함하지 않으며 push·게시·VM 변경은 하지 않았다.
+
 ## 2026-09-27 — Jev 네 파일 통합·삭제·품질 및 이용 시점 점검
 
 - 사용자 승인 범위는 Jev 자료 통합과 재생성 가능한 캐시·빌드·임시 산출물 및 참조 없는 중복 파일이다. 저장소 코드·설정·문서·노트북 참조 점검에서 그 밖의 삭제 가능한 추적 파일은 확인하지 못해 보존했다. 옛 Jev 경로의 394개와 `.pytest_cache`, 지정 Python `__pycache__`, `frontend/dist`의 63개 파일(총 457개·27,751,531바이트)을 삭제했다. 개별 해시·미추적 여부·symlink 부재·백필 프로세스 부재를 확인했고 삭제 전 임시 복구본을 `/tmp/coffee-jev-before-cleanup.tar.gz`에 만들었다. `node_modules`, `.agents`, `.codex`, lockfile, `.env`, 기존 연구/old 디렉터리·가격 모델은 이 정리 대상에 넣지 않았다.

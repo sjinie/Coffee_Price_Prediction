@@ -190,3 +190,12 @@ API·Vue는 최종 가격·수익률·방향과 별도 상승 확률, 뉴스 영
 - 평가: 일별 origin의 앞 60% 뒤에서 expanding walk-forward를 수행하고 각 평가 origin보다 앞서 target이 확정된 행만 학습한다. 학습만 비중첩 표본을 선택하고 평가는 같은 일별 origin으로 baseline과 비교한다. RMSE/MAE/3방향 일치율을 기록하며 Persistence의 보합 예측으로 방향 지표를 과장하지 않는다. 평균 제곱오차 개선의 circular-block bootstrap은 block=max(h,5), 1,000회, seed42이며 최소 5개 블록 미만이면 개선 판단을 보류한다. 95% 구간 하한>0일 때만 연구 재평가에서 개선 근거가 있다고 표시한다. 이미 확인한 기간이며 과거 기사도 현재 분류했으므로 `retrospective_reanalysis`로 명시하고 미사용 Test·실제 live 성과로 부르지 않는다.
 - 상태: `experimental`, `insufficient_data`, `unavailable`, `no_news`. 데이터가 부족하면 보정가 null이며 기존 가격을 조작하지 않는다. 모델 hash·학습 cutoff·기사 ID·선택 설정·평가 지표를 snapshot에 기록한다. artifact가 발행 시각보다 나중에 학습됐거나 가격이 7일보다 오래되면 보정을 차단한다.
 - 운영: key는 pipeline에만 주입한다. 최초 범위 최대 90일/200요청, 캐시 단위 배타 잠금, 원자 저장, 429 즉시 중단/Retry-After 기록, 연속 네트워크·서버 오류 3회 중단을 적용한다. 일반 CI는 외부 API 대신 fixture를 사용한다.
+
+
+## 2026-09-27 — 간헐 운영 서버의 갱신 경계
+
+이 절은 앞선 수동 jobs profile·스케줄링 미구현 설명을 대체하는 현재 소스 계약이다. `compose.yaml`의 `pipeline`은 기존 수집·추론 image로 `pipeline refresh`를 실행하고, `api`는 기존 경량 FastAPI image를 유지한다. 두 컨테이너를 합치거나 FastAPI lifespan에 수집 작업을 넣지 않는다. API health 이후 worker가 시작되지만 API는 데이터 갱신 완료를 기다리지 않는다.
+
+프로세스 시작 → 소스별 저장일 이후 수치 보충·고정 모델 추론·DB 적재 → 뉴스 조회 날짜 이후 기간별 보충 → 미분류 Jev 요청·네 파일 저장 → 7일 대기 순서다. 오프라인 기간의 주간 실행 횟수를 재생하지 않고 날짜 범위를 합쳐 처리한다. refresh 상태는 `requests.json.refresh_state`, 뉴스 조회 완료 범위와 제한은 `news.json.selection_metadata.incremental`에 보관한다. 수치 source directory 잠금으로 CLI 수치 작업 충돌을 막으며 뉴스 조회·Jev 대기 중에는 이 잠금을 해제한다. 보조 소스를 포함한 수치 수집 또는 뉴스 조회 실패는 1시간 뒤 재시도한다. 뉴스 조회 체크포인트는 동시 실행에도 뒤로 돌아가지 않는다. Jev 원문 저장·재시도·비용 중단은 기존 archive 코드가 담당한다.
+
+`/seed`와 `/seed-jev`는 읽기 전용 초기 자료이며 `/data/sources`와 `/data/jev`가 영구 작업 자료다. Jev 네 파일은 최초에 원자적으로 복사하고 기존 archive를 재시작 때 덮어쓰지 않는다. 최신 뉴스 CSV를 서빙 앙상블에 자동 채택하지 않는다. 소스별 API 범위·응답 상한 때문에 조회 성공과 전 세계 뉴스 완전 확보는 다르다. 이 구현의 컨테이너 실동작·GHCR/VM 검증 범위는 STATUS를 따른다.

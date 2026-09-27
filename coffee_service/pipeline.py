@@ -280,6 +280,7 @@ def run_pipeline(
             return {
                 "run_id": run_id, "status": "success",
                 "price_rows": price_rows, "prediction_rows": prediction_rows,
+                "source_failures": sorted(failures),
             }
         except Exception as exc:
             connection.rollback()
@@ -293,7 +294,8 @@ def build_parser() -> argparse.ArgumentParser:
     period = config["periods"]["backfill"]
     default_source_dir = ROOT / "data" / "processed" / f"{period['start']}_{period['end']}"
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("mode", choices=["backfill", "incremental", "news"])
+    parser.add_argument("mode", choices=["backfill", "incremental", "news", "refresh"])
+    parser.add_argument("--once", action="store_true", help="refresh: run one catch-up cycle and exit")
     parser.add_argument("--start", type=date.fromisoformat)
     parser.add_argument("--end", type=date.fromisoformat)
     parser.add_argument("--source-dir", type=Path, default=default_source_dir)
@@ -374,7 +376,9 @@ def run_news_pipeline(source_dir, artifact, end, *, cache_path, limit=200,
             # Analysis survives numeric-source/model failure and can be reused without a new API call.
             connection.commit()
             as_of = pd.Timestamp.now(tz="UTC")
-            sources = sources_as_of(Path(source_dir), end)
+            from .refresh import source_lock
+            with source_lock(source_dir):
+                sources = sources_as_of(Path(source_dir), end)
             validate_macro_freshness(sources, end)
             dataset = assemble_features(sources)
             base_bundle = load_bundle(Path(artifact))
@@ -423,17 +427,40 @@ def main(argv=None) -> int:
     end = args.end or (date.fromisoformat(period["end"]) if args.mode == "backfill" else date.today())
     if start > end:
         parser.error("start는 end보다 늦을 수 없습니다.")
+    from . import refresh
+    if args.mode == "refresh":
+        if args.end or args.skip_ingestion or args.skip_news_collection:
+            parser.error("refresh uses the last completed NY date and collects all sources")
+        if args.jev_cache.name != "responses.json":
+            parser.error("refresh requires the unified responses.json archive")
+        return refresh.serve(args.source_dir, args.artifact, args.jev_cache.parent, start,
+                             once=args.once, database_url=args.database_url)
+    if args.once:
+        parser.error("--once is only valid with refresh")
     try:
-        if args.mode == "news":
-            if not args.skip_ingestion:
+        result = _run_command(args, start, end)
+    except Exception as exc:
+        print(f"실패: {type(exc).__name__}", flush=True)
+        return 1
+    label = {"success": "완료", "partial": "부분 완료", "failed": "실패"}.get(result["status"], result["status"])
+    print(f"{label}: {result['run_id']} | 가격 {result['price_rows']:,}행 | 예측 {result['prediction_rows']:,}행", flush=True)
+    return 0 if result["status"] == "success" else 1
+
+
+def _run_command(args, start, end):
+    from .refresh import source_lock
+    if args.mode == "news":
+        if not args.skip_ingestion:
+            with source_lock(args.source_dir):
                 run_pipeline("incremental", args.source_dir, args.artifact, start, end,
                              selected_groups=("yahoo", "fred"), database_url=args.database_url)
-            result = run_news_pipeline(args.source_dir, args.artifact, end,
-                cache_path=args.jev_cache, limit=args.jev_limit, database_url=args.database_url,
-                skip_collection=args.skip_news_collection,
-                training_availability=args.jev_training_availability, source=args.jev_source,
-                days=args.jev_days, candidates_path=args.jev_candidates, batch_size=args.jev_batch_size)
-        else:
+        result = run_news_pipeline(args.source_dir, args.artifact, end,
+            cache_path=args.jev_cache, limit=args.jev_limit, database_url=args.database_url,
+            skip_collection=args.skip_news_collection,
+            training_availability=args.jev_training_availability, source=args.jev_source,
+            days=args.jev_days, candidates_path=args.jev_candidates, batch_size=args.jev_batch_size)
+    else:
+        with source_lock(args.source_dir):
             result = run_pipeline(
                 args.mode, args.source_dir, args.artifact, start, end,
                 selected_groups=args.sources, selected_regions=args.regions,
@@ -441,16 +468,7 @@ def main(argv=None) -> int:
                 news_path=args.news_path, intelligence_artifact=args.intelligence_artifact,
                 ingest_news_source=args.ingest_news, news_availability=args.news_availability,
             )
-    except Exception as exc:
-        print(f"실패: {type(exc).__name__}", flush=True)
-        return 1
-    label = {"success": "완료", "partial": "부분 완료", "failed": "실패"}.get(result["status"], result["status"])
-    print(
-        f"{label}: {result['run_id']} | 가격 {result['price_rows']:,}행 | "
-        f"예측 {result['prediction_rows']:,}행",
-        flush=True,
-    )
-    return 0 if result["status"] == "success" else 1
+    return result
 
 
 if __name__ == "__main__":
