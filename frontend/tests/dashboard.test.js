@@ -4,9 +4,29 @@ import assert from 'node:assert/strict'
 import { computed, ref } from 'vue'
 
 // 실제 SFC의 조회·계산 로직을 실행한다. 화면 배치는 브라우저에서 별도로 확인한다.
-const source = readFileSync(new URL('../src/App.vue', import.meta.url), 'utf8')
+const componentSource = readFileSync(new URL('../src/App.vue', import.meta.url), 'utf8')
+const source = componentSource
   .split('<script setup>')[1].split('</script>')[0]
   .replace(/import .* from 'vue'\n/, '')
+
+test('뉴스 확률 신호·반영 강도·실제 가격 보정률을 구분한다', () => {
+  const app = new Function('computed', 'onMounted', 'ref', `${source}
+    return { formatWeight, formatWeightInterval, priceCorrectionPercent, articlePressure, newsEvidenceLabel }
+  `)(computed, () => {}, ref)
+  assert.equal(app.formatWeight(.2), '0.200')
+  for (const missing of [null, undefined, false, '0.2', -1, 1.1, NaN]) assert.equal(app.formatWeight(missing), '-')
+  assert.equal(app.formatWeightInterval([0, .8]), '0.000 ~ 0.800')
+  assert.equal(app.formatWeightInterval([.8, .1]), '-')
+  assert.equal(app.priceCorrectionPercent({ adjusted_price: 101, news_correction: Math.log(1.01), news_weight: .2 }), '+1%')
+  assert.equal(app.priceCorrectionPercent({ adjusted_price: null, news_correction: null }), '-')
+  const strong = { p_bullish: .9, p_bearish: .05, relevance: 1 }
+  const weak = { p_bullish: .45, p_bearish: .4, relevance: 1 }
+  assert.ok(app.articlePressure(strong) > app.articlePressure(weak))
+  assert.ok(Math.abs(app.articlePressure(strong) - .85) < 1e-12)
+  assert.ok(app.articlePressure({ ...strong, p_bullish: .05, p_bearish: .9 }) < 0)
+  assert.equal(app.articlePressure({ p_bullish: null }), null)
+  assert.match(app.newsEvidenceLabel('not_demonstrated'), /미확인/)
+})
 
 test('조회 → 실패 → 빈 응답 복구와 지평 선택을 보존한다', async () => {
   let mode = 'data'
@@ -23,12 +43,12 @@ test('조회 → 실패 → 빈 응답 복구와 지평 선택을 보존한다',
     return { ok: true, json: async () => mode === 'empty' ? (path.includes('/pipeline') ? null : []) : payload }
   }
   const app = new Function('computed', 'onMounted', 'ref', 'fetch', `${source}
-    return { loadData, retry, refreshButton, loading, error, prices, selectedHorizon, selectedPredictions, futurePredictions, formatNumber, pricePoints }
+    return { loadData, retry, refreshButton, loading, error, prices, selectedHorizon, selectedPredictions, futurePredictions, formatNumber, historicalComparison }
   `)(computed, () => {}, ref, fetch)
   const pending = app.loadData()
   assert.equal(app.loading.value, true)
   await pending
-  assert.equal(requests.length, 5)
+  assert.equal(requests.length, 6)
   assert.equal(app.loading.value, false)
   assert.equal(app.futurePredictions.value.length, 1)
   assert.equal(app.futurePredictions.value[0].origin_date, '2025-12-31')
@@ -45,9 +65,42 @@ test('조회 → 실패 → 빈 응답 복구와 지평 선택을 보존한다',
   assert.equal(focused, true)
   assert.equal(app.error.value, '')
   assert.equal(app.prices.value.length, 0)
-  assert.equal(app.pricePoints.value, '')
+  assert.equal(app.historicalComparison.value.length, 0)
   assert.equal(app.futurePredictions.value.length, 0)
-  assert.equal(app.formatNumber(null), '—')
+  assert.equal(app.formatNumber(null), '-')
+})
+
+test('목표일 달력 위에만 현재 모델의 과거 예측을 그리고 결측 구간을 연결하지 않는다', () => {
+  const app = new Function('computed', 'onMounted', 'ref', `${source}
+    return { prices, predictions, models, selectedHorizon, historicalComparison, comparisonPredictedPath, comparisonActualPath, latestHistoricalForecast, comparisonForecastCount }
+  `)(computed, () => {}, ref)
+  app.models.value = [{ model_id: 'current-60', horizons: [60] }]
+  app.prices.value = [
+    { date: '2025-01-05', close: 103 },
+    { date: '2025-01-01', close: 100 },
+    { date: '2025-01-10', close: 110 },
+    { date: '2025-01-03', close: 105 },
+  ]
+  app.predictions.value = [
+    { model_id: 'old-60', horizon: 60, origin_date: '2025-01-01', target_date: '2025-01-03', predicted_price: 999 },
+    { model_id: 'current-60', horizon: 60, origin_date: '2025-01-10', target_date: '2025-01-10', predicted_price: 104 },
+    { model_id: 'current-60', horizon: 60, origin_date: '2025-01-01', target_date: '2025-01-03', predicted_price: 104 },
+    { model_id: 'current-60', horizon: 60, origin_date: '2025-01-03', target_date: '2025-01-10', predicted_price: 108 },
+    { model_id: 'current-60', horizon: 60, origin_date: '2025-01-03', target_date: '2025-01-12', predicted_price: 112 },
+  ]
+  assert.deepEqual(app.historicalComparison.value.map(item => item.forecast?.predicted_price ?? null), [null, 104, null, 108])
+  assert.equal((app.comparisonPredictedPath.value.match(/M/g) || []).length, 2)
+  assert.doesNotMatch(app.comparisonPredictedPath.value, /NaN|Infinity/)
+  assert.match(app.comparisonActualPath.value, /^M/)
+  assert.equal(app.latestHistoricalForecast.value.origin_date, '2025-01-03')
+  app.selectedHorizon.value = 5
+  assert.equal(app.comparisonPredictedPath.value, '')
+  assert.equal(app.latestHistoricalForecast.value, null)
+  app.selectedHorizon.value = 60
+  app.prices.value = [...app.prices.value.filter(item => item.date !== '2025-01-10'), { date: '2025-01-10', close: null }]
+  assert.equal(app.historicalComparison.value.at(-1).forecast, null)
+  assert.equal(app.comparisonForecastCount.value, 1)
+  assert.equal(app.latestHistoricalForecast.value, null)
 })
 
 test('방향은 예측 기준일 가격과 비교하고 결측·미성숙은 평가에서 제외한다', () => {
@@ -97,4 +150,69 @@ test('신호는 확률 결측을 꾸미지 않고 보합·실험 상태·뉴스 
     { horizon: 5, origin_date: '2025-12-31', target_date: '2026-01-08', actual_price: null },
   ]
   assert.deepEqual(app.futurePredictions.value.map(item => item.model_id), [undefined, 'current-60'])
+})
+
+test('뉴스 장애는 가격 조회를 막지 않고 별도로 표시한다', async () => {
+  const fetch = async path => path.includes('/news/jev')
+    ? { ok: false, status: 503 }
+    : { ok: true, json: async () => path.includes('/prices') ? [{ date: '2026-09-25', close: 300 }] : [] }
+  const app = new Function('computed', 'onMounted', 'ref', 'fetch', `${source}
+    return { loadData, error, newsError, prices, newsForecastLabel, newsArticles }
+  `)(computed, () => {}, ref, fetch)
+  await app.loadData()
+  assert.equal(app.error.value, '')
+  assert.equal(app.prices.value[0].close, 300)
+  assert.match(app.newsError.value, /뉴스 조회에 실패/)
+  assert.deepEqual(app.newsArticles.value, [])
+  assert.equal(app.newsForecastLabel('insufficient_data'), '학습 데이터 부족')
+})
+
+test('뉴스 응답을 기다리는 동안에도 가격 로딩은 끝난다', async () => {
+  const fetch = path => path.includes('/news/jev') ? new Promise(() => {})
+    : Promise.resolve({ ok: true, json: async () => [] })
+  const app = new Function('computed', 'onMounted', 'ref', 'fetch', `${source}
+    return { loadData, loading }
+  `)(computed, () => {}, ref, fetch)
+  await app.loadData()
+  assert.equal(app.loading.value, false)
+})
+
+test('Jev 보정은 legacy 신호와 분리하며 0 계수를 숨기지 않는다', () => {
+  const app = new Function('computed', 'onMounted', 'ref', `${source}
+    return { newsView, hasLegacyDirection, hasLegacyNews, zeroNewsWeights, noExperimentalChange, formatCoefficient }
+  `)(computed, () => {}, ref)
+  const emptyLegacy = {
+    probability_up: null,
+    final_direction: null,
+    news_impact_score: null,
+    news_article_count: null,
+    news_updated_at: null,
+  }
+
+  assert.equal(app.hasLegacyDirection(emptyLegacy), false)
+  assert.equal(app.hasLegacyNews(emptyLegacy), false)
+  assert.equal(app.hasLegacyDirection({ probability_up: 0, final_direction: null }), true)
+  assert.equal(app.hasLegacyNews({ news_article_count: 0 }), true)
+  assert.match(componentSource, /별도 상승 확률·방향 분류 결과 없음/)
+  assert.match(componentSource, /href="#jev-title"/)
+
+  app.newsView.value = { forecast: { model: { status: 'experimental', lags: [0, 1, 3, 5], coefficients: [0, 0, 0, 0] } } }
+  assert.equal(app.zeroNewsWeights.value, true)
+  assert.equal(app.noExperimentalChange({ status: 'experimental', news_correction: 0 }), true)
+  assert.equal(app.noExperimentalChange({ status: 'insufficient_data', news_correction: 0 }), false)
+  assert.equal(app.noExperimentalChange({ status: 'experimental', news_correction: null }), false)
+  assert.equal(app.noExperimentalChange({ status: 'experimental', news_correction: false }), false)
+  assert.equal(app.formatCoefficient(0.00001), '0.00001')
+
+  app.newsView.value = { forecast: { model: { status: 'experimental', lags: [0, 1], coefficients: [0, 0.01] } } }
+  assert.equal(app.zeroNewsWeights.value, false)
+  app.newsView.value = { forecast: { model: { status: 'insufficient_data', lags: [0], coefficients: [0] } } }
+  assert.equal(app.noExperimentalChange({ status: 'experimental', news_correction: 0 }), false)
+  app.newsView.value = { forecast: { model: { status: 'experimental', lags: [0, 1], coefficients: [0, '0'] } } }
+  assert.equal(app.zeroNewsWeights.value, false)
+  app.newsView.value = { forecast: { model: { status: 'experimental', lags: [0, 1], coefficients: [0, false] } } }
+  assert.equal(app.zeroNewsWeights.value, false)
+  app.newsView.value = { forecast: { model: {} } }
+  assert.equal(app.zeroNewsWeights.value, false)
+  assert.equal(app.noExperimentalChange({ status: 'experimental', news_correction: 0 }), false)
 })

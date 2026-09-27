@@ -94,6 +94,33 @@ def create_app(connection_factory=db.connect):
             )
         return row
 
+    @app.get("/api/v1/news/jev")
+    def jev_news(limit: int = Query(50, ge=1, le=200)):
+        with connection_factory() as connection:
+            latest_run = db.fetch_one(connection,
+                """SELECT run_id, status, started_at, finished_at, message
+                   FROM pipeline_runs WHERE mode = 'news' ORDER BY started_at DESC LIMIT 1""")
+            forecast = db.fetch_one(connection,
+                """SELECT n.document FROM news_forecast_runs n
+                   JOIN pipeline_runs p USING (run_id)
+                   WHERE p.status IN ('success', 'partial')
+                   ORDER BY p.started_at DESC LIMIT 1""")
+            attempt = db.fetch_one(connection,
+                """SELECT n.document FROM news_forecast_runs n
+                   JOIN pipeline_runs p USING (run_id)
+                   ORDER BY p.started_at DESC LIMIT 1""")
+            selected_ids = attempt["document"].get("selected_analysis_ids", []) if attempt else []
+            articles = db.fetch_all(connection,
+                """SELECT document FROM jev_analyses
+                   WHERE available_at <= now()
+                     AND analysis_id = ANY(%s::text[])
+                   ORDER BY event_at DESC, analysis_id LIMIT %s""", (selected_ids, limit))
+        return {"latest_run": latest_run,
+                "forecast": forecast["document"] if forecast else None,
+                "selection": {**attempt["document"].get("source_status", {}),
+                              "selected_analysis_ids": selected_ids} if attempt else None,
+                "articles": [row["document"] for row in articles]}
+
     @app.get("/api/v1/models/current")
     def current_models():
         with connection_factory() as connection:
@@ -114,7 +141,7 @@ def create_app(connection_factory=db.connect):
                 """
                 SELECT run_id, mode, status, started_at, finished_at, message,
                        price_rows, prediction_rows
-                FROM pipeline_runs ORDER BY started_at DESC LIMIT 1
+                FROM pipeline_runs WHERE mode <> 'news' ORDER BY started_at DESC LIMIT 1
                 """,
             )
 

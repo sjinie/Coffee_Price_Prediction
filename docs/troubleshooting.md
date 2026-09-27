@@ -1,5 +1,18 @@
 # 데이터를 모으고 분석하며 겪은 문제
 
+## 짧은 이력에서 60일 예측 없이 pipeline이 success가 됐다
+
+- 게시 소스 fab81c0의 generate_predictions는 h60 창이 불완전하면 그 지평을 생략하고 h5/h20을 반환할 수 있다. run_pipeline은 세 지평 확인 없이 UPSERT·success를 기록했다. HTTP 사후 검사만으로는 부분 적재와 DB success를 막을 수 없다.
+- 수정 소스에서 최신 유효 가격일의 h5/h20/h60을 UPSERT 전에 검사한다. h60 누락 또는 가격 close 누락은 기존 rollback·failed 처리 경로를 타도록 테스트했다. 예측·원자료를 0으로 보정하지 않았다.
+- 기존 GHCR 이미지는 변하지 않았다. 배포 CLI는 restore의 입력을 기존 이미지 함수로 사전 검사하고 collect는 실행 전에 차단한다. 새 이미지 게시·digest 갱신·독립 검증 후 신규 수집 차단을 해제해야 한다.
+- seed 복사는 기존 작업 파일을 덮어쓰지 않는다. 다른 제공본을 검증할 때 기존 volume을 삭제하지 않고 새 Compose project를 사용한다.
+
+## Actions가 성공했지만 Node.js 20 deprecation 경고가 나왔다
+
+- 기존 게시 run 35455393542에서 checkout·setup-python·setup-node·login·build-push Action의 내부 Node.js 20 경고를 확인했다. 프로젝트의 Node.js 22 버전과는 별개다.
+- 공식 릴리스와 `action.yml`을 대조해 Node.js 24 Action의 full SHA로 고정했다. 정확한 전후 버전과 확인일은 [STATUS](STATUS.md)에 기록했다. 런타임 강제·경고 숨김·검증 생략은 사용하지 않았다.
+- YAML·게시 조건 검사와 로컬 actionlint는 통과했다. 새 workflow의 실제 GitHub 실행과 경고 소멸은 아직 확인하지 않았다.
+
 ## 기상 원자료는 있는데 rolling 결과가 비었다
 
 처음에는 30일 기상 집계의 빈칸을 중앙값으로 채웠다. 원자료를 다시 보니 결측이 아니라 계산 시작점의 문제였다. 1월 1일부터 잘라서 30일 이동평균을 구하면 첫 29일은 관측 수가 모자란다.

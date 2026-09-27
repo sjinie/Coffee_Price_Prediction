@@ -101,6 +101,20 @@ CREATE TABLE IF NOT EXISTS news_daily_features (
     updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
     PRIMARY KEY (as_of_date, window_days, availability_mode)
 );
+CREATE TABLE IF NOT EXISTS jev_analyses (
+    analysis_id TEXT PRIMARY KEY,
+    article_id TEXT NOT NULL,
+    event_at TIMESTAMPTZ NOT NULL,
+    available_at TIMESTAMPTZ NOT NULL,
+    document JSONB NOT NULL,
+    CHECK (available_at >= event_at)
+);
+CREATE INDEX IF NOT EXISTS jev_analyses_event_idx ON jev_analyses (event_at DESC);
+CREATE TABLE IF NOT EXISTS news_forecast_runs (
+    run_id UUID PRIMARY KEY REFERENCES pipeline_runs(run_id),
+    as_of TIMESTAMPTZ NOT NULL,
+    document JSONB NOT NULL
+);
 """
 
 PREDICTION_UPGRADE_SQL = (
@@ -501,6 +515,27 @@ def activate_current_models(connection, model_ids: list[str]) -> None:
 
 def fetch_all(connection, query: str, parameters=()):
     return connection.execute(query, parameters).fetchall()
+
+
+def upsert_jev_analyses(connection, records: list[dict]) -> int:
+    """Keep first completed analyses independently of the legacy title rules."""
+    with connection.cursor() as cursor:
+        cursor.executemany(
+            """INSERT INTO jev_analyses (analysis_id, article_id, event_at, available_at, document)
+               VALUES (%s, %s, %s, %s, %s::jsonb)
+               ON CONFLICT (analysis_id) DO NOTHING""",
+            [(r["analysis_id"], r["article_id"], r["event_at"], r["available_at"],
+              json.dumps(r, ensure_ascii=False, allow_nan=False)) for r in records],
+        )
+    return len(records)
+
+
+def store_news_forecast(connection, run_id: str, document: dict) -> None:
+    connection.execute(
+        """INSERT INTO news_forecast_runs (run_id, as_of, document)
+           VALUES (%s, %s, %s::jsonb) ON CONFLICT (run_id) DO NOTHING""",
+        (run_id, document["as_of"], json.dumps(document, ensure_ascii=False, allow_nan=False)),
+    )
 
 
 def fetch_one(connection, query: str, parameters=()):

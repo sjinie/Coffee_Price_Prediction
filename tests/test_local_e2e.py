@@ -120,7 +120,7 @@ def test_pipeline_records_optional_failure_without_blocking_serving(tmp_path, mo
         yield connection
 
     class Dataset:
-        prices = pd.DataFrame()
+        prices = pd.DataFrame({"close": [100.0]}, index=pd.to_datetime(["2026-01-02"]))
 
     monkeypatch.setattr(db, "connect", connect)
     monkeypatch.setattr(db, "create_schema", lambda *_args: None)
@@ -140,7 +140,13 @@ def test_pipeline_records_optional_failure_without_blocking_serving(tmp_path, mo
     monkeypatch.setattr(pipeline, "validate_macro_freshness", lambda *_args: None)
     monkeypatch.setattr(pipeline, "assemble_features", lambda *_args, **_kwargs: Dataset())
     monkeypatch.setattr(pipeline, "load_bundle", lambda *_args: object())
-    monkeypatch.setattr(pipeline, "generate_predictions", lambda *_args: pd.DataFrame())
+    monkeypatch.setattr(
+        pipeline, "generate_predictions",
+        lambda *_args: pd.DataFrame({
+            "origin_date": [date(2026, 1, 2)] * 3,
+            "horizon": [5, 20, 60],
+        }),
+    )
 
     result = pipeline.run_pipeline(
         "backfill", tmp_path, tmp_path / "model.pt", date(2026, 1, 1), date(2026, 1, 2),
@@ -150,6 +156,7 @@ def test_pipeline_records_optional_failure_without_blocking_serving(tmp_path, mo
     assert result["status"] == "success"
     assert completed[0] == statuses
     failed_sources = "news, weather_br_sul_minas" if news_failure else "weather_br_sul_minas"
+    assert result["source_failures"] == failed_sources.split(", ")
     assert completed[1] == ("success", f"가격 3행, 예측 2행 UPSERT | 보조 수집 실패: {failed_sources}")
     if news_failure:
         assert completed[0][-1]["source"] == "news"

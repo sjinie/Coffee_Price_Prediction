@@ -211,38 +211,44 @@ export COFFEE_TEST_DATABASE_URL="postgresql://localhost/coffee_price_test"
 
 ## Docker Compose로 로컬 실행
 
-Docker Engine과 Docker Compose가 필요합니다. 명령은 사용자가 활성화한 Docker 엔진을 사용합니다. 검증에서는 `docker --context colima-coffee-e2e`와 Compose project `coffee-docker-e2e`를 사용했지만, 둘은 실행 전제 조건이 아닙니다.
+`pipeline`(수집·분석)과 `api`(FastAPI)는 별도 컨테이너입니다. `docker compose up`은 기존 네 서비스(`postgres`, `api`, `web`, `pipeline`)를 시작합니다. API는 DB를 조회하고, pipeline은 시작할 때 한 번 갱신한 뒤 실행 중에는 갱신 종료로부터 7일마다 다시 실행합니다. 여러 주 꺼져 있어도 재시작 시 밀린 기간을 한 번의 작업으로 보충합니다.
 
-새 clone에는 데이터가 포함되지 않습니다. 실행 전에 외부 제공된 `data/processed/2014-07-01_2025-12-31/` Parquet와 `model_artifacts/production_dlinear_60.pt` artifact를 준비합니다. 저장 자료의 기준일은 2025-12-31이며, 이번 절차는 외부 API를 다시 호출하지 않습니다.
-
-실제 `.env`는 건드리지 않고 Docker 전용 파일을 만듭니다. `.env.docker`의 `POSTGRES_PASSWORD`에는 로컬 비밀번호를 직접 설정합니다. 예시 값과 비밀번호를 저장소에 기록하지 않습니다.
+모델 artifact와 수치 원본 디렉터리를 준비합니다. 기본 경로는 `model_artifacts/production_dlinear_60.pt`와 `data/processed/2014-07-01_2025-12-31/`이며, 후자는 검증된 Parquet seed 또는 빈 디렉터리일 수 있습니다. 빈 상태의 수치 수집은 설정의 2014-07-01부터 시작하므로 더 오래 걸립니다. `data/jev/`에는 기존 네 파일을 준비하거나 새 수집용 빈 디렉터리를 둡니다. 기존 `.env`를 바꾸지 않고 Docker 전용 설정을 사용합니다.
 
 ```sh
 test -e .env.docker || cp .env.example .env.docker
-# .env.docker에서 POSTGRES_PASSWORD를 로컬 값으로 설정
-
+# .env.docker의 POSTGRES_PASSWORD, FRED_API_KEY, AI_GATEWAY_API_KEY를 설정합니다.
+# PIPELINE_SOURCE_DIR, PIPELINE_ARTIFACT, PIPELINE_JEV_DIR의 실제 경로도 확인합니다.
 docker compose --env-file .env.docker up --build -d --wait
-docker compose --env-file .env.docker run --rm --build pipeline backfill --skip-ingestion --end 2025-12-31
-docker compose --env-file .env.docker run --rm --build pipeline incremental --skip-ingestion --end 2025-12-31
+docker compose --env-file .env.docker logs -f pipeline
 ```
 
-같은 `incremental` 명령을 반복해도 됩니다. `daily` 별칭은 제공하지 않습니다. 웹은 `http://localhost:8080`, 호스트 API는 `http://localhost:8001`에서 확인하며, `WEB_PORT`와 `API_PORT`로 바꿀 수 있습니다.
+`--wait`는 컨테이너 준비 상태를 기다리며 초기 데이터 갱신 완료를 보장하지 않습니다. 웹은 `http://localhost:8080`, API는 `http://localhost:8001`에서 확인합니다. 수집 중에도 FastAPI는 기존 DB 결과를 제공합니다. 실패한 초기 수집에서 결과가 아직 없다면 새 결과를 만들어내지 않습니다.
 
-Compose는 PostgreSQL healthcheck 뒤 API가 스키마를 생성하고 Uvicorn을 실행하며, Nginx 웹 컨테이너는 런타임 `API_UPSTREAM=http://api:8000`으로 API를 프록시합니다. DB 연결 변수와 `POSTGRES_PASSWORD`는 컨테이너 런타임에만 전달되고 호스트 `DATABASE_URL`은 전달하지 않습니다. FRED 키는 라이브 수집을 실행할 때만 필요합니다.
+- 수치 자료: Yahoo 가격·환율, FRED/ALFRED, NASA 기후, CFTC를 원본별 마지막 저장일과 기존 7일 겹침 규칙으로 갱신하고 고정된 가격 모델로 추론·DB UPSERT합니다. 기존 모델을 재학습하거나 교체하지 않습니다.
+- 뉴스: 완료된 뉴욕 날짜까지만, 마지막으로 조회한 날짜 다음부터 최대 7일 구간으로 수집합니다. RSS가 한도에 걸리면 일별까지 나눠 조회하고 일별 한도도 남으면 제한을 기록합니다. 조회 범위는 모든 기사 확보를 보장하지 않습니다. 기존 선정과 중복은 보존·재사용하며 새 날짜는 하루 최대 2건을 선정합니다.
+- Jev: 새 선정의 미완료 분석만 요청하고 네 파일에 누적합니다. HTTP 429/일시 오류는 60초, 성공은 300초 이후에 요청하며 더 긴 Retry-After를 지킵니다. 기존 $1 한도·인증/비용 중단 정책은 유지합니다. 키가 없으면 뉴스 수집은 보존하고 분류를 보류합니다. 신규 CSV 자료의 앙상블 채택·재학습·뉴스 예측 snapshot 반영은 별도 평가 과정입니다.
+- 실패·종료: 숫자 수집 실패가 뉴스 보존을 막지 않습니다. 수치 수집이나 뉴스 조회가 실패하면 1시간 뒤 다시 시도하며, 서버 재시작 때에도 누락 구간을 보충합니다. 대기 중 종료 신호에 응답하고, 진행 중 요청은 기존 저장·복구 규칙을 따릅니다. 상태는 `/data/jev/requests.json`의 `refresh_state`, 뉴스 조회 범위는 `news.json.selection_metadata.incremental`에 남깁니다.
 
-파이프라인은 Parquet와 artifact를 읽기 전용으로 마운트하고, PostgreSQL과 작업 데이터는 named volume에 보관합니다. 작업 볼륨에 없는 파일만 원본에서 임시 파일을 거쳐 복사합니다. 따라서 빈·부분 원본은 다음 실행에서 보완할 수 있으며, 같은 이름의 원본 수정본은 기존 작업 파일을 자동으로 덮어쓰지 않습니다. 학습과 model artifact 변경은 이 실행에 포함하지 않습니다.
-
-중지 후에도 volume을 유지하려면 아래 명령을 사용합니다. `down -v`는 DB와 작업 데이터를 삭제하므로 보존하려면 사용하지 않습니다.
+원본은 read-only로 마운트하고 누적 작업 자료는 `pipeline-data` volume의 `/data/sources`, `/data/jev`에 저장합니다. Jev seed 네 파일은 최초에 함께 복사하며 기존 작업 archive를 덮어쓰지 않습니다. DB는 `postgres-data`에 보관합니다. 호스트의 Jev seed는 컨테이너 실행으로 갱신되지 않습니다. `down -v`는 이 작업 자료를 삭제하므로 일반 중지에는 사용하지 않습니다.
 
 ```sh
-docker compose --env-file .env.docker restart api web
 docker compose --env-file .env.docker down
 docker compose --env-file .env.docker up -d --wait
+
+# 전체 자동 갱신을 한 번만 수동 실행하려면 먼저 상시 worker를 멈춥니다.
+docker compose --env-file .env.docker stop pipeline
+docker compose --env-file .env.docker run --rm pipeline refresh --once
+
+# 외부 수집 없는 기존 자료 재처리는 별도 명령입니다.
+docker compose --env-file .env.docker run --rm pipeline backfill --skip-ingestion --end 2025-12-31
 ```
 
-`PIPELINE_SOURCE_DIR`·`PIPELINE_ARTIFACT`로 호스트 입력 경로를 지정합니다. API image에는 pandas·PyTorch가 없고, pipeline image만 CPU PyTorch와 수집·추론 의존성을 포함합니다. Node 빌드 결과만 Nginx image에 복사합니다. `.env*`, Notebook, 데이터, artifact, 로컬 의존성은 build context에서 제외합니다.
+Native에서는 기존 FastAPI 실행과 별도로 `"$HOME/.virtualenvs/coffee-price-prediction/bin/python" -m coffee_service.pipeline refresh`를 실행합니다(`--once`는 한 주기만). CLI 수집은 같은 원본 디렉터리에서 동시 실행하지 못하도록 잠급니다. FastAPI에 수집 의존성이나 스케줄러를 넣지 않습니다.
 
-참고: [Compose 시작 순서](https://docs.docker.com/compose/how-tos/startup-order/), [multi-stage build](https://docs.docker.com/build/building/multi-stage/).
+API image에는 pandas·PyTorch가 없고 pipeline image에만 수집·추론 의존성이 있습니다. secret은 런타임에만 주입하며 `.env*`, 운영 데이터, artifact, Notebook은 build context에서 제외합니다. 이 동작은 현재 소스로 build하는 `compose.yaml`의 계약입니다. `compose.deploy.yaml`의 과거 digest 고정 GHCR 이미지는 새 코드를 포함하지 않으며 새 이미지 게시·검증 전까지 이전 배포 제한을 유지합니다.
+
+참고: [Compose 시작 순서](https://docs.docker.com/compose/how-tos/startup-order/), [restart 정책](https://docs.docker.com/reference/compose-file/services/#restart).
 
 <a id="news-intelligence"></a>
 
@@ -321,6 +327,96 @@ PR과 main push에서 `CI`가 Python·PostgreSQL fixture 테스트, Vue 테스�
 
 `Publish GHCR images`의 **Run workflow**에서 `publish=false`(기본값)로 실행해도 같은 커밋의 CI 전체를 실행합니다. `publish=true`를 선택한 main 실행만 검증 성공 후 GHCR에 SHA 태그 이미지를 게시합니다. 다른 브랜치에서는 게시 job을 건너뜁니다. Azure 배포는 포함하지 않습니다.
 
+## Azure 운영: 상시 웹·DB와 일일 Actions 배치
+
+2026-09-27 기준 [배포 화면](http://52.141.6.78/)과 `/health`, 최신 가격·5/20/60일 예측 API의 HTTP 응답을 확인했습니다. Azure for Students의 Korea Central `vm-coffee-demo`는 Ubuntu 24.04 x64, B2ats_v2(2 vCPU/1 GiB), P6 64 GiB 디스크를 사용합니다. API·PostgreSQL·Vue/Nginx만 상시 실행하고, 수집·분석은 GitHub-hosted runner에서 하루 한 번 실행 후 종료하는 구성입니다. VM을 끄면 API·DB도 중단됩니다.
+
+- VM 구성은 [`deploy/compose.azure.yaml`](deploy/compose.azure.yaml), 초기 설치는 [`deploy/prepare-vm.sh`](deploy/prepare-vm.sh), DB 권한·스키마 초기화와 서비스 시작은 [`deploy/start-azure.sh`](deploy/start-azure.sh)입니다. 현재 API·web 이미지는 소스 `388cd691441e231ecafc389dc1aac1c3d80522c7`에서 VM 내부 build했으며 아래 기존 GHCR digest Compose와 별개입니다.
+- VM의 `/srv/coffee/app`에 소스·배포 파일, root 전용 `/srv/coffee/.env`에 `COFFEE_SOURCE_SHA`와 각각 64자리 hex인 `POSTGRES_ADMIN_PASSWORD`, `COFFEE_PIPELINE_DB_PASSWORD`, `COFFEE_API_DB_PASSWORD`를 둡니다. `sudo bash /srv/coffee/app/deploy/start-azure.sh`로 순차 build·DB 초기화·기동합니다. 이 스크립트는 외부 데이터나 모델을 다운로드하지 않습니다.
+- `/srv/coffee/pipeline/{sources,jev,models}`는 `coffee-actions` 소유 0700입니다. 검증된 소스 Parquet, Jev 통합 네 파일, `production_dlinear_60.pt`를 최초 제공하고 이후 배치가 상태를 갱신합니다. PostgreSQL은 별도 named volume에 보존하며 동일 VM의 초기 입력 백업은 디스크 장애에 대한 외부 백업이 아닙니다.
+- 공개 포트는 SSH 22·웹 HTTP 80입니다. DB는 호스트 `127.0.0.1:15432`, API는 Docker 내부 8000이며 웹이 `/api`를 전달합니다. `coffee_api`는 테이블 SELECT 권한만, `coffee_pipeline`은 DB 소유자 권한을 사용합니다. 전용 Actions SSH 계정은 sudo/docker 권한이 없고 DB 터널과 상태 복사에만 사용합니다. HTTPS·도메인은 아직 설정하지 않았습니다.
+
+[`Daily production pipeline`](.github/workflows/daily-pipeline.yml)은 UTC 06:17(한국 15:17, 뉴욕 자정 이후)에 `refresh --once`를 실행합니다. `production` 환경과 main 브랜치만 사용하며 동시 실행을 막습니다. 필요한 환경 설정은 다음과 같습니다. 실제 값·개인 키는 커밋하지 않습니다.
+
+| 구분 | 이름 |
+|---|---|
+| Secrets | `COFFEE_SSH_KEY`, `COFFEE_KNOWN_HOSTS`, `COFFEE_PIPELINE_DB_PASSWORD`, `FRED_API_KEY`, `AI_GATEWAY_API_KEY` |
+| Variables | `COFFEE_HOST`, `COFFEE_SSH_USER`, `COFFEE_STATE_DIR`, `COFFEE_DB_NAME`, `COFFEE_DB_USER` |
+
+SSH 호스트 키를 고정하고 runner의 loopback 터널로 DB에 연결합니다. [`run-daily-pipeline.sh`](deploy/run-daily-pipeline.sh)는 실패나 SIGINT/SIGTERM에서도 확보한 체크포인트를 VM에 동기화한 뒤 임시 키를 삭제하며, 강제 종료·runner 소실 시에는 마지막 동기화 이후 상태가 유실될 수 있습니다. API·web 소스 변경의 자동 재배포는 포함하지 않습니다.
+
+**현재 연결 상태:** GitHub 환경·Secrets·Variables 등록과 같은 배치 스크립트의 Mac→VM 실행은 확인했습니다. workflow는 아직 원격 main에 반영하지 않아 GitHub 예약·수동 실행은 미검증입니다. main 반영 후 Actions에서 수동 실행을 확인해야 하며 [예약 실행은 기본 브랜치 기준이고 지연될 수 있습니다](https://docs.github.com/en/actions/reference/workflows-and-actions/events-that-trigger-workflows#schedule).
+
+**현재 배치 제한:** 수치 수집·추론·DB 적재와 뉴스 수집은 성공했습니다. Jev는 Gateway HTTP 403 `RestrictedModelsError`(무료 계정의 해당 모델 사용 불가)로 중단돼 전체 상태는 `partial`/종료 코드 1입니다. 기존 결과 1,445건과 새 대기 2건을 보존하며, 유료 전환·모델 변경·중단 상태 해제는 자동 수행하지 않았습니다.
+
+학생 구독의 B2ats_v2 Linux 월 750시간·P6 혜택을 포털에서 확인했지만 실제 청구액은 아직 확인하지 않았습니다. IP·디스크·트래픽 등은 구독의 무료 사용량과 Cost Management에서 별도로 확인합니다. 실측 메모리는 상시 컨테이너 합계 약 113 MiB, OS 포함 사용 532 MiB와 swap 69 MiB였으며 부하 시험 결과가 아닙니다.
+
+## GHCR digest 기반 복원 경로
+
+[`compose.deploy.yaml`](compose.deploy.yaml)은 기존 로컬 Compose와 별개입니다. API·pipeline·web은 게시 run [35455393542](https://github.com/sjinie/Coffee_Price_Prediction/actions/runs/35455393542), 소스 `fab81c0cb2f72a58eab9244976a333940bae99d2`의 **linux/amd64** 이미지를 digest로 고정합니다. PostgreSQL은 기존 공식 `17.11-bookworm`의 확인한 digest를 사용합니다. VM에서 build하지 않으며, Docker Engine·Compose v2 이상(`up --wait` 지원)·호스트 Python 3.10 이상 stdlib가 필요합니다. 로컬 검증 환경은 Docker 29.8.0/Compose 5.5.1이며 대상 VM 버전·CPU·메모리는 별도 확인합니다.
+
+| 이미지 (`ghcr.io/sjinie/coffee-price-prediction-`) | 고정 digest |
+|---|---|
+| `api` | `sha256:f915ef214f538ee71d44b4e65f0864a6ad6bb117c289fc3561041986bf7ded77` |
+| `pipeline` | `sha256:031348602cf120e12a1ada64b7111bbf3968fcb4fc51426f63332410c588da1e` |
+| `web` | `sha256:db82b1088695602333e138331436eccd0f3e62f82290052ca0420cd8f4eedf72` |
+
+현재 가격 복원 실측은 상시 컨테이너 약 130MiB, batch 포함 관측 최대 약 478MiB였습니다. OS·Docker·순간 피크는 별도이므로 소수 사용자·단일 batch의 시작 사양으로 **x86-64 2 vCPU/4GiB RAM, 32~64GiB SSD**를 제안합니다. VM 자체 실측이나 최대 부하 보장은 아니며 LLM·학습은 포함하지 않습니다. 이미지 4개는 약 3.44GB를 차지합니다. Azure의 [B2ls_v2](https://learn.microsoft.com/en-us/azure/virtual-machines/sizes/general-purpose/bsv2-series)는 2vCPU/4GiB이며, B 계열은 장시간 높은 CPU 사용 시 credit 소진에 따른 성능 제한을 확인해야 합니다. 이는 pipeline까지 동일 VM에서 실행하는 초기 제안입니다. 현재 운영은 위 Azure 구성처럼 batch를 Actions runner로 분리했으며 별도 1 GiB VM을 실측했습니다.
+
+### 입력 준비: 복원과 신규 수집 구분
+
+- **복원:** 프로젝트 소유자의 검증된 `data/processed/2014-07-01_2025-12-31/` 제공본을 VM의 `SOURCE_DIR`로 전송합니다. 필수 파일은 `coffee.parquet`, `alfred_dexbzus.parquet`, `alfred_dff.parquet`, `alfred_dcoilwtico.parquet`이며, 로컬 재현에서는 기존 수치 소스 15개를 사용했습니다. 공개 다운로드 주소는 제공하지 않습니다. 새 clone·이미지 pull만으로 이 자료가 준비되지는 않습니다.
+- **모델:** 소스 `fab81c0`에 추적된 `model_artifacts/production_dlinear_60.pt`를 `MODELS_DIR`에 복사하거나 동일 checksum의 검증된 제공본을 복원합니다. SHA-256은 `29ad00b20a0f71846d6a81c1f2edddd1d3960639b1819372b0fd2c0cdccc3b82`, ID는 `dlinear-price-macro-h60-v1`, 학습행은 2,011개입니다. Linux에서 `sha256sum`으로 대조합니다. 새 대형 artifact나 데이터를 Git·이미지에 추가하지 않습니다.
+- **권한:** seed와 models 디렉터리는 pipeline UID 10001이 탐색·읽을 수 있어야 합니다(예: 디렉터리 0755, 비밀이 없는 입력 파일 0644). 둘은 읽기 전용 mount이고, `/data` 작업 자료와 PostgreSQL은 Compose project별 named volume에 남습니다. env 파일은 0600으로 제한하고 실제 키·암호는 Git에 넣지 않습니다.
+- **신규 수집:** 별도 project와 빈 `SOURCE_DIR`, 같은 검증된 모델, 런타임 `FRED_API_KEY`가 필요합니다. 외부 API → 필수 이력 수집 → feature → 추론 → DB 순서이며 모델을 자동 학습하지 않습니다. 최신 60거래일의 완전한 feature 창과 그 이전 20거래일 lag·공개 시차 버퍼가 필요합니다. 달력상 80일과 같지 않고 결측·공개 지연에 따라 더 긴 이력이 필요합니다. 아래 예시 기간도 성공을 보장하지 않으며 실제 최신일의 h60 예측까지 검증해야 합니다.
+
+artifact가 없으면 기존 `python -m coffee_service.training` 경로로 별도 학습이 필요합니다. 기존 2014-07~2025-12 자료와 2015~2023 학습 계약·50 epoch를 유지해야 하며, 학습 소요시간·새 artifact의 재현성 검증은 이번 배포 범위 밖입니다. 짧은 수집이나 임의 값으로 학습·추론을 대신하지 않습니다.
+
+### 제한된 접근으로 실행
+
+아래 VM 명령은 **대상 VM·비용·저장 경로 확인과 배포 승인 후** 실행합니다. 동일 명령을 별도 로컬 project에서도 사용할 수 있습니다. 저장소에서 `compose.deploy.yaml`과 `deploy/`를 같은 상대 구조로 준비하고, 실제 env 파일은 저장소 밖에 둡니다. 예시를 복사한 뒤 모든 placeholder와 `SOURCE_DIR`·`MODELS_DIR`를 해당 호스트 경로로 수정합니다.
+
+```sh
+umask 077
+cp deploy/.env.example /path/outside/repo/coffee.env
+# coffee.env의 POSTGRES_PASSWORD, SOURCE_DIR, MODELS_DIR, WEB_PORT를 직접 설정
+python3 deploy/deploy.py --env-file /path/outside/repo/coffee.env --project coffee-vm up
+python3 deploy/deploy.py --env-file /path/outside/repo/coffee.env --project coffee-vm restore \
+  --start 2014-07-01 --end 2025-12-31
+python3 deploy/deploy.py --env-file /path/outside/repo/coffee.env --project coffee-vm verify
+```
+
+`up`은 네 이미지를 pull하고 DB 준비 → 기존 schema 초기화 API → web 순서로 시작합니다. `restore`는 게시 이미지의 기존 함수로 최신 60일 입력을 사전 검사한 뒤 `--skip-ingestion`으로 재처리합니다. 완료 후 정적 HTML·DB health·`/api`·최신 5/20/60일 예측·pipeline 성공을 확인합니다. 현재 고정 이미지의 `collect`는 실행 전 차단합니다. `verify`는 HTTP/데이터 검사이며 브라우저 렌더링을 대신하지 않습니다.
+
+GHCR 인증이 필요한 경우 VM의 Docker에 `read:packages` 권한으로 로그인합니다. 토큰은 `docker login ghcr.io --username USER --password-stdin`의 stdin으로 전달하고 명령 인수·env 예시·로그에 적지 않습니다. 로컬 pull 성공은 VM의 인증 성공을 의미하지 않습니다. 패키지 공개 범위는 변경하지 않습니다. [GHCR 인증·digest 공식 문서](https://docs.github.com/en/packages/working-with-a-github-packages-registry/working-with-the-container-registry)
+
+web만 `127.0.0.1:8080`(설정한 WEB_PORT)에 바인딩됩니다. API와 PostgreSQL은 host 포트를 열지 않습니다. Mac에서 승인된 SSH 접속으로 `ssh -N -L 18080:127.0.0.1:8080 VM_ALIAS` 터널을 열고 브라우저에서 `http://127.0.0.1:18080`을 확인합니다. `/api`는 내부 `http://api:8000`으로 전달됩니다. NSG·공개 포트·HTTPS 변경은 별도 승인 대상입니다.
+
+신규 수집은 빈 seed와 별도 volume을 사용해 복원 경로와 분리합니다. **기존 fab81c0 이미지는 짧은 이력에서 h60 없이 DB success를 기록할 수 있어 현재 CLI는 collect를 즉시 차단합니다.** 소스의 `run_pipeline`에 최신 5/20/60일 예측 완전성 검사를 UPSERT 전에 추가했습니다. 이 수정의 사용자 push·새 GHCR 게시 후 소스 SHA/digest/플랫폼을 검증해 Compose를 갱신하고, CLI의 legacy collect 차단을 제거한 뒤 다음 명령을 검증해야 합니다. 현재 실행 가능한 신규 수집 절차로 해석하지 않습니다.
+
+```sh
+python3 deploy/deploy.py --env-file /path/outside/repo/coffee-live.env --project coffee-vm-live up
+python3 deploy/deploy.py --env-file /path/outside/repo/coffee-live.env --project coffee-vm-live collect \
+  --start 2025-01-01 --end 2025-12-31
+```
+
+기존 pipeline의 기본 소스 그룹(yahoo/fred/nasa/cftc)을 사용합니다. 소스별 실패·이력 부족이면 성공으로 취급하지 않습니다. 수정 소스는 최신 지평 하나라도 없으면 model/price/prediction UPSERT 전에 실패하고 run을 failed로 기록합니다. 이 동작은 아직 기존 GHCR 이미지에 없습니다. 기존 자료가 있는 project의 collect는 최초 수집이 아닌 증분 병합입니다.
+
+### 재실행·보존·진단
+
+같은 project·입력·기준일의 `restore`를 반복하면 기존 자연키 예측은 유지됩니다. `/seed` 복사는 `/data/sources`에 없는 파일만 수행하므로 기존 파일과 같은 이름의 새 제공본으로 자동 교체되지 않습니다. 다른 기준 자료를 검증할 때는 **새 project**를 쓰고 기존 volume을 삭제하지 않습니다.
+
+```sh
+docker compose --env-file /path/outside/repo/coffee.env -p coffee-vm -f compose.deploy.yaml ps
+docker compose --env-file /path/outside/repo/coffee.env -p coffee-vm -f compose.deploy.yaml logs --tail 100
+# 컨테이너 재생성; named volume 유지
+docker compose --env-file /path/outside/repo/coffee.env -p coffee-vm -f compose.deploy.yaml \
+  up -d --no-build --force-recreate --wait postgres api web
+python3 deploy/deploy.py --env-file /path/outside/repo/coffee.env --project coffee-vm verify
+```
+
+실패 로그·pipeline run ID를 보존하고 키가 없는지 확인한 뒤 공유합니다. `docker compose config` 전체 출력에는 secret이 포함될 수 있어 공유하지 않습니다. DB downgrade·volume 삭제는 복구 절차가 아닙니다. 컨테이너 재생성 검증은 VM 디스크 손실 복구 검증과 다릅니다. VM 시작·배포·중지·할당 해제·디스크 삭제·외부 공개는 자동 수행하지 않습니다.
+
 ## 파일 안내
 
 | 파일·폴더 | 내용 |
@@ -329,6 +425,7 @@ PR과 main push에서 `CI`가 Python·PostgreSQL fixture 테스트, Vue 테스�
 | [02_backfill_10y.py](data_code/02_backfill_10y.py) | API 수집, 결측 표시 정리, Parquet 저장 |
 | [03_1_eda_and_baseline_models.ipynb](data_code/03_1_eda_and_baseline_models.ipynb) | 시간 정렬, EDA, 피처 그룹과 기준 모델 비교 |
 | [03_2_horizon_model_validation.ipynb](data_code/03_2_horizon_model_validation.ipynb) | 지평별 조합, Attention-LSTM, 앙상블 검증 |
+| [03_3_single_model_comparison.ipynb](data_code/03_3_single_model_comparison.ipynb) | 가격·기후·거시 6개 모델의 5/20/60일 비교, Persistence 제외 단순평균·뉴스 결합 검증(9~12절) |
 | `configs/` | 수집 소스와 기상 좌표 |
 | `coffee_service/`, `model_artifacts/` | Notebook 없이 실행하는 수집·피처·추론·PostgreSQL·FastAPI와 저장 모델 |
 | `frontend/` | Vue 대시보드와 Vite 개발 서버 |
@@ -340,3 +437,61 @@ PR과 main push에서 `CI`가 Python·PostgreSQL fixture 테스트, Vue 테스�
 [AutoML] PyCaret을 활용한 시계열 데이터 예측 모형 생성 (https://teddylee777.github.io/machine-learning/pycaret-timeseries/)
 
 마의 벽 9.4를 넘은 데이터 접근법 / XGB, LGBM, CAT, ET (0.942) (https://dacon.io/competitions/official/235871/codeshare/4494)
+
+## Jev 뉴스와 실험적 가격 보정
+
+`coffee_service.pipeline news`는 최근 200일의 Yahoo KC=F 제목·짧은 요약과 Daily Coffee News 제목을 수집합니다. 동일·유사 내용을 제거한 뒤 **완료된 뉴욕 날짜별 최대 1건**만 Vercel TypeSafe Jev로 분류합니다. `AI_GATEWAY_API_KEY`는 로컬 `.env` 또는 pipeline 실행 환경에만 설정하세요. Vue·API에는 키를 전달하지 않습니다.
+
+```bash
+# DATABASE_URL이 가리키는 PostgreSQL과 기존 필수 가격·ALFRED 이력이 필요합니다.
+# 가격·거시자료를 갱신한 뒤 뉴스 후보 수집·선정·분류를 실행합니다.
+"$HOME/.virtualenvs/coffee-price-prediction/bin/python" -m coffee_service.pipeline news \
+  --source-dir data/processed/jev_live --jev-source market --jev-days 200 --jev-batch-size 20
+
+# 미완료 연구 선정을 재개합니다. 요청 가능한 시각에 최대 한 번 호출합니다.
+"$HOME/.virtualenvs/coffee-price-prediction/bin/python" -m coffee_service.news_backfill --once
+
+# 검토한 새 기사 목록(JSON 배열: url/title/published_at, 선택 summary)을 추가합니다.
+# --once를 생략하면 Python이 재시도 간격을 지키며 완료까지 실행합니다.
+"$HOME/.virtualenvs/coffee-price-prediction/bin/python" -m coffee_service.news_backfill --input /path/to/articles.json --once
+
+# HTTP 요청 없이 통합 CSV만 재생성합니다.
+"$HOME/.virtualenvs/coffee-price-prediction/bin/python" -m coffee_service.news_unify
+
+# 가격 자료와 완료된 뉴스 분류만 재사용합니다. 외부 API를 호출하지 않습니다.
+"$HOME/.virtualenvs/coffee-price-prediction/bin/python" -m coffee_service.pipeline news \
+  --source-dir data/processed/jev_live --skip-ingestion --skip-news-collection
+```
+
+중요도는 수집된 제목·요약의 공급·작황·날씨·수출·재고·선물·가격 관련 단어 점수이며, 카페·장비·개별 기업 주가 기사는 제외합니다. 전체 시장에서 객관적으로 가장 중요한 기사를 보장하지 않습니다. 정규화 URL과 내용, 제목·요약의 높은 텍스트 유사도로 재게시를 제거하되 숫자·방향이 바뀐 후속 보도는 보존합니다. 표현이 크게 다른 의미상 중복은 남을 수 있습니다. 적합한 기사가 없는 날과 아직 끝나지 않은 뉴욕 날짜는 비워 둡니다.
+
+한 번 선정한 날짜는 같은 선택 정책에서 고정합니다. `--jev-days`는 1~200일, `--jev-limit`는 신규 HTTP 요청 상한(1~200), `--jev-batch-size`는 요청당 기사 수(1~20)입니다. 배치의 공통 state에는 시장만 넣고 각 질문에 해당 기사만 넣어, 다른 날짜의 기사로 판단하지 않게 합니다. 요청 본문이 보수적인 크기 상한을 넘으면 배치를 줄여야 합니다. 통합 저장소는 429·일시 오류 후 60초, HTTP 200 후 300초 대기하고 더 긴 `Retry-After`를 지킵니다. 대기 중에는 파일 잠금을 풀고 다음 요청 직전에 상태·캐시·비용을 재확인합니다. 인증·예산 오류와 비용 미확인 상태에서는 중단합니다. `partial`/`failed` 종료 코드는 1이고 캐시 재사용도 마지막 수집 상태를 유지합니다.
+
+과거·현재 Jev 자료는 `data/jev/`의 네 파일에 통합합니다. 실행 코드는 `coffee_service/`에 둡니다.
+
+| 파일 | 저장 내용 |
+|---|---|
+| `news.json` | 수집한 원본 메타데이터 스냅샷, 고정된 선정 목록·출처 |
+| `requests.json` | 보낸 JSON 본문, 요청 ID·시각, 과거 요청 감사 기록·재시도 상태 |
+| `responses.json` | 받은 JSON 본문과 정규화 분석 결과 전체 이력 |
+| `sentiment.csv` | 분석 시도별 결과·원본 선정 날짜·실제 이용 가능 시각·검토 표시 |
+
+과거 실행은 HTTP 요청·응답 본문을 저장하지 않았으므로 해당 기록은 `legacy_*`로 구분합니다. 원문을 복원했다고 표시하지 않습니다. 새 요청부터 실제 본문을 먼저 저장하고 응답의 secret 반향은 가립니다. 성공 응답 저장 후 중단되면 재요청 없이 복구하며, 응답 저장 자체가 없으면 비용 확인 전 중단합니다. `requests.json.worker_state`가 상태 기록이며 중단 원인을 확인하지 않고 강제 재개하지 않습니다. $1 비용 상한은 유지합니다.
+
+CSV의 `selected_for_research=True`는 연구 선정의 최신 분석입니다. `is_latest_analysis`와 `backfill_jobs`로 분석 이력·서비스 선정을 구분합니다. 같은 내용의 대표 날짜는 가장 이른 선정일이고 원본 날짜는 `source_selections`에 남습니다. 서로 다른 선정 정책의 합집합에는 날짜당 최대 3건이 있을 수 있어, 과거 하루 1건 평가에는 `backfill_jobs`의 `validation-2022-2025`를 필터합니다. `available_at`은 실제 확보·분석 완료 이후이며 `research_available_at`은 소급 연구용 시각으로 당시 live 이용 가능성을 증명하지 않습니다.
+
+전체 본문은 크롤링하지 않았으며 원자료·분류 자료는 Git에서 제외합니다. `/api/v1/news/jev`와 대시보드는 기존 서비스 선정만 표시합니다. 보정 모델은 DB의 예측 문서에 함께 저장하므로 별도 모델 JSON을 만들지 않습니다.
+
+`news-residual-v2`는 방향과 반영 강도를 분리합니다.
+
+- 기사 신호는 `(P_bullish − P_bearish) × relevance`입니다. 확률 차이가 클수록 강한 방향 신호가 됩니다. `confidence`는 같은 확률분포에서 나온 값이므로 다시 곱하지 않고 참고용으로 보존합니다. 중립·판단 유보 확률을 버리거나 상승/하락 확률만 재정규화하지 않습니다.
+- 발행 후 3달력일 반감기로 감쇠한 기사를 tanh로 집계하고, 0/1/3/5거래일 시차를 비음수 비중으로 결합합니다. 반영 강도 `w_h`는 지평별 0~1입니다.
+- `보정 로그수익률 = 최근 20거래일 변동성 × √5 × exp(-(h−5)/10) × 뉴스 신호 × w_h`, `보정 가격 = 기본 예측 × exp(보정 로그수익률)`입니다. 같은 신호·강도에서 단기에 더 크게 반영하며, 가중치 0.2가 가격 20% 변화를 뜻하지 않습니다.
+- 강도는 후속 수익률이 겹치지 않는 최소 6구간으로 추정합니다. 과거 5일 수익률과 평균을 통제하고, 효과 없음 50% + Uniform(0,1) 50%의 명시적 사전 가정을 사용한 사후평균과 95% 사후구간을 표시합니다. 이는 인과적 영향 비율이나 가격 예측구간이 아닙니다. 표본이 적으면 사전 가정의 영향이 크며, 자료·변동성이 부족하면 보정가는 비워 둡니다.
+- 뒤쪽 40% 날짜를 순서대로 평가하되 각 기준일 이전에 정답이 확정된 자료만 학습합니다. 같은 날짜의 baseline과 RMSE/MAE를 비교하고 시간 블록 재표본추출로 개선 구간을 계산합니다. 실험적 보정값과 예측력 개선 근거를 따로 표시하며 기존 기본 가격은 유지합니다.
+
+일별 선택은 뉴욕 날짜가 끝난 다음 자정부터 이용하며 수정 기사도 수정 시각보다 앞서 쓰지 않습니다. 기본 `research`의 과거 평가는 현재 재분류한 기사에 기반한 연구 재평가이며 실제 당시의 실시간 성과가 아닙니다. 현재 연구용 예측은 발행 시점까지 실제 확보한 기사만 골라 사건 시점의 시차를 재구성합니다. `live` 학습 모델은 과거 각 시점의 실제 이용 가능 시각을 지킵니다. 반감기·시차 비중·지평 감쇠와 사전분포는 고정 가정이며 검증된 커피 시장 상수가 아닙니다.
+
+방법 참고: [Financial News Intelligence Platform](https://github.com/abhiminav/financial-news-intelligence-platform)의 확률 차이·과거 수익률 통제·시기별 비교, [StockIntel](https://github.com/zhaymn/StockIntel)의 시간순 검증과 부정적 결과 공개, [Forecasting: Principles and Practice](https://otexts.com/fpp3/tscv.html)의 rolling-origin 평가를 참고했습니다. 해당 프로젝트의 성능을 재현하거나 계수를 전용하지 않았습니다. Jev 확률과 확신도의 관계는 [TypeSafe 공식 문서](https://docs.typesafe.ai/confidence)를 따릅니다.
+
+실제 수집 범위·분류 수·제공자 제한·검증 결과는 [STATUS](docs/STATUS.md)의 최신 항목을 확인하세요.
