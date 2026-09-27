@@ -427,6 +427,8 @@ python3 deploy/deploy.py --env-file /path/outside/repo/coffee.env --project coff
 | [03_2_horizon_model_validation.ipynb](data_code/03_2_horizon_model_validation.ipynb) | 지평별 조합, Attention-LSTM, 앙상블 검증 |
 | [03_3_single_model_comparison.ipynb](data_code/03_3_single_model_comparison.ipynb) | 가격·기후·거시 6개 모델의 5/20/60일 비교, Persistence 제외 단순평균·뉴스 결합 검증(9~12절), 방향 적중·구매 비용 시나리오·예측 사례(13~15절) |
 | [03_4_validation_ensemble_news.ipynb](data_code/03_4_validation_ensemble_news.ipynb) | Validation 전용 저상관·방향/RMSE 보완 단순평균, 2022~2023 Jev 소급 감성의 추가 효과·역방향 민감도·단일 모델 대조 |
+| [03_5_fixed_ensemble_news.ipynb](data_code/03_5_fixed_ensemble_news.ipynb) | 이전 잔차 계수 실험 기록: argmax 뉴스, 초기 0.5 적합과 0계수 원인; 현재 선택에는 미사용 |
+| [03_6_news_feature_ensemble.ipynb](data_code/03_6_news_feature_ensemble.ipynb) | 현재 뉴스 feature 실험: 분석이 있을 때만 28개 입력 모델 사용, 결측/0이면 27개 기본 예측 유지; 2022~2023 선택·2024~2026 평가 |
 | `configs/` | 수집 소스와 기상 좌표 |
 | `coffee_service/`, `model_artifacts/` | Notebook 없이 실행하는 수집·피처·추론·PostgreSQL·FastAPI와 저장 모델 |
 | `frontend/` | Vue 대시보드와 Vite 개발 서버 |

@@ -17,6 +17,8 @@
 *.parquet
 data/raw/
 /data/jev/
+/data/processed/fixed_ensemble_news/
+/data/processed/news_feature_ensemble/
 
 ### Database ###
 *.accdb

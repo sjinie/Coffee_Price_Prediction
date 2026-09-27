@@ -6,7 +6,7 @@ import pandas as pd
 import pytest
 
 from coffee_service.news_residual import (
-    VERSION, _bootstrap, _candidate_rows, _non_overlapping, _prices, _walk_evaluation, fit_residual, latest_snapshot_features,
+    VERSION, SIGNAL_DEFINITION, LEGACY_SIGNAL_DEFINITION, _bootstrap, _candidate_rows, _non_overlapping, _prices, _walk_evaluation, fit_residual, latest_snapshot_features,
     load_residual, predict_residual, save_residual, signal_features,
 )
 
@@ -97,7 +97,7 @@ def test_news_boundaries_and_target_maturity_reject_unavailable_labels():
         _prices(pd.Series([np.nan], index=[pd.Timestamp("2024-01-01")]))
 
 
-def test_probability_margin_encodes_directional_confidence_once():
+def test_argmax_direction_uses_confidence_and_zeros_other_winners():
     session = pd.bdate_range("2024-01-02", periods=1)
     def article(name, probabilities, confidence):
         row = _record(name, "2024-01-02T08:00:00Z", probabilities[0])
@@ -114,9 +114,41 @@ def test_probability_margin_encodes_directional_confidence_once():
     signal = lambda row: signal_features([row], session, availability="research").news_signal.iloc[0]
     assert signal(strong_bull) > signal(weak_bull) > 0
     assert signal(strong_bear) < 0
-    assert abs(signal(neutral)) < signal(weak_bull)
-    assert abs(signal(uncertain)) < signal(weak_bull)
-    assert signal(same_probs_low_confidence) == pytest.approx(signal(same_probs_high_confidence))
+    assert signal(neutral) == signal(uncertain) == 0
+    assert math.atanh(signal(same_probs_high_confidence)) == pytest.approx(
+        9 * math.atanh(signal(same_probs_low_confidence)))
+
+
+def test_signal_definition_argmax_ties_and_legacy_invariance():
+    session = pd.DatetimeIndex([pd.Timestamp("2024-01-02")])
+    event = "2024-01-02T08:00:00Z"
+    row = {**_record("bear", event), "p_bullish": .02, "p_bearish": .41,
+           "p_neutral": .24, "p_uncertain": .33, "confidence": .22, "relevance": .52}
+    snapshot = lambda article, definition=SIGNAL_DEFINITION: latest_snapshot_features(
+        [article], session, 3, "research", event, signal_definition=definition)
+    assert math.atanh(snapshot(row).news_signal.iloc[0]) == pytest.approx(-.1144)
+    assert math.atanh(snapshot(row, LEGACY_SIGNAL_DEFINITION).news_signal.iloc[0]) == pytest.approx(
+        (.02 - .41) * .52)
+    historical = signal_features([row], session, availability="research",
+                                 signal_definition=LEGACY_SIGNAL_DEFINITION)
+    assert math.atanh(historical.news_signal.iloc[0]) == pytest.approx(
+        (.02 - .41) * .52 * 2 ** (-(15 / 24) / 3))
+    assert snapshot({**row, "confidence": .9}, LEGACY_SIGNAL_DEFINITION).news_signal.iloc[0] == pytest.approx(
+        snapshot(row, LEGACY_SIGNAL_DEFINITION).news_signal.iloc[0])
+    for probabilities in ((.40, .10, .45, .05), (.40, .10, .05, .45),
+                          (.40, .40, .10, .10), (.40, .400000005, .10, .099999995)):
+        candidate = dict(zip(("p_bullish", "p_bearish", "p_neutral", "p_uncertain"), probabilities))
+        assert snapshot({**row, **candidate}).news_signal.iloc[0] == 0
+    with pytest.raises(ValueError, match="signal definition"):
+        signal_features([row], session, signal_definition="unknown")
+    for invalid in ({"confidence": 1.1}, {"p_bullish": 1.01}, {"p_bullish": float("nan")}):
+        with pytest.raises(ValueError, match="probabilities"):
+            signal_features([{**row, **invalid}], session)
+    for key in ("relevance", "confidence"):
+        missing = {k: v for k, v in row.items() if k != key}
+        with pytest.raises(ValueError, match="relevance or confidence"):
+            signal_features([missing], session)
+        assert np.isfinite(snapshot(missing, LEGACY_SIGNAL_DEFINITION).news_signal).all()
 
 
 def test_latest_snapshot_allows_known_after_close_without_historical_rewrite():
@@ -151,6 +183,7 @@ def test_bounded_direction_preserving_fit_roundtrip_and_prediction(tmp_path):
     base, close, records, as_of = _synthetic()
     bundle = fit_residual(base, close, records, as_of=f"{as_of.date()}T23:00:00Z")
     assert bundle["version"] == VERSION
+    assert bundle["signal_definition"] == SIGNAL_DEFINITION
     assert bundle["status"] == "experimental"
     model = bundle["horizon_models"]["5"]
     assert model["status"] == "experimental"
@@ -171,6 +204,34 @@ def test_bounded_direction_preserving_fit_roundtrip_and_prediction(tmp_path):
     assert up["news_effect_interval"] is not None
     assert up["availability_mode"] == "research_known_at_issue"
 
+    # A saved v2 bundle must take the historical snapshot path, including confidence handling.
+    old = copy.deepcopy(bundle)
+    old["version"] = "news-residual-v2"
+    old["model_version"] = "news-residual-v2-fixture"
+    old["signal_definition"] = LEGACY_SIGNAL_DEFINITION
+    old_path = tmp_path / "residual-v2.json"
+    save_residual(old, old_path)
+    old = load_residual(old_path)
+    mixed = {**_record("mixed", f"{as_of.date()}T08:00:00Z"),
+             "p_bullish": .02, "p_bearish": .41, "p_neutral": .24,
+             "p_uncertain": .33, "confidence": .22, "relevance": .52}
+    issued = f"{as_of.date()}T23:00:00Z"
+    old_result = predict_residual(forecast, close, [mixed], old, as_of=issued, availability="research")[0]
+    new_result = predict_residual(forecast, close, [mixed], restored, as_of=issued, availability="research")[0]
+    old_signal = latest_snapshot_features([mixed], close.index, 3, "research", issued,
+                                          signal_definition=LEGACY_SIGNAL_DEFINITION)
+    new_signal = latest_snapshot_features([mixed], close.index, 3, "research", issued)
+    assert old_result["news_signal"] == pytest.approx(
+        float(old_signal.iloc[-1][["news_lag_0", "news_lag_1", "news_lag_3", "news_lag_5"]] @ np.asarray(old["lag_weights"])))
+    assert new_result["news_signal"] == pytest.approx(
+        float(new_signal.iloc[-1][["news_lag_0", "news_lag_1", "news_lag_3", "news_lag_5"]] @ np.asarray(bundle["lag_weights"])))
+    assert old_result["news_signal"] != pytest.approx(new_result["news_signal"])
+    for version, definition in ((VERSION, LEGACY_SIGNAL_DEFINITION),
+                                ("news-residual-v2", SIGNAL_DEFINITION), (VERSION, "unknown")):
+        mismatched = {**old, "version": version, "signal_definition": definition}
+        with pytest.raises(ValueError, match="unsupported"):
+            predict_residual(forecast, close, [mixed], mismatched, as_of=issued, availability="research")
+
 
 def test_research_snapshot_blocks_article_not_known_at_issuance():
     base, close, _records, as_of = _synthetic()
@@ -190,7 +251,7 @@ def test_flat_or_short_price_history_does_not_impute_volatility():
     artifact = {"version": VERSION, "model_version": "fixture", "availability": "research", "status": "experimental",
                 "training_cutoff": "2024-02-01T00:00:00Z", "half_life": 3, "lags": [0, 1, 3, 5],
                 "lag_weights": (raw_lag_weights / raw_lag_weights.sum()).tolist(),
-                "signal_definition": "probability_margin_times_relevance",
+                "signal_definition": SIGNAL_DEFINITION,
                 "horizon_decay": {"tau": 10}, "eligibility": {},
                 "horizon_models": {str(h): {"status": "experimental", "weight": .2, "weight_interval": [.1, .3], "null_probability": .5, "prior": {"null_mass": .5, "slab": "uniform_0_1"}, "evidence_status": "not_demonstrated"} for h in (5, 20, 60)}, "metrics": {}}
     result = predict_residual(base, pd.Series(100., index=sessions), [_record("a", "2024-01-01T08:00:00Z")], artifact,
