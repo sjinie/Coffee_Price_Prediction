@@ -1,5 +1,13 @@
 # 작업 상태
 
+## 2026-09-28 — 전체 변경 검토와 문서 정리
+
+문서와 실제 코드를 대조하면서 이전 7개 feature 모델, 현재 뉴스 포함 모델, 공개 서버의 배포 상태가 섞인 설명을 바로잡았다. README는 최근 모델 선택 과정을 따라 읽을 수 있게 보강했고, 트러블슈팅에는 기사 보관 시점과 예측에 쓸 수 있는 시점이 달랐던 문제, 상세 모달의 접근성 수정 과정을 남겼다. `humanize-korean`과 `korean-humanizer`로 긴 기록을 다듬되 명령어·수치·링크와 과거 기록은 보존했다.
+
+외부 Python 3.12와 임시 UTF8 PostgreSQL 17에서 CI와 같은 제외 범위로 217개 테스트와 2개 subtest가 통과했다. 프런트엔드는 12개 테스트와 Vite build가 통과했다. 이번 검증에서 전체 재학습이나 새 LLM 요청은 실행하지 않았다. sklearn 단일 클래스 지표, Starlette/httpx, AnyIO 관련 경고 3건은 남아 있다.
+
+변경된 노트북 7개의 형식과 저장된 오류 출력, 문서의 로컬 링크, 스킬 51개와 lock 목록의 일치를 확인했다. secret·모델 가중치·문서 편집 중간 파일은 커밋 대상에서 제외했다. 가져온 스킬 Markdown 7개 파일의 행 끝 공백 53건은 원문 그대로 유지했으며, 이 중 41건은 Markdown 줄바꿈이다. 공개 서버의 모델 전환은 별도 작업으로 남는다.
+
 ## 2026-09-28 — 뉴스 목록과 상세 읽기 패널
 
 - 뉴스 목록을 날짜·수집처·제목·가격 압력 중심의 행으로 정리하고 상태별 건수를 필터에 표시했다. 기사를 선택하면 오른쪽 상세 패널에서 분류 확률 막대, 관련성·확신도·s_i, 원문 링크와 처리 시각을 읽는다. 모바일은 전체 화면이며 미분석/판단 유보를 구분한다.
@@ -10,44 +18,44 @@
 
 ## 2026-09-28 — 대시보드 뉴스 수집·분석 조회 개선
 
-- 예측별 뉴스 없음 문구를 해당 기준일 반영 기사0건으로 명확히 하고, 전체 보관 뉴스와 다른 시점임을 설명한다. 뉴스 목록은 기본 펼침, 상태 필터·10건 페이지와 확률/관련성/확신도/s_i 및 KST 시각을 제공한다. 기존 Vue/native CSS/색상·테마·anchor를 유지한다.
-- pipeline이 기존 `news.json` 선정 자료를 `jev_selections`에 내용 hash 기준으로 적재한다. 중복 연구/서비스 선정을 합치고, 과거 `available_at=null`은 기록된 수집·발생·수정·선정 시각의 최대값으로 보완한다. 원본 파일은 수정하지 않는다. 기존 분석·모델·예측 UPSERT 의미는 유지한다. `/api/v1/news/jev`의 기존 응답에 `inventory`와 상태/offset 조회를 추가하며 API는 파일·LLM을 호출하지 않는다.
+- 예측별 뉴스 없음 문구는 해당 기준일에 반영된 기사가 0건이라는 뜻으로 명확히 했다. 전체 보관 뉴스와 시점이 다르다는 설명도 붙였다. 뉴스 목록은 기본 펼침, 상태 필터·10건 페이지와 확률/관련성/확신도/s_i 및 KST 시각을 제공한다. 기존 Vue/native CSS/색상·테마·anchor를 유지한다.
+- pipeline이 기존 `news.json` 선정 자료를 `jev_selections`에 내용 hash 기준으로 적재한다. 연구/서비스 선정의 중복을 합쳤다. 과거 `available_at=null`은 기록된 수집·발생·수정·선정 시각 중 가장 늦은 값으로 보완한다. 원본 파일은 수정하지 않는다. 기존 분석·모델·예측 UPSERT 의미는 유지한다. `/api/v1/news/jev`의 기존 응답에 `inventory`와 상태/offset 조회를 추가하며 API는 파일·LLM을 호출하지 않는다.
 - 실제 VM 검증용 DB에서 보관 수집·선정1,448건/분석1,446건/미분석2건을 확인했다. 최근 수집9월27일14:01KST, 분석11:21KST다. 9월25일 예측의 입력 마감은9월26일08:00KST여서 이후 분석을 과거 예측에 소급하지 않는다. 적재 전후 예측 fingerprint가 같고 원본 archive는 read-only mount로 사용했다.
 - 독립 리뷰의 두 사항을 보완했다. 수치 수집·추론 실패 전에 뉴스 투영을 별도 commit하고, 기사 메타데이터는 선정 기록/감성 수치는 분석 기록에서 가져온다. 가용 시각은 두 기록의 최대값을 유지한다. 해당 실패·중복 메타데이터 회귀를 실제 DB로 검사했다.
-- 검증: 외부 Python3.12·임시 UTF8 PostgreSQL17에서 관련 **23 passed**, Vue **11 passed**, Vite build 및 VM API/pipeline/web 이미지 build 통과. 기존 Starlette/httpx·AnyIO deprecation 2건은 남았다. 최초 임시 DB가 SQL_ASCII여서 한글 JSON 검사3건이 실패했으며 UTF8 DB로 교정 후 전부 통과했다. 브라우저에서 분석 완료/미분석 필터,10건 페이지, 확률·시각·기준일 문구를 확인했다. 1280/390px viewport에서 가로 넘침 없음, 밝은/어두운 테마와 키보드 동작 확인, console error/warn 없음.
+- 검증: 외부 Python3.12·임시 UTF8 PostgreSQL17에서 관련 **23 passed**, Vue **11 passed**, Vite build 및 VM API/pipeline/web 이미지 build 통과. 기존 Starlette/httpx·AnyIO deprecation 2건은 남았다. 최초 임시 DB가 SQL_ASCII여서 한글 JSON 검사3건이 실패했다. UTF8 DB로 교정한 뒤 전부 통과했다. 브라우저에서 분석 완료/미분석 필터,10건 페이지, 확률·시각·기준일 문구를 확인했다. 1280/390px viewport에서 가로 넘침 없음, 밝은/어두운 테마와 키보드 동작 확인, console error/warn 없음.
 - 현재 localhost18808 검증 화면을 갱신했다. 운영 DB·운영 컨테이너·일일 workflow·원격 Git은 변경하지 않았으며 새 LLM 요청도 없다. 신규 API 이전 schema 생성 및 읽기 역할의 SELECT 권한이 필요하다. 기존 사용자 문서 변경은 별도로 보존한다.
 
 ## 2026-09-28 — 사용자 확정 모델 운영 적용
 
 - 5일 **LightGBM300 + DLinear10**, 20일 **LightGBM100 + XGBoost100**의 가격 50:50 평균, 60일 **DLinear30**을 사용한다. 모두 가격·기후·거시 27개 + 조건부 뉴스 feature이며 Naive는 구성원에 없다.
 - `03_9_selected_models_serving.ipynb`와 `python -m data_code.export_selected_models`가 03_8의 최종 가중치·표준화 통계를 `model_artifacts/selected_news/manifest.json` 및 구성원 파일로 내보낸다. 학습 정답 cutoff는 2025-12-31이며 재학습·추가 모델 탐색은 없다. artifact는 Git에 포함하지 않는다.
-- 기사 점수는 유일 최댓값 방향 × relevance × confidence, 일별 합에 tanh를 적용한다. 뉴스 없음/일별 점수0이면 동일 설정의 기본 feature 모델로 복귀한다. 실제 서비스는 실제 이용 가능해진 첫 거래일 UTC23시 기준으로 분석을 반영하되 7일 넘게 지연된 소급 분석은 제외하며 과거 기사 사후분류를 오늘의 신규 신호로 투입하지 않는다. 별도 잔차 보정은 중복 적용하지 않는다.
+- 기사 점수는 유일 최댓값 방향 × relevance × confidence, 일별 합에 tanh를 적용한다. 뉴스 없음/일별 점수0이면 동일 설정의 기본 feature 모델로 복귀한다. 실제 서비스는 분석이 이용 가능해진 뒤 처음 맞는 거래일 UTC23시 기준으로 반영한다. 7일 넘게 지연된 소급 분석은 제외하고 과거 기사 사후분류를 오늘의 신규 신호로 투입하지 않는다. 별도 잔차 보정은 중복 적용하지 않는다.
 - 기본 pipeline artifact와 Compose/일일 runner 경로를 선택 manifest로 연결했다. 구 artifact를 명시한 기존 연구 경로는 보존한다. 새 모델 ID로 2026년 이후 예측을 추가하고 기존 예측은 삭제하지 않는다. 새 clone은 연구 실행 산출물 또는 내보낸 artifact 21개 파일 및 10개 원천 Parquet가 필요하다.
 
-- 검증: Python 관련 회귀 36 passed/3 skipped/2 subtests, 03_9 전체 실행·저장 완료. 03_8의 동일 연구 입력467건(179/164/124)에서 운영 모델 수익률 차이 최대1.86e-9, 20·60일은 동일했다. 최신9월25일 예측은5일278.213619·20일285.326050·60일362.728512¢/lb다. 실제 가용 뉴스0건이므로 현재는 조건부 기본 모델 경로다. 이는 연구용 사후 뉴스 feature 성과를 실시간 성과로 표시한 것이 아니다.
+- 검증: Python 관련 회귀 36 passed/3 skipped/2 subtests, 03_9 전체 실행·저장 완료. 03_8의 동일 연구 입력467건(179/164/124)으로 대조했다. 운영 모델 수익률 차이는 최대1.86e-9였고 20·60일은 동일했다. 최신9월25일 예측은5일278.213619·20일285.326050·60일362.728512¢/lb다. 실제 가용 뉴스0건이므로 현재는 조건부 기본 모델 경로다. 이는 연구용 사후 뉴스 feature 성과를 실시간 성과로 표시한 것이 아니다.
 - 운영 Linux에 XGBoost3.4.1을 추가하고 기존 Mac 연구 버전과 맞췄다(기존 의존성 버전 변경 없음). 공식 [모델 IO](https://xgboost.readthedocs.io/en/stable/tutorials/saving_model.html), [설치 안내](https://xgboost.readthedocs.io/en/stable/install.html)를2026-09-28 확인했다. JSON 모델과 NPZ 통계 및 SHA-256을 검증한다.
 - Vue 테스트9/9·Vite build 성공. Azure amd64에서 API·pipeline·web 이미지를 `selected-b47bac4ae518` 태그로 별도 빌드했다. 기존 운영 DB·컨테이너·daily workflow는 변경하지 않았다. `coffee_selected_preview` 별도 DB에서 실제 pipeline 3,076가격/552예측 적재와 반복 UPSERT 불변 fingerprint를 확인했다. 새 API의 `/news/jev`도 잔차 forecast 없이 최근50기사 응답을 확인했다.
-- 검증용 화면은 SSH loopback tunnel `http://127.0.0.1:18808/` → VM127.0.0.1:18080이며 외부 포트는 개방하지 않았다. 실제 브라우저에서 모델 이름·5일/60일 차트·균형정확도/RMSE·뉴스 미적용 표시를 확인했다. VM 원천의9월25일 종가는278.100006이며 예측은277.718595/284.813979/362.417531¢/lb다. 연구 snapshot의종가278.600006과 달라 로컬03_9 수치와 차이가 있다.
+- 검증용 화면은 SSH loopback tunnel `http://127.0.0.1:18808/` → VM127.0.0.1:18080이며 외부 포트는 개방하지 않았다. 실제 브라우저에서 모델 이름·5일/60일 차트·균형정확도/RMSE·뉴스 미적용 표시를 확인했다. VM 원천의9월25일 종가는278.100006, 예측은277.718595/284.813979/362.417531¢/lb다. 연구 snapshot의종가는278.600006이다. 원천 종가가 달라 로컬03_9 수치와 차이가 있다.
 - **운영 전환 대기:** main `61c4cff`의 일일 workflow는 아직 기존모델을 활성화한다. 사용자에게 새 대시보드 배포+구버전 자동갱신 일시정지 또는 main 우선 반영 중 선택을 요청했다. 승인 없이 workflow중지·push·PR병합·운영모델 전환을 수행하지 않았다. 재개 시점에는 새 코드와21개artifact를 main/runtime에 맞추고 schedule을 활성화해야 한다. Gateway403 중단·비용제한은 유지하며 새 LLM요청은 수행하지 않았다.
 
 ## 2026-09-28 — 뉴스 포함 6개 단일 모델·방향/RMSE 평균 확장 재학습
 
-- 사용자 확인에 따라 **기존 예측 재집계가 아니라 학습 표본을 늘리는 재학습**을 실행했다. `03_8_expanding_news_benchmark.ipynb`와 작은 학습 헬퍼/테스트를 추가하고 03_6·03_7 및 기존 공용 구현은 보존했다. DLinear/NLinear/XGBoost/LightGBM/PatchTST/TimesNet, 5/20/60거래일, 신경망10/30epoch·트리100/300trees를 비교했다. 모든 비교 후보는 뉴스 입력28개 조건부 모델이며 결측/점수0은 동일 설정의27개 기본 모델로 복귀한다. Naive는 구성원에 없다.
-- **시간순 사용:** 2022~2023 학습→2024 검증, 2022~2024 학습→2025 검증의 예측을 합산해 설정·구성원을 선택했다. 각 fold의 학습 정답은 cutoff 이하, Validation 정답은 해당 연말 이하로 제한했다. 최종은2022~2025 학습→2026 평가이며 실제 정답은9월25일까지다. 2024~2026은 이미 본 소급 평가로 미사용 Test가 아니다. 표준화는 각 fold 학습 창에만 적합하고 뉴스는 기존03_6 일별 snapshot을 재사용했다.
+- 사용자 확인을 받고 학습 표본을 늘려 재학습했다. **기존 예측을 재집계한 결과가 아니다.** `03_8_expanding_news_benchmark.ipynb`와 작은 학습 헬퍼/테스트를 추가하고 03_6·03_7 및 기존 공용 구현은 보존했다. DLinear/NLinear/XGBoost/LightGBM/PatchTST/TimesNet, 5/20/60거래일, 신경망10/30epoch·트리100/300trees를 비교했다. 모든 비교 후보는 뉴스 입력28개 조건부 모델이며 결측/점수0은 동일 설정의27개 기본 모델로 복귀한다. Naive는 구성원에 없다.
+- **시간순 사용:** 2022~2023 학습→2024 검증, 2022~2024 학습→2025 검증의 예측을 합산해 설정·구성원을 선택했다. 각 fold의 학습 정답은 cutoff 이하, Validation 정답은 해당 연말 이하로 제한했다. 최종은2022~2025 학습→2026 평가이며 실제 정답은9월25일까지다. 2024~2026은 이미 본 소급 평가로 미사용 Test가 아니다. 표준화는 각 fold의 학습 창에만 적합했다. 뉴스에는 기존03_6 일별 snapshot을 재사용했다.
 - 최종 학습 표본5/20/60일 **999/984/944건**, Validation **493/463/383건**, 2026 평가 **179/164/124건**이다. 뉴스 적용일은 최종 평가124/111/75일이다. 20일 기존 최종 학습481건·선택230건에서 각각984/463건으로 늘었다. Validation에는72개 모델·설정·fold 조합, 최종에는두 선택 기준의 합집합26개 단일 설정을 평가했다. 신경망은 최대epoch까지 한 번 학습하며 checkpoint를 저장한다.
 - **선택 규칙:** 모델별 균형정확도 최적 설정과 RMSE 최적 설정을 따로 남긴 뒤 전역1위 두 후보의 가격을50:50 평균했다. 같은 설정이면 단일 처리한다. Validation 선택은5일 LightGBM300+DLinear10,20일 LightGBM100+XGBoost100,60일 DLinear30 단일이며 frozen protocol 저장 후2026 평가를 수행했다.
 - **5일:** 평균의 Validation 균형47.69%는 LightGBM53.10%보다 낮다. 반면2026년 평균은균형58.87%/방향53.07%/RMSE18.1677, LightGBM은52.47%/46.93%/18.8319다. 평균의 균형 개선+6.40pp는 블록10 조건부95%구간+0.18~+14.54pp지만 DLinear 대비 구간은0을 포함한다. 평균의 가격 RMSE도 DLinear18.1051보다0.35% 나쁘다. 기간 전체의 일관된 우위는 아니다.
 - **20일:** Validation 평균은두 구성원보다 RMSE·균형이 개선된다. 2026년에는평균균형54.67%/방향54.27%/RMSE43.1259, LightGBM단일55.85%/55.49%/42.9016으로 단일이 점 추정상 더 좋으며 차이의 블록 구간은0을 포함한다. **60일:** 선택된 DLinear30의 Validation균형65.90%가2026년52.24%(방향50.81%,RMSE87.3405)로 낮아졌으며 평균은동일 예측이다. 2024년60일 Validation의 하락 사례는5건뿐이다.
-- 2026년 사후 최고 단일 균형정확도는5일 TimesNet10 58.30%,20일 TimesNet10 59.84%,60일 TimesNet30 54.69%지만 이 결과로 선택을 바꾸지 않았다. 상승 precision·신호건수·연도별 결과와 paired block 구간을 함께 저장했다. 표본·설정·선택 기간을 함께 바꿔 표본 수의 인과 효과를 분리하지 못하며, 뉴스 없는 비교군이 없어 이번 결과로 뉴스 추가 효과를 추정하지 않는다.
-- 실행 산출물은 `data/processed/news_feature_ensemble/expanding_7f2729fd5ce23b69/`의 protocol·학습 상태·전처리·전체 예측·CSV다. 입력/코드/패키지 버전 해시를 기록했다. 외부 Python3.12.14에서19셀 **Run All 성공(첫 실행720.7초)**, 저장 예측으로 재실행 동일성 확인, 신규13개·관련 기존19개 **총32개 테스트 통과**. checkpoint RNG 검사는 dropout이 있는 PatchTST로 확인했다. 별도 계산으로26개 최종 단일 설정의 방향 confusion count와 가격 RMSE를 재검산하고 두 그림 한글 표시를 직접 확인했다. 독립 코드 리뷰에서 지적할 결함은 없었다.
+- 2026년 사후 최고 단일 균형정확도는5일 TimesNet10 58.30%,20일 TimesNet10 59.84%,60일 TimesNet30 54.69%지만 이 결과로 선택을 바꾸지 않았다. 상승 precision·신호건수·연도별 결과와 paired block 구간을 함께 저장했다. 표본·설정·선택 기간을 함께 바꿨으므로 표본 수의 인과 효과는 분리하지 못했다. 뉴스 없는 비교군도 없어 이번 결과로 뉴스 추가 효과를 추정하지 않는다.
+- 실행 산출물은 `data/processed/news_feature_ensemble/expanding_7f2729fd5ce23b69/`의 protocol·학습 상태·전처리·전체 예측·CSV다. 입력·코드·패키지 버전의 해시를 기록했다. 외부 Python3.12.14에서19셀 **Run All 성공(첫 실행720.7초)**, 저장 예측으로 재실행 동일성 확인, 신규13개·관련 기존19개 **총32개 테스트 통과**. checkpoint RNG 검사는 dropout이 있는 PatchTST로 확인했다. 별도 계산으로26개 최종 단일 설정의 방향 confusion count와 가격 RMSE를 재검산했다. 두 그림의 한글 표시도 직접 확인했다. 독립 코드 리뷰에서 지적할 결함은 없었다.
 - 기존 IPython 쓰기 경고·커널 TCP 경고·종료 시 macOS psutil sandbox 권한 오류는 남지만 셀 오류 없이 종료코드0이다. 추가 패키지·외부 API 호출·뉴스 요청·서비스 모델/DB/배포 변경은 없다. 이번 검증은 Mac 분석 실행이며 CI/컨테이너/VM 검증으로 주장하지 않는다.
 
 ## 2026-09-28 — 20일 가중평균 5개 비율·방향 우선 해석
 
 - `data_code/03_7_news_weight_grid.ipynb`를 추가해 03_6 run `ed374e9c9c0a19c6`의 고정 예측으로 DLinear 비중 `[0,.25,.5,.75,1]`을 가격 단위로 비교했다. NLinear는 나머지 비중이며 Naive 구성원·추가 학습·뉴스 API 호출은 없다. 뉴스 없는 날/점수0 fallback과 원래 5일 XGBoost·60일 DLinear 연구 후보를 보존한다.
 - **기존 복합 기준:** 2023 Validation 230건에서 정규화 RMSE+정규화 균형 오류로 75:25를 고정한 뒤 이후 구간을 읽었다. 가격 RMSE17.0485, 방향50.00%, 균형51.44%, 상승 누락81.67%. DLinear 단일 대비 RMSE0.16% 악화·누락12.50pp 감소, 50:50 대비 RMSE2.15% 개선·누락10.83pp 증가다. 평가 667건에서는 RMSE46.7790·방향45.88%·균형43.45%로 이후 우위가 없다. 모든 비율의 전체/연도별 표와 기존 단일·50:50 대비 블록 구간을 보존한다.
-- **사용자 후속 목적:** RMSE보다 방향이 중요하고 상승 누락은 허용한다. 이를 반영해 기존 복합 선택을 새 목적의 추천과 분리했다. 방향 우선 Validation 후보는 5일 XGBoost100(뉴스 유무 방향·precision 동률), 20일 NLinear10+뉴스(방향53.04%/균형53.18%; 비율0:100), 60일 DLinear30·뉴스 없음(55.79%/53.60%)이다. 마지막 설정30은 Validation 예측만 있어 이후 평가가 미검증이며 기존 설정10의 수치를 대신 쓰지 않는다. 새 기준의 재학습·자동 채택은 없다.
-- 상승 precision·신호 건수·실제 상승 비율을 저장 예측에서 추가 산출했다. 20일 DLinear10·뉴스 없음의 Validation precision77.78%는 9건 중7건, NLinear10+뉴스55.56%는108건 중60건이다. 2024~2026년 NLinear+뉴스 precision55.03%는 해당 기간 실제 상승 비율56.52%보다 낮다. 높은 상승 누락만으로 탈락시키거나 적은 신호의 precision만으로 채택하지 않으며, 균형 정확도·전체 방향 적중률·기간별 안정성을 우선하고 RMSE는 보조로 둔다.
+- **사용자 후속 목적:** RMSE보다 방향이 중요하고 상승 누락은 허용한다. 방향을 우선하는 새 목적에 맞춰 추천을 다시 제시하되 기존 복합 기준의 선택과 분리했다. 방향 우선 Validation 후보는 5일 XGBoost100(뉴스 유무 방향·precision 동률), 20일 NLinear10+뉴스(방향53.04%/균형53.18%; 비율0:100), 60일 DLinear30·뉴스 없음(55.79%/53.60%)이다. 마지막 설정30은 Validation 예측만 있어 이후 평가가 미검증이며 기존 설정10의 수치를 대신 쓰지 않는다. 새 기준의 재학습·자동 채택은 없다.
+- 상승 precision·신호 건수·실제 상승 비율을 저장 예측에서 추가 산출했다. 20일 DLinear10·뉴스 없음의 Validation precision77.78%는 9건 중7건, NLinear10+뉴스55.56%는108건 중60건이다. 2024~2026년 NLinear+뉴스 precision55.03%는 해당 기간 실제 상승 비율56.52%보다 낮다. 높은 상승 누락만으로 탈락시키거나 적은 신호의 precision만으로 채택하지 않는다. 균형 정확도·전체 방향 적중률·기간별 안정성을 우선하고 RMSE는 보조로 둔다.
 - 뉴스 효과는 방향에서도 일관되지 않다. 기존 최종 5일 XGBoost+뉴스/20일 NLinear+뉴스/60일 DLinear10+뉴스의 이후 균형 정확도49.83%/48.28%/35.80%로 안정적 매수 신호를 입증하지 못했다. 설정부터 방향 기준으로 검증하는 후속 실험이 필요하다. 소급 뉴스·반복 Validation·이미 확인한 과거 평가라는 한계와 UTC23:00 관측 후 실제 실행 가능 가격의 차이를 명시한다.
 - 검증: 외부 Python3.12에서 15셀 새 커널 Run All 성공, 날짜/정답 정렬·끝점·기존50:50 동일성·결측/0 뉴스 복귀·잘못된 비중 거부·CSV/Parquet 일치 검사 통과. 두 그림의 한글 렌더링 확인. 출력은 source run 아래 `weight_grid_*`로 분리한다. 독립 리뷰의 연도별 전체 비율 표시 누락을 수정했다. 기존 IPython 쓰기 경고·커널 종료 시 macOS psutil sandbox 권한 오류는 남지만 셀 오류 없이 실행 종료코드0이다. 의존성·서비스·DB·배포 변경은 없다.
 
@@ -60,17 +68,17 @@
 - **5일 NLinear+XGBoost:** 뉴스 없음→조건부 뉴스 가격 RMSE **18.7124→18.7214**(0.048% 악화), 방향 **46.77→46.48%**, 균형 **47.10→46.67%**. 같은 기간 XGBoost+뉴스 단일은 RMSE18.7523·균형49.83%로 평균보다 RMSE가 높고 방향은 낫다. 평균+뉴스의 XGBoost+뉴스 대비 가격 MSE 개선 95% 블록5/10일 구간은 **[−15.32,18.48]/[−16.94,21.37]**로 0을 포함한다.
 - **20일 NLinear+DLinear:** RMSE **43.5100→44.5332**(2.352% 악화), 방향 **49.18→48.43%**, 균형 **47.92→46.62%**. 뉴스 없는 NLinear 단일(RMSE41.6822·균형49.11%)보다 열세다. **60일 DLinear:** RMSE **95.0876→100.2179**(5.395% 악화), 방향 **38.12→41.47%**, 균형 **33.69→35.80%**. 뉴스 추가가 RMSE와 방향을 함께 개선했다고 볼 수 없다. 60일 MSE 차이의 블록60/120일 구간도 0을 포함한다.
 - 2023년 Validation 선택은 **5일 XGBoost+뉴스, 20일 DLinear 뉴스 없음, 60일 DLinear+뉴스**이며 평가 결과로 변경하지 않았다. 5일 XGBoost 단일은 뉴스 추가 RMSE **0.088%**·균형 **+0.436pp** 개선이지만 매우 작고 2026년 RMSE는 악화했다. 연도별·방향 뉴스 적용일/미적용일 결과를 공개했다. 한 seed, 작은 학습 구간, 제목 중심 소급 분류와 기간별 기사 선정 정책 차이가 남고, 2024~2025년은 이미 본 평가 구간이다. 실시간/구매 비용 개선의 증거는 아니다.
-- 입력은 가격4·ALFRED 거시3·6지역 기후18·달력2의 **27개**와 뉴스1개다. 최초 학습에서 상수인 서리 파생6개, NASA 최고기온/습도, DTWEXBGS/COT는 기존 피처/시점 계약에 따라 제외돼 **원자료 전 컬럼 사용은 아니다**. 기존 수집 함수를 재사용해 연구용 복사본의 NASA 6지역 2026-01-31~09-25 결측을 보충했다. 지역별 4,500개 일자·달력 공백0·수치 결측0을 확인했으며 원본 snapshot은 보존했다.
-- 실행 결과는 ignored `data/processed/news_feature_ensemble/ed374e9c9c0a19c6/`에 input/code/version 해시·고정 protocol·30회 학습 모델/표준화·예측·지표를 저장했다. 외부 Python 3.12에서 **14셀 Run All 성공**(57.2초), 모델 저장/재로드 예측 일치·날짜 정렬·정답 성숙·미래 기사 불변성·한글 그래프를 확인했다. 관련 테스트 **42 passed, 4 skipped**(DB URL 없는 API/통합 검사). 독립 읽기 전용 리뷰의 실제 결함 없음은 코드/출력 검토이며 실행 검증과 구분한다. Parquet 재실행 검사에서 초/밀리초 정밀도 차이를 발견해 날짜를 nanosecond로 통일했고 관련 26개 검사를 다시 통과했다. 날짜 표현을 제외한 이전 실행의 모든 예측값은 정확히 같다. 재실행 저장 동일성도 확인했다.
+- 입력은 가격4·ALFRED 거시3·6지역 기후18·달력2의 **27개**와 뉴스1개다. 최초 학습에서 상수인 서리 파생6개, NASA 최고기온/습도, DTWEXBGS/COT는 기존 피처/시점 계약에 따라 제외돼 **원자료 전 컬럼 사용은 아니다**. 연구용 복사본에 있는 NASA 6지역의 2026-01-31~09-25 결측은 기존 수집 함수를 재사용해 보충했다. 지역별 4,500개 일자·달력 공백0·수치 결측0을 확인했으며 원본 snapshot은 보존했다.
+- 실행 결과는 ignored `data/processed/news_feature_ensemble/ed374e9c9c0a19c6/`에 input/code/version 해시와 고정 protocol을 기록하고 30회 학습한 모델과 표준화 통계·예측·지표를 저장했다. 외부 Python 3.12에서 **14셀 Run All 성공**(57.2초), 모델 저장/재로드 예측 일치·날짜 정렬·정답 성숙·미래 기사 불변성·한글 그래프를 확인했다. 관련 테스트 **42 passed, 4 skipped**(DB URL 없는 API/통합 검사). 독립 읽기 전용 리뷰의 실제 결함 없음은 코드/출력 검토이며 실행 검증과 구분한다. Parquet 재실행 검사에서 초/밀리초 정밀도 차이를 발견했다. 날짜를 nanosecond로 통일한 뒤 관련 26개 검사를 다시 통과했다. 날짜 표현을 제외한 이전 실행의 모든 예측값은 정확히 같다. 재실행 저장 동일성도 확인했다.
 - 중단한 계수 방식은 `03_5_fixed_ensemble_news.ipynb`에 실행 이력으로 보존한다. 2022~2023년 적합에서 초기0.5→최종0이었으며 제약/손실 곡선과 희소 뉴스 설명을 남겼다. 현재 03_6은 이 계수를 호출하지 않는다. 03_4의 legacy 신호 고정 후 Run All 12셀 성공(4.4초), 기존 저장 지표 동일성도 확인했다.
 - 환경 변경·추가 패키지 설치 없음. IPython 임시 경로/커널 TCP 비암호화 경고와 종료 시 psutil의 macOS sandbox 프로세스 열거 PermissionError는 셀/산출물 성공·runner exit 0과 구분해 기록한다. 앞선 계수 실험의 SciPy [minimize](https://docs.scipy.org/doc/scipy/reference/generated/scipy.optimize.minimize.html) 초기값/경계 API와 TypeSafe [confidence](https://docs.typesafe.ai/confidence), [uncertainty](https://docs.typesafe.ai/primitives/noul) 문서는 2026-09-28 확인했으며, 현재 feature 입력 방식에는 별도 SciPy 계수 적합을 사용하지 않는다.
 
 ## 2026-09-28 — Validation 안에서 다양성·방향/RMSE·Jev 앙상블 검증
 
-- 새 `03_4_validation_ensemble_news.ipynb`는 기존 6개 가격+기후+거시 모델의 저장 예측을 재사용한다. 2022년만으로 모델별 설정·조합·뉴스 계수를 결정하고, 2023년으로 최종 Validation 선택을 수행했다. Naive/Persistence는 입력·평균·비교 예측에서 제외했다. 2024~2026년 가격 예측·정답 로딩, 재학습, API/LLM 요청, 서비스 변경은 없다.
+- 새 `03_4_validation_ensemble_news.ipynb`는 기존 6개 가격+기후+거시 모델의 저장 예측을 재사용한다. 모델별 설정·조합·뉴스 계수는 2022년 자료로 결정했다. 최종 Validation 선택에는 2023년 자료를 사용했다. Naive/Persistence는 입력·평균·비교 예측에서 제외했다. 2024~2026년 가격 예측·정답 로딩, 재학습, API/LLM 요청, 서비스 변경은 없다.
 - 우선순위: 2유형 이상·최대 가격 오차상관≤0.95·같은 구성원 수의 평균 상관 하위 50% → 2022년 RMSE/균형 방향 핵심을 모두 포함한 구성원 수별 후보 → 가격 동일 가중 평균에 뉴스 잔차 보정. 임계값은 연구 규칙이며 최적값이 아니다. 최저 상관 진단과 전체 6개 평균도 공개했다. XGBoost/LightGBM의 2022년 오차상관은 지평별 약 0.986~0.993으로 함께 넣은 조합은 탈락했다.
 - Jev 최신 연구 분석 1,445건(2022~2026)을 감사하고 기존 1건/일 정책의 2022~2023 기사 **402건**만 피처에 사용했다. 관련성×(bullish−bearish), 반감기 3일·0/1/3/5거래일 시차·과거 20일 변동성을 사용한다. 공개·수정·선정 완료 시점 이후에만 연구 입력에 반영한다. 실제 분석 시각은 2026년이므로 2022~2023년 live 입력은 0건이며 소급 분류·기사 선정 누락·사전학습 오염 가능성을 제거한 검증이 아니다.
-- 2022년 가격 RMSE 가중 잔차 회귀의 제한 전 뉴스 계수는 **−1.68~−0.94**였다. 감성 방향 유지 β∈[0,1]에서는 전부 0이므로 편향만 보정과 동일했다. 첫 실행 뒤 추가한 역방향 β∈[−1,1] 민감도 분석은 2022년만으로 다시 적합하고 2023년에 고정 적용했다. 이 추가 과정과 Validation 재사용을 명시했고, 동률이면 단순 보정을 우선해 β=0을 뉴스 개선으로 표시하지 않는다.
+- 2022년 가격 RMSE 가중 잔차 회귀의 제한 전 뉴스 계수는 **−1.68~−0.94**였다. 감성 방향 유지 β∈[0,1]에서는 전부 0이므로 편향만 보정과 동일했다. 첫 실행 뒤 역방향 β∈[−1,1] 민감도 분석을 추가했다. 2022년 자료로 다시 적합한 뒤 2023년에 고정 적용했다. 이 추가 과정과 Validation 재사용을 명시했다. 동률이면 단순 보정을 우선하므로 β=0을 뉴스 개선으로 표시하지 않는다.
 - **5일:** NLinear+XGBoost+TimesNet+역방향 뉴스. 가격 RMSE **7.5925**, 방향 적중 **58.78%**, 균형 **59.17%**. 동일 조합의 편향 대조군 7.9482보다 RMSE **4.47%**, 균형 **+5.63pp** 개선했다. 2023년 최저 RMSE 단일 TimesNet(7.6802)보다 **1.14%** 낮지만 균형은 TimesNet 61.74%보다 낮다. 최저 단일 대비 가격 MSE 개선의 블록 5/10일 95% 구간은 **[−7.28,9.14]/[−8.13,10.35]**로 0을 포함한다. 뉴스 대조군 대비 구간은 양수지만 고정 예측에 조건부이며 선택·다중 비교 불확실성을 반영하지 않는다.
 - **20일:** DLinear+NLinear+XGBoost+PatchTST+TimesNet+역방향 뉴스. RMSE **16.8251**, 방향 **55.65%**, 균형 **55.15%**; 편향 대조군 대비 RMSE **1.58%** 개선이지만 단일 XGBoost **15.6822/균형 56.33%**에 모두 열세다. **60일:** DLinear+NLinear+LightGBM+편향만. RMSE **31.2559**, 방향 **53.68%**, 균형 **53.51%**로 단일 XGBoost **29.1091/균형 56.78%**에 모두 열세다. 뉴스 추가 후보가 RMSE를 줄여도 방향 손실이 있어 선택되지 않았다. 20·60일 앙상블 채택 근거는 없고 5일만 추가 검증 후보로 남긴다.
 - 재현 결과는 ignored `data/processed/validation_ensemble_news/b2c3c63149beb2f6/`의 예측·지표·연도별·비중첩 4개 파일에 저장했다. 원본 예측/뉴스/시장 SHA-256, 2022 계수, 후보별 결과, 블록 h/2h 구간과 모든 비중첩 offset을 남겼다. 전체 2023년 최고 단일 모델과 2022년에서 고른 기준 모델을 구분해 유리한 비교만 보고하지 않는다.
@@ -94,6 +102,15 @@
 - 5/20일 옥수수 방향 분류, 월별 Robusta XGBoost/ARIMA, 월별 Arabica ELM, 5/22일 상품 변동성 HAR, 다음 날 옥수수 뉴스 보도량 Ridge 보정의 원문을 확인하고 15절에 링크·지평·비교 기준·한계를 기록했다. 5일 Logistic/boosting 직접 분류, 20일 방향/분위수 회귀·ARIMAX, 검증에서 고정한 비용 임계값·보정 확률의 단순평균을 후속 후보로 제안했다. 외부 논문 결과를 이 프로젝트의 성능으로 전용하지 않는다.
 - 검증: 외부 Python 3.12에서 새 코드 5셀을 기존 완료 run `20260926T115735770501Z`로 실행(최종 **8.6초**, 기존 31셀 소스·출력 동일). 손검산 가능한 보합/무신호·클래스 결측·입력 거부·블록 구간·구매 비용 검사, 기존 지표 대조, 저장 재실행 동일성, nbformat·구문·출력 오류 0건·한글 그림 시각 검사를 확인했다. 전체 모델 재학습/Run All은 이번에 반복하지 않았다. 결과 네 파일은 ignored `direction_purchase_v1/`에 저장했다. IPython 쓰기 경로 경고로 임시 경로가 사용됐고, 커널 TCP 비암호화 경고 및 종료 시 psutil 자식 프로세스 열거의 macOS sandbox 권한 오류가 있었다. 셀 실행·저장 및 runner 종료 코드는 성공(0)이며 경고를 숨기거나 환경을 변경하지 않았다.
 
+## 2026-09-27 — 병합 main CI·VM 세 이미지 빌드·외부 화면 검증
+
+- PR #4의 main 병합 SHA `61c4cffb475e4f4f3ab986ee9e907ef77a297a1d`를 GitHub에서 확인했다. [main CI 36326804333](https://github.com/sjinie/Coffee_Price_Prediction/actions/runs/36326804333) 성공: Python 183 passed/1 skipped/2 warnings(102.74초), Vue 8 passed/build, API·pipeline·web Docker build 성공. 이전 PR CI와 구분한다. skip과 기존 third-party deprecation/runner 전환 안내는 앞선 항목과 같으며 숨기지 않았다.
+- 로컬 미커밋 작업을 포함하지 않고 해당 main의 runtime 경로만 `git archive`로 전송했다. archive SHA-256 `deb1c6d4018031529fd9a1aa86f64e8ff0338500e9e268c8c0a91866083446c0`를 양쪽에서 대조했다. 배포 전 DB custom dump의 `pg_restore --list`, app/runtime env 백업을 `/srv/coffee/backups/redeploy-61c4cff-tss1CG`에 보존했다. 동일 VM 백업이며 디스크 손실 복구 검증은 아니다.
+- VM에서 `deploy/start-azure.sh`로 API·web을 빌드하고 DB schema 준비와 재기동을 확인했다(exit 0). 별도로 pipeline target을 빌드하고 network-none 컨테이너에서 torch 2.14.0+cpu/pandas 2.3.3/coffee_service.pipeline import를 확인했다(exit 0). 세 이미지는 amd64이며 SHA 태그는 병합 main과 일치한다. image ID: API `sha256:c5bc2ae945973f10abfea05081b573daa7fcba9ecb3f3fdfc8b3fc846e302cc7`, web `sha256:84b3075b916b6c6a664d3d414157050cc520fe0c584f9c782155ef049b5bafec`, pipeline `sha256:90e5c89ce0dc2b748a3d572b3afbf3f607886f3d0cc6786dd7402e316fbe7ae6`. 기존 cache를 재사용했으며 GHCR 재게시를 뜻하지 않는다. pipeline 컨테이너를 상시 켜지 않았다.
+- DB 재기동 후 가격 3,076행·예측 2,061행 보존, 최신일 2026-09-25를 확인했다. 외부 `/health`, 최신 가격과 5/20/60일 예측 모두 HTTP 200. Codex in-app browser에서 [프론트엔드](http://52.141.6.78/)의 한글·차트와 5/20/60일 선택을 직접 확인했고 warning/error console은 0건이었다. 이전 Aside 차단으로 남았던 화면 미검증을 해소했다. HTTPS는 아직 미설정이다.
+- [운영 daily Actions 36327207257](https://github.com/sjinie/Coffee_Price_Prediction/actions/runs/36327207257)를 main에서 수동 실행했다. GitHub runner→SSH tunnel→DB에서 수치 수집·추론·3,076/2,061행 UPSERT 성공(run `8fcc3e5d-37c0-4f1c-a05c-9012d7379482`), 뉴스 수집 성공. VM에 새 refresh_state(14:49:45Z) 동기화까지 확인했다. classification은 기존 `worker_state=stopped`를 발견해 `RuntimeError`로 failed가 됐다. 전체 실행은 partial/exit 1이다. 이전 Gateway 403 기록(05:01:32Z)과 pending 2건을 보존하며 새 모델 요청을 재시도하지 않았다. 일일 workflow는 active/KST 15:17 설정이지만 완전 성공은 아니며 해당 접근 제한 해결·명시적 재개가 필요하다.
+- 실행 소스·Secrets·모델·의존성 선언은 수정하지 않았다. 다른 로컬 코드/문서 변경을 보존하고 이번 운영 검증 기록은 미커밋 문서로 남긴다.
+
 ## 2026-09-27 — 기존 역할 경계 검토·기능 보존 리팩토링
 
 - 검토 범위: 수치·뉴스 수집/저장/추론/CLI, FastAPI·DB 접근, Vue·테스트, Docker/Compose와 배포/Actions 경로. 논리 경계는 pipeline 수집·분석·DB 적재 → PostgreSQL 저장 → api 조회/응답 → Vue 표시다. 로컬 Compose의 pipeline 컨테이너와 Azure의 외부 Actions Python 배치는 실행 위치가 다르며 기존 운영 계약을 변경하지 않았다.
@@ -101,6 +118,13 @@
 - 검증: 외부 Python 3.12.14·임시 PostgreSQL 17.11에서 **186 passed, 2 subtests passed, 경고 3건**, Vue **8 passed + build 통과**. Python은 `test_core4_environment.py`(기존 연구 환경 전용)만 제외하고 DB 통합 검사까지 실행했다. 경고는 기존 sklearn 단일 클래스·Starlette/httpx·AnyIO deprecation이며 숨기지 않았다. 독립 최종 diff 리뷰에서 추가 확정 결함 없음. Jev 네 JSON 저장 경로는 변경 전후 UTF-8 bytes가 같고, rename 실패 시 기존 내용이 보존됨을 임시 파일로 대조했다. 원본·Jev·모델·노트북 27개 파일의 SHA-256이 동일하다. 실제 외부 수집·Gateway 요청·운영 DB·VM·GitHub 상태 변경은 하지 않았다.
 - 남은 결함: `frontend/src/App.vue:69`의 뉴스 새로고침에서 이전 요청이 나중에 완료되면 최신 응답을 덮는다. 응답 순서를 제어한 로컬 fixture로 재현했다. 요청 순서 제어는 동작 변경이므로 이번 기능 보존 리팩토링에서 적용하지 않았고 후속 버그 수정 대상으로 남긴다. API/Vue 분리나 DB 계층 추가를 강제할 근거는 확인하지 못했다.
 - 한계: 활성 Docker desktop-linux 엔진 소켓이 없어 이번 컨테이너 build/start는 미검증이다. 기존 Azure/CI 실행 기록을 이번 변경의 실행 증거로 대신하지 않는다. 기존 사용자 변경은 별도로 보존하며 push·배포하지 않는다.
+
+## 2026-09-27 — feature 브랜치 push·PR #4·GitHub CI 통과
+
+- 사용자 승인으로 기존 19개와 Azure 배포 1개, 총 20개 커밋을 `origin/codex/ghcr-vm-deploy`에 push했다. remote/local head는 `9e7455b475bb3c5d61976dcc12de81e537421b09`로 일치한다. [PR #4](https://github.com/sjinie/Coffee_Price_Prediction/pull/4)를 생성했고 main 병합은 하지 않았다.
+- [CI 36301784557](https://github.com/sjinie/Coffee_Price_Prediction/actions/runs/36301784557) 성공: Linux/Python 3.12.14에서 183 passed, 1 skipped, 2 warnings(73.49초), Vue 8 passed와 build, API·pipeline·web Docker build 모두 통과. skip은 저장소에 없는 로컬 production artifact·Parquet 기반 검사다. macOS 전용·별도 데이터 E2E 파일은 기존 CI 범위에서 제외한다.
+- 경고는 sklearn 단일 라벨, Starlette/httpx deprecation, setup-node 내부 punycode/url.parse deprecation, ubuntu-latest의 2026-10-19 Ubuntu 26 전환 안내다. [setup-node 공식 릴리스](https://github.com/actions/setup-node/releases)의 v6.5.0 의존성 보완·v7 ESM 변경과 [Node deprecation](https://nodejs.org/api/deprecations.html#DEP0169)을 확인했다. 이번에는 의존성을 바꾸지 않았으며 별도 호환성 검증 후 갱신이 필요하다.
+- 이 성공은 PR CI이며 production 일일 workflow 실행·GHCR 게시·main 반영 성공이 아니다. main 전용 일일 배치는 병합 후 실행할 수 있고 기존 Jev 무료 계정 403 제한도 남아 있다. PR 본문에 결과를 반영하고 기존 미커밋 사용자 변경을 보존했다. 이 실행 기록과 Context 갱신은 로컬 미커밋 상태로 유지한다.
 
 ## 2026-09-27 — Azure VM 생성·서비스 기동·일일 Actions 연결 준비
 
@@ -190,6 +214,12 @@
 - 검증: 새 모델 단위검사 **8 passed**(forward/backward, NLinear 채널 복원, TimesNet 상수 입력·배치 독립성·그룹 계산 대조), 미래 원천 변경 시 과거 입력 불변·target 날짜/결측·공통 평가 행·지표 재계산 검사 통과. 독립 리뷰의 결과 저장 재시도 문제를 수정해 임시 디렉터리 전체 기록 후 rename하며 동일 결과는 재사용하고 충돌은 보존한다. 수정한 저장 셀을 실제 결과로 재실행하고 저장 실패/재시도/충돌 검사를 통과했다. nbformat·코드 compile·저장 PNG 한글/수치와 HTML 본문을 확인했다.
 - 근거 확인(2026-09-26): [DLinear/NLinear](https://github.com/cure-lab/LTSF-Linear), [PatchTST](https://github.com/yuqinie98/PatchTST), [TimesNet](https://github.com/thuml/Time-Series-Library/blob/main/models/TimesNet.py), [XGBoost](https://xgboost.readthedocs.io/en/stable/python/python_api.html), [LightGBM](https://lightgbm.readthedocs.io/en/stable/pythonapi/lightgbm.LGBMRegressor.html). 설치 Torch 2.14.0 / XGBoost 3.4.1 / LightGBM 4.7.0을 유지했다. 초기 font cache 권한 안내는 쓰기 가능한 cache 경로로 해결했다. Jupyter 실행에는 loopback TCP 비암호화 안내가 있었으며 외부 공개 서버나 secret 입력은 사용하지 않았다. CI·Docker·배포 및 다중 seed 검증은 이번 범위가 아니다.
 
+## 2026-09-26 — 작업 난도별 Codex 에이전트 배정
+
+- 메인 Astra medium과 Reviewer Sol medium을 유지하고 Implementer를 Luna xhigh → Sol medium으로 변경했다. 단순 보일러플레이트용 Worker Luna high를 `.codex/agents/worker.toml`에 추가했다. Implementer/Worker는 대안으로 선택하며 동시 실행 상한 2·위임 깊이 1, Reviewer 읽기 전용을 유지한다. AGENTS.md에 중복 호출·맥락 복사·실패 반복을 피하는 규칙을 추가했다.
+- 확인(2026-09-26): 설치 CLI 0.157.1, [공식 custom agents 문서](https://learn.chatgpt.com/docs/agent-configuration/subagents)의 프로젝트 TOML 형식과 대조했다. Python tomllib으로 메인·세 역할 TOML 및 모델/추론/권한 값을 검증했다. `codex --strict-config doctor --summary`는 config loaded를 확인했으나 전체 종료 코드는 1(CDN 연결 실패)이었으며 WebSocket·MCP 환경변수·스레드 인벤토리 등 경고가 있었다. `features list`는 strict-config 검증을 지원하지 않았다.
+- 한계: 실제 subagent 실행·선택 모델·토큰/쿼터 절감은 미검증이다. `.codex/`는 기존 Git ignore 대상이며 기존 사용자 문서 변경을 보존했다. 이번 변경은 커밋하지 않는다.
+
 ## 2026-09-26 — 단색·Fade 대시보드와 목표일 기준 예측 비교
 
 - 변경: 기존 Vue/SVG 화면을 단색 배경·청록 강조색·선 중심으로 정리했다. 가격 비교를 뉴스 설명보다 먼저 배치하고 밝게/어둡게/시스템 테마, 진입 및 지평 변경 CSS Fade, `prefers-reduced-motion` 대응을 추가했다. 뉴스 상세·모델·실행·소스 정보와 기존 anchor를 유지하며 의존성·API·DB·모델은 변경하지 않았다.
@@ -266,6 +296,17 @@
 - 계약: 프로젝트 Node.js 22·Python 3.12, publish=false 검증, 동일 커밋 reusable CI 성공 후 publish=true+main 게시, 게시 job에만 packages:write를 유지했다. 의존성·lockfile·Dockerfile 변경은 없다.
 - 호환성: Node.js 24 Action의 runner 최소 v2.327.1과 기존 게시 run의 v2.337.0을 대조했다. checkout v5.1.0의 pull_request_target 기본 동작 변경은 현재 event에 해당하지 않는다.
 - 검증: 기존 run 35455393542의 Node.js 20 경고 대상과 수정 대상을 대조했고 YAML·SHA/게시 조건 정적 검사, 로컬 actionlint v1.7.7과 독립 리뷰를 통과했다. 실제 새 GitHub CI와 경고 소멸은 사용자 push/PR 반영 후 재검증해야 한다.
+
+기록 양식은 다음과 같다.
+
+```markdown
+## YYYY-MM-DD — <작업 목적>
+
+- 변경: <실제 수정한 코드·설정·문서와 이유>
+- 검증: <환경, 실행 명령 또는 Actions 실행, 실제 결과와 제외 항목>
+- 버전: <변경했다면 전후 버전, 공식 근거와 확인일>
+- 제한·다음: <미검증 사항과 다음 작업>
+```
 
 ## 2026-09-19 — GitHub Actions CI·GHCR 게시 workflow 추가
 
