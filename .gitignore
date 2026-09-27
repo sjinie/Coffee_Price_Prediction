@@ -16,6 +16,7 @@
 *.xml
 *.parquet
 data/raw/
+/data/processed/jev_news/
 
 ### Database ###
 *.accdb
