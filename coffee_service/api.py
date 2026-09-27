@@ -113,7 +113,9 @@ def create_app(connection_factory=db.connect):
             articles = db.fetch_all(connection,
                 """SELECT document FROM jev_analyses
                    WHERE available_at <= now()
-                     AND analysis_id = ANY(%s::text[])
+                     AND (analysis_id = ANY(%s::text[]) OR EXISTS (
+                       SELECT 1 FROM models WHERE is_current
+                         AND metrics->>'news_policy' = 'conditional_feature'))
                    ORDER BY event_at DESC, analysis_id LIMIT %s""", (selected_ids, limit))
         return {"latest_run": latest_run,
                 "forecast": forecast["document"] if forecast else None,

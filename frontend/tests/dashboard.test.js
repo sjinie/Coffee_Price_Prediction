@@ -19,11 +19,13 @@ test('뉴스 확률 신호·반영 강도·실제 가격 보정률을 구분한�
   assert.equal(app.formatWeightInterval([.8, .1]), '-')
   assert.equal(app.priceCorrectionPercent({ adjusted_price: 101, news_correction: Math.log(1.01), news_weight: .2 }), '+1%')
   assert.equal(app.priceCorrectionPercent({ adjusted_price: null, news_correction: null }), '-')
-  const strong = { p_bullish: .9, p_bearish: .05, relevance: 1 }
-  const weak = { p_bullish: .45, p_bearish: .4, relevance: 1 }
-  assert.ok(app.articlePressure(strong) > app.articlePressure(weak))
-  assert.ok(Math.abs(app.articlePressure(strong) - .85) < 1e-12)
-  assert.ok(app.articlePressure({ ...strong, p_bullish: .05, p_bearish: .9 }) < 0)
+  const strong = { p_bullish: .9, p_bearish: .05, p_neutral: .03, p_uncertain: .02, relevance: .8, confidence: .5 }
+  const weak = { p_bullish: .45, p_bearish: .4, p_neutral: .1, p_uncertain: .05, relevance: .8, confidence: .5 }
+  assert.equal(app.articlePressure(strong), app.articlePressure(weak))
+  assert.equal(app.articlePressure(strong), .4)
+  assert.equal(app.articlePressure({ ...strong, p_bullish: .05, p_bearish: .9 }), -.4)
+  assert.equal(app.articlePressure({ ...strong, p_bullish: .01, p_neutral: .93 }), 0)
+  assert.equal(app.articlePressure({ ...strong, p_bullish: .9, p_bearish: .9 }), 0)
   assert.equal(app.articlePressure({ p_bullish: null }), null)
   assert.match(app.newsEvidenceLabel('not_demonstrated'), /미확인/)
 })
@@ -118,13 +120,15 @@ test('방향은 예측 기준일 가격과 비교하고 결측·미성숙은 평
   ]
   assert.deepEqual(app.evaluation.value.map(item => item.matched), [true, false, null, true, false])
   assert.deepEqual(app.evaluation.value.map(item => item.priceError), [-10, -20, 0, 0, -5])
-  assert.deepEqual(app.evaluationSummary.value, { count: 4, matched: 2, missing: 1, accuracy: 50, mae: 7 })
+  assert.deepEqual(app.evaluationSummary.value, { count: 4, matched: 2, missing: 1, accuracy: 50, balancedAccuracy: null, directionalCount: 3, mae: 7, rmse: Math.sqrt(105) })
   assert.ok(Math.abs(app.evaluation.value[1].predictedChange + 5) < 1e-10)
   assert.equal((app.directionPaths('actualChange').match(/M/g) || []).length, 2)
   assert.doesNotMatch(app.directionPaths('predictedChange'), /NaN|Infinity/)
   app.selectedHorizon.value = 5
   assert.equal(app.evaluationSummary.value.accuracy, null)
+  assert.equal(app.evaluationSummary.value.balancedAccuracy, null)
   assert.equal(app.evaluationSummary.value.mae, null)
+  assert.equal(app.evaluationSummary.value.rmse, null)
   assert.equal(app.directionPaths('actualChange'), '')
   assert.equal(app.selectedEvaluation.value, undefined)
   assert.ok(Number.isFinite(app.errorBound.value))
@@ -175,6 +179,38 @@ test('뉴스 응답을 기다리는 동안에도 가격 로딩은 끝난다', as
   `)(computed, () => {}, ref, fetch)
   await app.loadData()
   assert.equal(app.loading.value, false)
+})
+
+test('선택 모델은 현재 버전만 표시하고 뉴스 피처·수치 복귀를 구분한다', () => {
+  const app = new Function('computed', 'onMounted', 'ref', `${source}
+    return { models, predictions, prices, selectedHorizon, hasConditionalModels, futurePredictions, evaluationSummary, newsUseLabel, signalStatusLabel }
+  `)(computed, () => {}, ref)
+  app.models.value = [{ model_id: 'selected-h5', name: 'LightGBM + DLinear + 뉴스', horizons: [5], metrics: { news_policy: 'conditional_feature' } }]
+  app.prices.value = [{ date: '2026-09-25', close: 300 }, { date: '2026-09-01', close: 300 }]
+  app.predictions.value = [
+    { model_id: 'old-h5', horizon: 5, origin_date: '2026-09-25', target_date: '2026-10-02', actual_price: null, predicted_price: 999 },
+    { horizon: 5, origin_date: '2026-09-25', target_date: '2026-10-02', actual_price: null, predicted_price: 999 },
+    { model_id: 'selected-h5', horizon: 5, origin_date: '2026-09-25', target_date: '2026-10-02', actual_price: null, predicted_price: 278.213619, final_direction: 'DOWN', signal_status: 'numeric_fallback', news_article_count: 0, news_impact_score: 0 },
+  ]
+  assert.equal(app.hasConditionalModels.value, true)
+  assert.deepEqual(app.futurePredictions.value.map(item => item.predicted_price), [278.213619])
+  assert.match(app.newsUseLabel(app.futurePredictions.value[0]), /이용 가능한 기사 없음/)
+  assert.match(app.newsUseLabel({ signal_status: 'numeric_fallback', news_article_count: 2, news_impact_score: 0 }), /집계 점수 0/)
+  assert.match(app.newsUseLabel({ signal_status: 'news_feature', news_article_count: 2, news_impact_score: .3 }), /뉴스 피처 사용/)
+  assert.equal(app.signalStatusLabel('numeric_fallback'), '수치 피처로 예측')
+
+  app.predictions.value = [
+    { model_id: 'selected-h5', horizon: 5, origin_date: '2026-09-01', target_date: '2026-09-08', actual_price: 330, predicted_price: 300 },
+    { model_id: 'selected-h5', horizon: 5, origin_date: '2026-09-01', target_date: '2026-09-09', actual_price: 270, predicted_price: 300 },
+    { model_id: 'selected-h5', horizon: 5, origin_date: '2026-09-01', target_date: '2026-09-10', actual_price: 330, predicted_price: 330 },
+    { model_id: 'selected-h5', horizon: 5, origin_date: '2026-09-01', target_date: '2026-09-11', actual_price: 300, predicted_price: 270 },
+  ]
+  app.selectedHorizon.value = 5
+  assert.equal(app.evaluationSummary.value.balancedAccuracy, 25)
+  assert.equal(app.evaluationSummary.value.directionalCount, 3)
+  assert.equal(app.evaluationSummary.value.rmse, Math.sqrt((900 + 900 + 0 + 900) / 4))
+  assert.match(componentSource, /newsView\?\.forecast && !hasConditionalModels/)
+  assert.match(componentSource, /23:00 UTC/)
 })
 
 test('Jev 보정은 legacy 신호와 분리하며 0 계수를 숨기지 않는다', () => {

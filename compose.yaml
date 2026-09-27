@@ -87,13 +87,7 @@ services:
         read_only: true
         bind:
           create_host_path: false
-      - type: bind
-        source: ${PIPELINE_ARTIFACT:-./model_artifacts/production_dlinear_60.pt}
-        target: /app/model_artifacts/production_dlinear_60.pt
-        read_only: true
-        bind:
-          create_host_path: false
-    command: ["refresh", "--artifact", "/app/model_artifacts/production_dlinear_60.pt"]
+    command: ["refresh", "--artifact", "/models/selected_news/manifest.json"]
 
 volumes:
   postgres-data:

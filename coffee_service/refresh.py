@@ -33,18 +33,23 @@ def run_cycle(source_dir, artifact, data, start, *, stop=None, end=None, databas
     state = {"started_at": jev._now(), "pid": os.getpid(), "requested_end": end.isoformat(),
              "numeric": "pending", "collection": "pending", "classification": "pending", "errors": []}
     save_state(data, state)
-    try:
-        with source_lock(source_dir):
-            result = pipeline.run_pipeline("incremental", source_dir, artifact, start, end,
-                                           database_url=database_url)
-        state["numeric"] = result["status"]
-        state["numeric_source_failures"] = result.get("source_failures", [])
-        if state["numeric_source_failures"]:
-            state["numeric"] = "partial"
-    except Exception as exc:
-        state["numeric"] = "failed"
-        state["errors"].append("numeric: " + type(exc).__name__)
-    save_state(data, state)
+    def run_numeric():
+        try:
+            with source_lock(source_dir):
+                result = pipeline.run_pipeline("incremental", source_dir, artifact, start, end,
+                                               database_url=database_url, jev_cache=data / "responses.json")
+            state["numeric"] = result["status"]
+            state["numeric_source_failures"] = result.get("source_failures", [])
+            if state["numeric_source_failures"]:
+                state["numeric"] = "partial"
+        except Exception as exc:
+            state["numeric"] = "failed"
+            state["errors"].append("numeric: " + type(exc).__name__)
+        save_state(data, state)
+
+    selected = Path(artifact).suffix == ".json"
+    if not selected:
+        run_numeric()
     if not stop.is_set():
         try:
             collected = news_incremental.collect_pending(data, end)
@@ -53,6 +58,7 @@ def run_cycle(source_dir, artifact, data, start, *, stop=None, end=None, databas
             state["collection"] = "failed"
             state["errors"].append("collection: " + type(exc).__name__)
         save_state(data, state)
+    classification_retry_epoch = None
     while not stop.is_set():
         try:
             if not os.getenv("AI_GATEWAY_API_KEY"):
@@ -65,18 +71,29 @@ def run_cycle(source_dir, artifact, data, start, *, stop=None, end=None, databas
             state["classification"] = worker["state"]
             if result or worker["state"] in {"completed", "stopped", "budget_stop", "cost_unknown", "retry_exhausted"}:
                 break
-            if stop.wait(max(0, worker.get("next_attempt_epoch", time.time()) - time.time())):
+            delay = max(0, worker.get("next_attempt_epoch", time.time()) - time.time())
+            # A provider retry wait must not postpone the daily price forecast.
+            if selected and delay > 0 and worker.get("consecutive_failures", 0) > 0:
+                classification_retry_epoch = worker["next_attempt_epoch"]
+                break
+            if stop.wait(delay):
                 break
         except Exception as exc:
             state["classification"] = "failed"
             state["errors"].append("classification: " + type(exc).__name__)
             break
+    # Forecasts are immutable: complete the available news update before issuing
+    # the selected model forecasts, including the no-news path after API failure.
+    if selected and not stop.is_set():
+        run_numeric()
     state["finished_at"] = jev._now()
     state["status"] = ("interrupted" if stop.is_set() else "success" if
                        state["numeric"] == "success" and state["collection"] == "success" and
                        state["classification"] == "completed" else "partial")
     retry_source = state["numeric"] in {"failed", "partial"} or state["collection"] == "failed"
     state["next_run_epoch"] = time.time() + (SOURCE_RETRY if retry_source else WEEK)
+    if classification_retry_epoch is not None:
+        state["next_run_epoch"] = min(state["next_run_epoch"], classification_retry_epoch)
     save_state(data, state)
     print("Refresh: " + str({k: state[k] for k in ("status", "numeric", "collection", "classification")}), flush=True)
     return state

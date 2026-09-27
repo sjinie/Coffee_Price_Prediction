@@ -1,5 +1,18 @@
 # 작업 상태
 
+## 2026-09-28 — 사용자 확정 모델 운영 적용
+
+- 5일 **LightGBM300 + DLinear10**, 20일 **LightGBM100 + XGBoost100**의 가격 50:50 평균, 60일 **DLinear30**을 사용한다. 모두 가격·기후·거시 27개 + 조건부 뉴스 feature이며 Naive는 구성원에 없다.
+- `03_9_selected_models_serving.ipynb`와 `python -m data_code.export_selected_models`가 03_8의 최종 가중치·표준화 통계를 `model_artifacts/selected_news/manifest.json` 및 구성원 파일로 내보낸다. 학습 정답 cutoff는 2025-12-31이며 재학습·추가 모델 탐색은 없다. artifact는 Git에 포함하지 않는다.
+- 기사 점수는 유일 최댓값 방향 × relevance × confidence, 일별 합에 tanh를 적용한다. 뉴스 없음/일별 점수0이면 동일 설정의 기본 feature 모델로 복귀한다. 실제 서비스는 실제 이용 가능해진 첫 거래일 UTC23시 기준으로 분석을 반영하되 7일 넘게 지연된 소급 분석은 제외하며 과거 기사 사후분류를 오늘의 신규 신호로 투입하지 않는다. 별도 잔차 보정은 중복 적용하지 않는다.
+- 기본 pipeline artifact와 Compose/일일 runner 경로를 선택 manifest로 연결했다. 구 artifact를 명시한 기존 연구 경로는 보존한다. 새 모델 ID로 2026년 이후 예측을 추가하고 기존 예측은 삭제하지 않는다. 새 clone은 연구 실행 산출물 또는 내보낸 artifact 21개 파일 및 10개 원천 Parquet가 필요하다.
+
+- 검증: Python 관련 회귀 36 passed/3 skipped/2 subtests, 03_9 전체 실행·저장 완료. 03_8의 동일 연구 입력467건(179/164/124)에서 운영 모델 수익률 차이 최대1.86e-9, 20·60일은 동일했다. 최신9월25일 예측은5일278.213619·20일285.326050·60일362.728512¢/lb다. 실제 가용 뉴스0건이므로 현재는 조건부 기본 모델 경로다. 이는 연구용 사후 뉴스 feature 성과를 실시간 성과로 표시한 것이 아니다.
+- 운영 Linux에 XGBoost3.4.1을 추가하고 기존 Mac 연구 버전과 맞췄다(기존 의존성 버전 변경 없음). 공식 [모델 IO](https://xgboost.readthedocs.io/en/stable/tutorials/saving_model.html), [설치 안내](https://xgboost.readthedocs.io/en/stable/install.html)를2026-09-28 확인했다. JSON 모델과 NPZ 통계 및 SHA-256을 검증한다.
+- Vue 테스트9/9·Vite build 성공. Azure amd64에서 API·pipeline·web 이미지를 `selected-b47bac4ae518` 태그로 별도 빌드했다. 기존 운영 DB·컨테이너·daily workflow는 변경하지 않았다. `coffee_selected_preview` 별도 DB에서 실제 pipeline 3,076가격/552예측 적재와 반복 UPSERT 불변 fingerprint를 확인했다. 새 API의 `/news/jev`도 잔차 forecast 없이 최근50기사 응답을 확인했다.
+- 검증용 화면은 SSH loopback tunnel `http://127.0.0.1:18808/` → VM127.0.0.1:18080이며 외부 포트는 개방하지 않았다. 실제 브라우저에서 모델 이름·5일/60일 차트·균형정확도/RMSE·뉴스 미적용 표시를 확인했다. VM 원천의9월25일 종가는278.100006이며 예측은277.718595/284.813979/362.417531¢/lb다. 연구 snapshot의종가278.600006과 달라 로컬03_9 수치와 차이가 있다.
+- **운영 전환 대기:** main `61c4cff`의 일일 workflow는 아직 기존모델을 활성화한다. 사용자에게 새 대시보드 배포+구버전 자동갱신 일시정지 또는 main 우선 반영 중 선택을 요청했다. 승인 없이 workflow중지·push·PR병합·운영모델 전환을 수행하지 않았다. 재개 시점에는 새 코드와21개artifact를 main/runtime에 맞추고 schedule을 활성화해야 한다. Gateway403 중단·비용제한은 유지하며 새 LLM요청은 수행하지 않았다.
+
 ## 2026-09-28 — 뉴스 포함 6개 단일 모델·방향/RMSE 평균 확장 재학습
 
 - 사용자 확인에 따라 **기존 예측 재집계가 아니라 학습 표본을 늘리는 재학습**을 실행했다. `03_8_expanding_news_benchmark.ipynb`와 작은 학습 헬퍼/테스트를 추가하고 03_6·03_7 및 기존 공용 구현은 보존했다. DLinear/NLinear/XGBoost/LightGBM/PatchTST/TimesNet, 5/20/60거래일, 신경망10/30epoch·트리100/300trees를 비교했다. 모든 비교 후보는 뉴스 입력28개 조건부 모델이며 결측/점수0은 동일 설정의27개 기본 모델로 복귀한다. Naive는 구성원에 없다.

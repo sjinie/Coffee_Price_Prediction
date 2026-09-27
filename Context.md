@@ -1,9 +1,17 @@
 # 프로젝트 맥락
+
+## 2026-09-28 — 사용자 확정 모델 운영 적용
+
+- 5일 **LightGBM300 + DLinear10**, 20일 **LightGBM100 + XGBoost100**의 가격 50:50 평균, 60일 **DLinear30**을 사용한다. 모두 가격·기후·거시 27개 + 조건부 뉴스 feature이며 Naive는 구성원에 없다.
+- `03_9_selected_models_serving.ipynb`와 `python -m data_code.export_selected_models`가 03_8의 최종 가중치·표준화 통계를 `model_artifacts/selected_news/manifest.json` 및 구성원 파일로 내보낸다. 학습 정답 cutoff는 2025-12-31이며 재학습·추가 모델 탐색은 없다. artifact는 Git에 포함하지 않는다.
+- 기사 점수는 유일 최댓값 방향 × relevance × confidence, 일별 합에 tanh를 적용한다. 뉴스 없음/일별 점수0이면 동일 설정의 기본 feature 모델로 복귀한다. 실제 서비스는 실제 이용 가능해진 첫 거래일 UTC23시 기준으로 분석을 반영하되 7일 넘게 지연된 소급 분석은 제외하며 과거 기사 사후분류를 오늘의 신규 신호로 투입하지 않는다. 별도 잔차 보정은 중복 적용하지 않는다.
+- 기본 pipeline artifact와 Compose/일일 runner 경로를 선택 manifest로 연결했다. 구 artifact를 명시한 기존 연구 경로는 보존한다. 새 모델 ID로 2026년 이후 예측을 추가하고 기존 예측은 삭제하지 않는다. 새 clone은 연구 실행 산출물 또는 내보낸 artifact 21개 파일 및 10개 원천 Parquet가 필요하다.
+
 - 상태: Reviewer 최종 pass(0건) 뒤 Docker Compose Local E2E를 재현했다. 저장된 `data/processed/2014-07-01_2025-12-31/`와 `model_artifacts/production_dlinear_60.pt`로 backfill·반복 incremental, API·웹 조회를 검증했다.
 - 실행: Docker Compose가 PostgreSQL → 스키마 생성 API → Nginx 웹 순서로 시작한다. 데이터·artifact는 새 clone에 포함되지 않으므로 외부 제공본을 준비하고, `.env.example`을 `.env.docker`로 복사해 로컬 `POSTGRES_PASSWORD`를 설정한다.
 - 환경: native는 프로젝트 밖의 Python 3.12 uv 환경을 유지한다. Docker 실행은 이 venv와 호스트 PostgreSQL에 의존하지 않는다.
 - 제약: 기존 Notebook·분석 결과·데이터·artifact·사용자 변경·실제 .env를 보존한다.
-- 서빙: 5·20일은 Persistence, 60일은 가격+거시 DLinear artifact다. 기존 단일 기간 결과는 후보 근거이며 안정적 우위가 확정된 것은 아니다.
+- 서빙 선택: 5일 LightGBM+DLinear, 20일 LightGBM+XGBoost 가격 단순평균, 60일 DLinear. 모두 조건부 뉴스 feature를 사용하며 안정적 예측 우위는 미확정이다.
 
 # 다음 단계
 - GitHub Actions CI와 수동 GHCR 게시 workflow를 PR로 main에 반영한 뒤 실제 실행 결과를 확인한다. Azure 배포는 별도 작업으로 유지한다.

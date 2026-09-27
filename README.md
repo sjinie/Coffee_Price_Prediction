@@ -5,9 +5,19 @@
 ## 프로젝트 목적
 과거 가격, 거시경제 데이터(환율, 유가 등), 원산지 기후 데이터 등 다양한 시계열 데이터를 바탕으로 Feature Selection과 모델별 RMSE를 비교하여 단/중/장기 예측의 정확도를 올리는 것을 목표로 하였습니다.
 
-기존 학부 프로젝트의 Attention-LSTM 예측을 바탕으로 데이터 수집, 시간 정렬, EDA, 모델 비교를 다시 구성했습니다. 현재는 Attention-LSTM과 앙상블 조합별 비교까지 진행했습니다. 5·20일 예측에서는 가격 유지 기준을 크게 넘지 못했고, 60일에서는 가격+거시 DLinear가 다음 검토 후보로 남았습니다. 현재는 FastAPI와 Vue 대시보드, Docker Local E2E를 구현했으며, 5·20일은 가격 유지 기준을, 60일은 가격+거시 DLinear를 서빙합니다.
+기존 학부 프로젝트의 Attention-LSTM 예측을 바탕으로 데이터 수집, 시간 정렬, EDA, 모델 비교를 다시 구성했습니다. 현재는 Attention-LSTM과 앙상블 조합별 비교까지 진행했습니다. 5·20일 예측에서는 가격 유지 기준을 크게 넘지 못했고, 60일에서는 가격+거시 DLinear가 다음 검토 후보로 남았습니다. 현재 선택 모델은 **5일 LightGBM+DLinear, 20일 LightGBM+XGBoost 가격 단순평균, 60일 DLinear**이며 모두 조건부 뉴스 feature를 사용합니다. 원두 매수 판단을 위해 가격 방향과 균형정확도를 먼저 확인하고 RMSE를 보조 지표로 봅니다.
 
 분석은 [03-1: EDA·기준 모델](data_code/03_1_eda_and_baseline_models.ipynb) → [03-2: 지평별 재검증·앙상블](data_code/03_2_horizon_model_validation.ipynb) 순서로 읽으면 됩니다. 아래 이미지는 두 노트북에 저장된 실제 출력입니다.
+
+## 선택 모델 실행 (03_8 → 03_9)
+
+[03_8 비교](data_code/03_8_expanding_news_benchmark.ipynb)의 확정 설정·2025년말 학습 가중치를 [03_9 운영 적용](data_code/03_9_selected_models_serving.ipynb)에서 내보내고 대조합니다. 03_9를 Run All하거나 `python -m data_code.export_selected_models`를 실행하세요. 출력 `model_artifacts/selected_news/` 전체를 운영 `/srv/coffee/pipeline/models/selected_news/`에 제공해야 합니다. 원천에는 커피·ALFRED3종·기후6종 Parquet가 필요합니다. 새 가중치로 바꿀 때는 새 버전·디렉터리를 사용합니다.
+
+```bash
+python -m coffee_service.pipeline incremental --skip-ingestion --end 2026-09-25 --source-dir data/processed/fixed_ensemble_news/sources_20260928 --artifact model_artifacts/selected_news/manifest.json --jev-cache data/jev/responses.json
+```
+
+DB 접속 정보는 기존 런타임 환경변수로 설정합니다. 실시간 뉴스는 실제 이용 가능해진 첫 거래일 UTC23시 기준으로 반영하며 7일 넘게 지연된 소급 분석은 제외합니다. 뉴스 결측·점수0이면 동일 모델의 가격·기후·거시 입력만 사용하며, 과거 기사 사후분류와 운영 예측은 구분합니다. 기본 모델에 별도 뉴스 잔차를 다시 더하지 않습니다. 일일 runner 코드가 main에 반영되기 전에는 구버전 자동갱신이 새 선택을 덮어쓸 수 있으므로 전환 상태는 [STATUS](docs/STATUS.md)를 확인하세요. 아래03_1·03_2의 표·그림은 기존 연구 기록입니다.
 
 ## 데이터와 예측 기준
 

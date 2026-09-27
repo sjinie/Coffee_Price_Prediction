@@ -24,7 +24,8 @@ from .ingestion import (
     persist_increment,
     source_lock,
 )
-from .modeling import DEFAULT_ARTIFACT, load_bundle
+from .modeling import load_bundle
+from .selected_models import DEFAULT_SELECTED as DEFAULT_ARTIFACT
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -161,6 +162,7 @@ def run_pipeline(
     intelligence_artifact=None,
     ingest_news_source=False,
     news_availability="live",
+    jev_cache=None,
 ) -> dict:
     source_dir, artifact = Path(source_dir), Path(artifact)
     if news_availability not in {"live", "historical"}:
@@ -212,11 +214,28 @@ def run_pipeline(
                 raise RuntimeError("수집 실패: " + ", ".join(blocking_failures))
             sources = sources_as_of(source_dir, end)
             validate_macro_freshness(sources, end)
-            dataset = assemble_features(sources, fit_end=min("2023-12-31", end.isoformat()))
-            bundle = load_bundle(artifact)
-            predictions = generate_predictions(dataset, bundle)
+            selected = artifact.suffix == ".json"
+            if selected:
+                from . import jev_store
+                from .selected_models import SelectedBundle, assemble_selected, daily_news, load_weather, selected_predictions
+
+                if intelligence_artifact is not None:
+                    raise ValueError("선택 모델에는 별도 뉴스 잔차/분류 보정을 중복 적용하지 않습니다.")
+                bundle = SelectedBundle(artifact)
+                dataset = assemble_selected(load_weather(sources, source_dir, end), bundle.manifest["train_cutoff"])
+                cache = Path(jev_cache) if jev_cache else ROOT / "data/jev/responses.json"
+                records = jev_store.read_analyses(cache.parent, latest=True) if cache.exists() else []
+                news = daily_news(records, dataset.sessions)
+                predictions = selected_predictions(dataset, bundle, news)
+            else:
+                dataset = assemble_features(sources, fit_end=min("2023-12-31", end.isoformat()))
+                bundle = load_bundle(artifact)
+                predictions = generate_predictions(dataset, bundle)
             validate_latest_prediction_coverage(dataset, predictions)
-            if intelligence_artifact is None:
+            if selected:
+                db.upsert_intelligence_models(connection, bundle.model_records())
+                db.upsert_jev_analyses(connection, records)
+            elif intelligence_artifact is None:
                 db.upsert_models(connection, bundle)
             else:
                 db.upsert_models(connection, bundle, activate=False)
@@ -419,6 +438,8 @@ def main(argv=None) -> int:
 
 def _run_command(args, start, end):
     if args.mode == "news":
+        if args.artifact.suffix == ".json":
+            raise ValueError("선택 모델은 refresh에서 뉴스 feature를 사용합니다. 별도 잔차 보정은 지원하지 않습니다.")
         if not args.skip_ingestion:
             with source_lock(args.source_dir):
                 run_pipeline("incremental", args.source_dir, args.artifact, start, end,
@@ -433,6 +454,7 @@ def _run_command(args, start, end):
             result = run_pipeline(
                 args.mode, args.source_dir, args.artifact, start, end,
                 selected_groups=args.sources, selected_regions=args.regions,
+                jev_cache=args.jev_cache,
                 skip_ingestion=args.skip_ingestion, database_url=args.database_url,
                 news_path=args.news_path, intelligence_artifact=args.intelligence_artifact,
                 ingest_news_source=args.ingest_news, news_availability=args.news_availability,

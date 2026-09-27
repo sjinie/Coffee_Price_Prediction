@@ -73,7 +73,7 @@ export RSYNC_RSH="ssh -F $work/ssh_config"
 mkdir -p "$work/sources" "$work/jev" "$work/models"
 rsync -a "coffee-vm:$COFFEE_STATE_DIR/sources/" "$work/sources/"
 rsync -a "coffee-vm:$COFFEE_STATE_DIR/jev/" "$work/jev/"
-rsync -a "coffee-vm:$COFFEE_STATE_DIR/models/production_dlinear_60.pt" "$work/models/production_dlinear_60.pt"
+rsync -a "coffee-vm:$COFFEE_STATE_DIR/models/selected_news/" "$work/models/selected_news/"
 
 ssh -F "$work/ssh_config" -N -o ExitOnForwardFailure=yes \
   -L 127.0.0.1:15432:127.0.0.1:15432 coffee-vm &
@@ -86,7 +86,7 @@ sync_ready=1
 python -m coffee_service.pipeline refresh --once \
   --source-dir "$work/sources" \
   --jev-cache "$work/jev/responses.json" \
-  --artifact "$work/models/production_dlinear_60.pt" &
+  --artifact "$work/models/selected_news/manifest.json" &
 pipeline_pid=$!
 wait "$pipeline_pid" || pipeline_status=$?
 pipeline_pid=
