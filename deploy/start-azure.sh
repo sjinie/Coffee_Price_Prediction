@@ -37,5 +37,5 @@ export PGPASSWORD="$COFFEE_PIPELINE_DB_PASSWORD"
 GRANT SELECT ON ALL TABLES IN SCHEMA public TO coffee_api;
 SQL
 unset PGPASSWORD
-"${compose[@]}" up -d --no-build --wait --wait-timeout 120 api web
+"${compose[@]}" up -d --no-build --wait --wait-timeout 120 api web caddy
 "${compose[@]}" ps

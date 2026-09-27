@@ -1,5 +1,14 @@
 # 작업 상태
 
+## 2026-09-28 — Azure DNS 이름·HTTPS 적용
+
+- Aside 스킬의 Azure Portal UI에서 기존 공용 IP `vm-coffee-demo-ip`에 DNS label `coffee-price-sjinie`를 적용했다. `coffee-price-sjinie.koreacentral.cloudapp.azure.com`의 A 레코드는 기존 `52.141.6.78`이다. `vm-coffee-demo-nsg`에 우선순위 330, TCP 443 Allow 규칙 `HTTPS`를 추가했다. 새 VM·IP·유료 DNS zone·도메인 구매는 없다.
+- `deploy/compose.azure.yaml`에 Caddy 2.11.4-alpine을 공식 image index digest `sha256:6aeddd44c3078b0f9a35206472a11420648a79c184603ef95957d0a20044cb2b`로 고정했다. Caddy만 80/443을 공개하고 web은 내부 80, API·DB 경계는 유지한다. `COFFEE_DOMAIN`을 런타임 env에 추가했으며 `Caddyfile`은 HTTPS reverse proxy와 구 IP의 canonical redirect를 담당한다. `/data`, `/config`는 named volume으로 보존한다. TCP만 공개하므로 도달할 수 없는 HTTP/3를 광고하지 않도록 h1/h2를 설정했다.
+- VM 설정·env 백업은 root 전용 `/srv/coffee/backups/before-https-20260928`에 보존했다. `up --no-build --no-deps web caddy`로 전환했고 API·web image ID는 기존 main `61c4cff` 배포와 동일하다. 로컬 미게시 연구·리팩터링 커밋을 배포하지 않았다. `start-azure.sh`의 Caddy 추가는 향후 새 소스 배포용이며 이번에는 이 빌드 스크립트를 실행하지 않았다.
+- 실제 검증: VM Compose config·Caddy validate·Bash 구문 검사 통과. Let’s Encrypt YE1 인증서 발급, 도메인 일치·신뢰 체인 검증, 외부 HTTPS `/health`·최신 가격·5/20/60일 예측 200 확인. 인증서 유효기간은 2026-09-27 14:29:54~2026-12-26 14:29:53 UTC. 도메인 HTTP는 308, 구 IP HTTP는 경로·쿼리를 유지한 301 HTTPS 이동이다. Caddy 컨테이너 재생성 후 인증서 SHA-256 fingerprint가 동일하고 HTTPS 200이며 자동 인증서 관리·renewal 정보 로드가 확인됐다. 미래 갱신 실행 자체를 지금 검증한 것은 아니다.
+- Aside에서 실제 HTTPS 화면의 한글·가격·5/20/60일 차트 전환을 확인했다. 독립 리뷰의 재빌드 주의점은 위 no-build 전환으로 해소했다. Caddy의 HTTP-only 서버 경고는 80번 redirect listener에 관한 것이며 443의 정상 TLS와 구분한다. 기존 Jev 모델 403 제한은 이번 작업과 별개이며 변경하지 않았다.
+- 공식 근거(2026-09-28): [Azure public IP DNS label](https://learn.microsoft.com/en-us/azure/virtual-network/ip-services/public-ip-addresses#domain-name-label), [Caddy 자동 HTTPS](https://caddyserver.com/docs/automatic-https), [공식 Docker 이미지·영속 볼륨](https://hub.docker.com/_/caddy), [Caddy 2.11.4](https://github.com/caddyserver/caddy/releases/tag/v2.11.4), [HTTP 프로토콜 설정](https://caddyserver.com/docs/caddyfile/options#protocols).
+
 ## 2026-09-28 — 모델별 방향 정확도·구매 비용 시나리오·단기 사례 조사
 
 - `03_3_single_model_comparison.ipynb` 13~15절에 기존 저장 예측의 방향 적중률·균형 정확도·상승 정밀도/누락률·하락 재현율, 항상 상승/하락 기준, 연도별·모든 offset 비중첩·블록 h/2h 조건부 95% 구간을 추가했다. 6개 단일 모델·전체 가격 산술평균·기존 검증 RMSE 선택 쌍을 비교하며 재학습·방향 기준 재선택·서빙 변경은 없다.
