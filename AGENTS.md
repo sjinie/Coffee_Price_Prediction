@@ -1,90 +1,97 @@
 # Repository Guidelines
 
-## 작업 방향
+## 목적과 작업 범위
 
-데이터 분석 포트폴리오 프로젝트입니다. 학부 졸업생 수준으로 읽기 쉬운 코드와 실행되는 결과를 먼저 만드세요. 작업 시작 시 `Context.md`, `docs/STATUS.md`의 최신 항목과 현재 Git diff를 확인하고 기존 변경을 보존하세요.
+DA/DE 데이터 분석 포트폴리오용 데이터 분석 프로젝트다. 학부 졸업생 수준으로 읽기 쉬운 코드, 정확한 데이터 처리, 재현 가능한 실행을 우선한다. 확장성을 이유로 불필요한 프레임워크·추상화·서비스를 추가하지 않는다.
 
-- 수집은 `data_code/02_backfill_10y.py` 하나를 중심으로 구현합니다. 소스별 함수와 짧은 주석이면 충분합니다. 추상화·설정·보조 스크립트를 먼저 늘리지 마세요.
-- 새 ADR, JSON manifest, 해시 목록, 별도 검증 보고서는 요청받지 않는 한 만들지 마세요. 필요한 근거는 위 통합 문서와 원응답으로 확인합니다.
-- README는 프로젝트 소개, 실행법, 결과, Troubleshooting & 배운 점을 중심으로 씁니다. 실제로 겪은 문제와 선택 이유를 3~4줄로 설명하세요.
-- 정기 배치·복구·모니터링은 기본 수집 → CatBoost 비교 → FastAPI와 차트 화면이 동작한 뒤 필요한 만큼 추가합니다.
-- 확인하지 않은 원인·성과·개선율을 쓰지 마세요. 코드와 결과를 직접 설명할 수 있는 수준을 유지하세요.
+- 시작 시 `Context.md`, `docs/STATUS.md` 최신 항목, 관련 코드와 Git 상태를 확인한다. 나머지 문서는 작업에 필요한 부분만 읽는다.
+- 현재 구현과 실행 증거를 기준으로 판단한다. 문서·이전 에이전트의 보고만으로 완료를 단정하지 않는다.
+- 기존 CLI·데이터/API 계약·모듈 경계를 우선 재사용한다. `data_code/02_backfill_10y.py` 같은 진입점 호환성은 유지하되 내부 로직을 한 파일에 강제하지 않는다.
+- 작업 범위를 벗어난 모델 연구·대규모 재수집·재학습·전체 리팩터링은 하지 않는다.
+- 기존 notebook·원본 자료·사용자 변경을 보존한다. `.env`, `data/old_data/`, `data_code/old_code/`, `docs/old_docs/`를 임의로 삭제하지 않는다.
+- 불필요한 ADR·manifest·중복 보고서를 만들지 않는다. 실행 추적·재현·배포에 필요한 run ID, 모델 버전, image digest는 허용한다.
 
-## 파일 배치
+## 환경과 의존성
 
-- `data_code/`: 수집·EDA·전처리 코드. notebook은 저장된 파일럿의 표·그래프를 확인하며 요청할 때만 재수집합니다.
-- `data/`: 수집 데이터와 전처리 테이블. 새 수집 결과는 `data/processed/<시작일>_<종료일>/`에 Parquet로 저장합니다. 코드·문서는 넣지 마세요.
-- `configs/regions.yaml`: 기존 기상 요청 좌표. `configs/sources.yaml`은 간결한 API 소스 요약입니다.
-- `tests/`: 필요한 기능·회귀 검사. 실제 수집 진입점으로 사용하지 마세요.
-- `docs/STATUS.md`: 실제 변경·검증 결과·다음 작업을 짧게 기록합니다. 새 보고서로 내용을 중복하지 마세요.
-- `data/raw/pilot_probe/`: 소스별 원응답 한 벌. run_id·manifest·요청 로그를 다시 생성하지 마세요.
-- `docs/architecture.md`, `docs/troubleshooting.md`: 통합 설계·조사 문서.
-- `data/old_data/`, `data_code/old_code/`, `docs/old_docs/`: 학부 원본 자료를 보존합니다. `.env`와 `data/old_data/`는 삭제하지 마세요.
+- Mac 네이티브 분석은 기존 외부 venv `$HOME/.virtualenvs/coffee-price-prediction`과 Python 3.12를 사용한다. 프로젝트 내부에 `.venv`를 새로 만들지 않는다.
+- CI·Docker·VM은 각 실행 환경의 의존성 설정을 따른다. Mac 경로와 venv에 의존하지 않는다.
+- `requirements*.txt`, frontend manifest/lockfile, Dockerfile, workflow를 확인하고 해당 실행 영역에 필요한 패키지만 설치한다.
+- PyCaret 등 기존 연구 환경은 재현성을 보존한다. 의존성 관리 도구 전환이나 일괄 업그레이드는 별도 작업으로 다룬다.
+- 패키지 설치·lockfile 수정은 Orchestrator가 조정한다. 여러 에이전트가 같은 환경이나 의존성 파일을 동시에 변경하지 않는다.
+- secret은 런타임 환경변수로 주입한다. 로그·예외·URL·이미지·프론트엔드 번들·커밋에 노출하지 않는다.
+- 운영 CSV/Parquet·DB 파일·대형 가중치는 기본적으로 Git과 build context에서 제외한다. 작은 테스트 fixture는 허용하며 기존 추적 파일은 임의로 제거하지 않는다.
 
-## 환경과 코드
+## 공식 문서와 버전 확인
 
-Apple Silicon Mac에서 uv로 관리하는 프로젝트 폴더 외부의 기존 가상환경 `$HOME/.virtualenvs/coffee-price-prediction`과 CPython 3.12를 사용합니다. 프로젝트 내부에 `.venv`를 만들지 마세요. PyCaret 4.0.0a8과 검증한 의존성은 `requirements.txt`를 따릅니다.
+의존성·외부 API·CI·Docker·배포 설정을 추가하거나 변경할 때 다음을 수행한다.
 
-`.env`의 `COFFEE_VENV`와 `UV_PROJECT_ENVIRONMENT`는 이 외부 경로를 가리킵니다. `.env`에서는 `python-dotenv`도 홈 경로를 확장하도록 `${HOME}` 표기를 사용합니다. 셸에서 실행할 때는 다음과 같이 설정합니다.
+1. 저장소의 선언 버전과 실제 설치·실행 버전을 먼저 확인한다.
+2. 공식 문서, 공식 저장소의 릴리스·migration guide·deprecation·보안 공지를 확인한다. 기억에 의존해 버전·API·설정 키·SHA를 만들지 않는다.
+3. 현재 버전 문서로 기존 동작을 이해하고, 지원 중인 안정 버전과 변경 영향을 비교한다. 최신 major로 무조건 올리지 않는다.
+4. OS·CPU 아키텍처·Python/Node·runner·전이 의존성·모델 artifact 호환성을 확인한다.
+5. 필요한 범위만 변경하고 의존성 선언과 기존 lock/constraints를 일치시킨 뒤 설치·테스트·빌드를 검증한다.
 
-```sh
-export COFFEE_VENV="$HOME/.virtualenvs/coffee-price-prediction"
-export UV_PROJECT_ENVIRONMENT="$COFFEE_VENV"
-source "$COFFEE_VENV/bin/activate"
-python data_code/02_backfill_10y.py
-```
+추가 원칙:
+- GitHub Action 버전, Action 내부 Node 런타임, 프로젝트의 Node 버전은 별도로 확인한다.
+- Actions는 공식 릴리스에 대응하는 full commit SHA 고정을 우선하고 버전 주석을 남긴다. 배포 이미지는 digest로 식별하며 `latest`에만 의존하지 않는다.
+- 기존 의존성은 이유 없이 바꾸지 않는다. EOL·보안·제거 예정 경고가 있으면 지원되는 대체안과 호환성을 검토한다.
+- 경고를 숨기거나 취약한 런타임 허용·테스트 skip으로 우회하지 않는다. 해결하지 못한 경고는 원인·영향·후속 조치를 보고한다.
+- 변경 근거가 되는 공식 출처·확인일·전후 버전·검증 결과는 기존 STATUS에 짧게 기록한다. 같은 조사 내용을 반복 작성하지 않는다.
+- 문서 접근이나 실제 검증이 불가능하면 미확인으로 남기고, 확인하지 않은 버전을 최신·안전하다고 표현하지 않는다.
 
-패키지는 `uv pip install --python "$COFFEE_VENV/bin/python" -r requirements.txt`처럼 대상 환경을 명시해 관리합니다.
+## 데이터와 검증
 
-Python은 공백 4칸, 함수·변수는 `snake_case`를 사용합니다. 패키지는 설치·검증 후에만 `requirements.txt`에 추가하세요. `.env`의 키는 환경변수로 읽고 출력·URL 로그·예외에 노출하지 마세요.
-
-`data_code/` notebook의 표 항목명·그래프 제목·축 이름·범례·범주명은 한국어로 표시하세요. 첫 코드 셀에서 `platform.system()`에 따라 Windows는 Malgun Gothic, macOS는 AppleGothic, Linux/Colab은 NanumGothic을 설정하고 Linux 폰트 설치 방법을 안내하세요. Seaborn 테마에서도 선택한 폰트를 유지합니다. 데이터 컬럼은 표시할 때만 이름을 바꾸고, 저장된 차트의 글자 표시를 확인하세요. 모델명·티커·지표 약어는 필요하면 함께 적습니다.
-
-## 필요한 검증
-
-수집 코드를 바꾸면 작은 구간 또는 저장된 응답으로 확인하고 실제 실행 결과를 점검하세요. 날짜 정렬·중복·결측·빈 응답, 조인 전후 행 수를 확인합니다. 문서만 바꿨다면 관련 없는 테스트를 반복하지 마세요.
-
-가격 결측이나 OHLC 범위 이탈을 임의 보정하지 않습니다. FRED의 `.`와 NASA의 결측 표시는 결측값으로 바꿉니다. 주말·휴장일을 가격 행으로 만들거나 미래 값으로 채우지 마세요.
-
-모델은 시간 순서로 분할하고 학습 구간 뒤의 정답·전처리 통계가 유입되지 않게 합니다. 같은 기간의 단순 기준 모델과 MAE·RMSE를 비교하며 기간·horizon·seed를 함께 남깁니다. 실행하지 않은 단계는 완료라고 쓰지 마세요.
-
-## 변경과 기록
-
-현재 요청에 포함된 가역적 구현은 매번 승인이나 ADR을 요구하지 않고 진행하세요. 타깃 등 요청 범위를 벗어난 변경, 기존 자료 삭제, 유료 서비스·외부 공개는 필요한 경우에만 확인합니다.
-
-작업이 끝나고 **Reviewer의 검증이 통과되면, 변경 목적별로 논리적인 단위를 나누어 직접 `git add` 및 `git commit`을 실행**하세요. 
-(단, `git push`, `commit --amend`, 히스토리 재작성, force push, `reset --hard` 등의 원격 반영 및 파괴적 명령은 절대 실행하지 않으며 사용자가 직접 처리합니다.)
-
-제목은 `<type>(<scope>): <summary>` 또는 `<type>(<scope>)/<summary>` 형식으로 짧고 명확한 명령형으로 작성합니다. scope를 생략하면 `feat: 10년 데이터 EDA 및 베이스라인 모델 비교 추가`처럼 씁니다.
-
-- `feat`: 새로운 기능 추가
-- `fix`: 버그 수정
-- `refactor`: 코드 리팩토링
-- `style`: 동작 변경 없는 코드 포맷팅
-- `docs`: 문서 수정
-- `test`: 테스트 코드 추가·수정
-- `chore`: 빌드·설정·패키지 관리 등
-
-단순하지 않은 변경은 제목 다음에 빈 줄을 두고 본문에 변경 이유, 달라진 내용, 주요 영향 또는 주의점, 수행한 테스트를 적습니다. 커밋 후 최종 응답에는 생성된 커밋 해시와 메시지 목록을 보고합니다.
-
+- 데이터는 기존 `data/` 구조와 소스 설정을 따른다. 코드·문서는 데이터 디렉터리에 넣지 않는다.
+- 관측·공개·수집·이용 가능 시점을 구분하고 기존 as-of 기준을 유지한다. 미래 정보, 정답, 검증 구간의 전처리 통계를 학습에 유입시키지 않는다.
+- 가격 결측·OHLC 이상을 임의 보정하지 않는다. FRED `.`·NASA 결측 표시는 결측값으로 처리하고 휴장일을 임의 생성하지 않는다.
+- 모델 비교는 동일 평가 날짜·지평의 baseline과 수행하고 기간·seed·지표 정의를 기록한다. 이미 확인한 Test를 미사용 평가셋으로 부르지 않는다.
+- 변경 영향에 맞춰 날짜·중복·결측·조인 행 수·feature 계약·UPSERT·모델 저장/로드·API 응답을 검증한다.
+- 외부 API·LLM·전체 학습은 일반 CI에서 fixture/mock과 분리한다. Mock 성공을 실제 서비스 검증으로 대체하지 않는다.
+- 변경한 실행 영역에서 검증한다. Mac 테스트, Linux 컨테이너 실행, GitHub CI, GHCR 게시, VM 배포는 각각 구분한다.
+- 테스트 종료 코드·실제 결과·관련 경고를 확인한다. 시간 제한·권한·환경 문제로 확인하지 못한 항목은 미검증으로 보고한다.
+- 문서만 수정했다면 링크·명령·내용을 확인하고 무관한 전체 테스트는 반복하지 않는다.
+- 표·그래프는 한국어로 표시하고 한글 폰트 렌더링을 확인한다. 저장 데이터의 컬럼명은 표시 목적으로 변경하지 않는다.
 
 ## Multi-Agent Workflow
 
-토큰 최적화와 정확성을 위해 3인 린(Lean) 멀티에이전트 체제를 따른다.
+메인 세션의 Orchestrator가 직접 탐색·설계·중요 선택·통합·문서화·커밋을 담당한다. 모델과 sandbox 권한은 실제 Codex 설정으로 관리한다.
 
-- **Coordinator**: 메인 세션(Astra). 전체 목표, 작업 분해, 코드베이스 직접 탐색 및 아키텍처 설계, 최종 문서화 및 작업 승인을 총괄한다.
-- **Implementer**: 서브에이전트(Terra). 승인된 설계 범위에서 실제 파이썬 모듈, 파이프라인, 테스트 코드를 구현한다.
-- **Reviewer**: 서브에이전트(Terra). 구현 후 독립적으로 diff, 시계열 누수, 멱등성을 검토한다. **검증 통과 시 정해진 컨벤션에 따라 직접 `git commit`을 실행한다.** (코드는 직접 수정하지 않는다)
+| 역할 | 모델 / 추론 수준 | 책임과 권한 |
+|---|---|---|
+| Orchestrator | gpt-6-astra / medium | 코드베이스 탐색, 범위·계약·완료 조건 결정, 중요 선택 판단, 최종 검증, 문서 수정, staging/commit |
+| Implementer | gpt-6-sol / medium | 일반 구현·버그 수정·코드·테스트·설정과 실행 검증. 범위 밖 변경 및 staging/commit/push 금지 |
+| Worker | gpt-6-luna / high | 명세와 기존 패턴이 확정된 단순 보일러플레이트·반복 변경과 관련 검증. 설계·계약 변경 및 staging/commit/push 금지 |
+| Reviewer | gpt-6-sol / medium | 실제 diff와 관련 경로를 독립 검토. 읽기 전용이며 파일·Git·외부 상태 변경 금지 |
 
-기본 흐름:
+- 메인 설정은 `.codex/config.toml`, 서브에이전트 설정은 `.codex/agents/{implementer,worker,reviewer}.toml`에서 관리한다.
+- `.codex/`는 Git에서 제외된 로컬 설정이다. 위 표는 역할 배정 정책이며 저장소 clone만으로 적용되지 않는다. 새 환경에서는 해당 프로젝트 TOML에 모델·추론 수준·sandbox와 역할 파일을 구성하고 실제 실행 설정을 확인한다. 공유 스킬은 `.agents/skills/`와 `skills-lock.json`에서 관리한다.
+- Implementer와 Worker는 같은 작업의 연속 단계가 아니라 대안이다. 단순 작업은 Worker, 일반 로직·여러 모듈의 상호작용·원인 분석이 필요한 작업은 Implementer를 선택한다.
+- Worker가 설계 판단이나 범위 밖 문제를 발견하면 원인·시도·실패 증거만 Orchestrator에 반환한다. Orchestrator가 Implementer 전환을 결정하며 같은 실패를 무작정 반복하지 않는다.
+- 세 역할을 매번 모두 호출하지 않는다. 사소한 수정은 Orchestrator가 직접 처리·검증하고, 비단순 코드·계약 변경은 Reviewer가 독립 검토한다. 동시 실행 상한 2개와 위임 깊이 1을 유지한다.
 
-1. **Coordinator**가 코드베이스를 직접 탐색·설계하고 구현할 작업 범위를 확정한다.
-2. **Implementer**가 위임받아 코드를 구현하고 단위 테스트를 수행한다.
-3. **Reviewer**가 독립 검토한다.
-   - BLOCKER/HIGH 결함 발견 시: Implementer에게 구체적 수정 위치를 전달하여 재작업하게 한다.
-   - 검증 통과(PASS) 시: **Reviewer가 변경 단위별로 직접 `git commit`을 실행한다.**
-4. **Coordinator**가 최종 git log와 diff를 점검하고, `docs/STATUS.md` 등 문서를 최신화하며 보고를 마친다.
+진행 순서:
+1. Orchestrator가 Git 상태와 기존 변경을 확인하고 목적·수정 허용 파일·유지할 계약·테스트·완료 조건을 정해 위임한다.
+2. 선택된 Implementer 또는 Worker가 범위 안에서 구현한다. 인터페이스·DB schema·target·주요 의존성·보안·비용 등 중요 선택은 적용 전에 선택지와 영향을 보고한다.
+3. Orchestrator가 결정한다. 목표 변경·기존 자료 삭제·비용 발생·외부 공개는 사용자 승인 범위를 확인한다.
+4. 구현을 맡은 에이전트가 변경 파일·실행 명령·실제 결과·미검증 사항을 간결하게 반환한다.
+5. Reviewer가 설명을 정답으로 전제하지 않고 검토한다. `심각도 / 파일·위치 / 발생 조건 / 영향 / 근거 / 수정 방향`으로 보고한다.
+6. Orchestrator가 필요한 수정을 재위임한다. 확인된 BLOCKER/HIGH와 필수 검증 실패를 해결한 뒤 문서·최종 diff를 확인하고 커밋한다.
 
-주의 사항:
-- `git push`는 에이전트가 수행하지 않으며, 사용자가 최종 확인 후 직접 푸시한다.
-- Implementer와 Reviewer는 동일한 파일을 동시에 작업하지 않고 순차적으로 진행한다.
+- 같은 파일의 동시 수정을 금지한다. 공통 계약을 고정한 뒤 독립 작업만 병렬화한다.
+- 별도 Architect·Explorer·Documenter를 기본 단계로 추가하지 않는다.
+- Reviewer가 실행할 수 없는 검증은 Orchestrator를 통해 구현을 맡은 에이전트에게 요청한다. Reviewer PASS만으로 실제 테스트를 대체하지 않는다.
+- 검토 후 실행 코드·설정·계약이 바뀌면 영향 범위를 다시 검증한다.
+- 필요한 역할만 호출하고 목적·허용 파일·기존 패턴·유지할 계약·검증 명령을 전달한다. 전체 대화·문서·로그 복사와 중복 탐색·중복 구현을 피한다.
+
+## Git·문서·완료 보고
+
+- `main`은 유일한 장기 브랜치로 유지한다. 구현은 현재 작업용 단기 브랜치(feat)에서 진행하며 불필요한 브랜치를 중복 생성하지 않는다.
+- 시작과 커밋 전에 `git status`, staged/unstaged diff, 최근 log를 확인한다. worktree가 있으면 사용 중인 브랜치도 확인한다.
+- Orchestrator만 검토·검증된 이번 변경을 목적별로 stage/commit한다. `git add .`는 사용하지 않는다.
+- 기존 staged 변경과 사용자 변경을 함께 커밋하지 않는다. 안전하게 분리할 수 없으면 커밋을 중단하고 확인한다.
+- 커밋 직전 staged diff를 확인하고, 이후 `git show`, `git log`, `git status`와 남은 diff를 점검한다.
+- commit은 push·PR 병합·배포 승인과 다르다. push·PR 병합·브랜치 삭제·amend·history rewrite·force push·파괴적 Git 명령은 사용자가 수행한다.
+- 메시지는 `<type>(<scope>): <summary>`를 기본으로 한다. 필요하면 이유·영향·실제 검증을 본문에 적는다.
+- `Context.md`는 현재 상태·다음 단계, `STATUS.md`는 실제 결과, `architecture.md`는 구조·결정, README는 소개·실행법을 담당한다. 관련 문서만 갱신한다.
+- 최종 보고는 변경 요약·주요 결정·실제 검증·커밋 SHA/목적·남은 diff/제한사항·사용자 작업으로 정리한다.
+- 파일 생성·커밋 성공·초록색 상태만으로 전체 완료를 선언하지 않는다. 합의한 완료 조건과 실행 증거를 대조한다.

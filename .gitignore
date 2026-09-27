@@ -270,6 +270,9 @@ pip-selfcheck.json
 
 .codex/
 
+# Local document editing inputs and intermediate outputs
+/_workspace/
+
 # Local frontend dependencies
 node_modules/
 
