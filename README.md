@@ -426,6 +426,7 @@ python3 deploy/deploy.py --env-file /path/outside/repo/coffee.env --project coff
 | [03_1_eda_and_baseline_models.ipynb](data_code/03_1_eda_and_baseline_models.ipynb) | 시간 정렬, EDA, 피처 그룹과 기준 모델 비교 |
 | [03_2_horizon_model_validation.ipynb](data_code/03_2_horizon_model_validation.ipynb) | 지평별 조합, Attention-LSTM, 앙상블 검증 |
 | [03_3_single_model_comparison.ipynb](data_code/03_3_single_model_comparison.ipynb) | 가격·기후·거시 6개 모델의 5/20/60일 비교, Persistence 제외 단순평균·뉴스 결합 검증(9~12절), 방향 적중·구매 비용 시나리오·예측 사례(13~15절) |
+| [03_4_validation_ensemble_news.ipynb](data_code/03_4_validation_ensemble_news.ipynb) | Validation 전용 저상관·방향/RMSE 보완 단순평균, 2022~2023 Jev 소급 감성의 추가 효과·역방향 민감도·단일 모델 대조 |
 | `configs/` | 수집 소스와 기상 좌표 |
 | `coffee_service/`, `model_artifacts/` | Notebook 없이 실행하는 수집·피처·추론·PostgreSQL·FastAPI와 저장 모델 |
 | `frontend/` | Vue 대시보드와 Vite 개발 서버 |
