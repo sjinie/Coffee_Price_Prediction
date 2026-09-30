@@ -1,5 +1,16 @@
 # 작업 상태
 
+## 2026-09-30 — Gateway 크레딧 추가 후 재실행·운영 재배포
+
+- 사용자가 크레딧 추가와 Actions·배포 재시도를 요청했다. 원격 main은 `2406489e633910f41584536424e1867a79678909`이며 Ubuntu runner 고정 커밋 `78554d4`는 아직 로컬이다. 원격 Git 변경 없이 해당 main의 [일일 Actions attempt 2](https://github.com/sjinie/Coffee_Price_Prediction/actions/runs/36572288229/attempts/2)를 실행하고 운영 중인 같은 API·web 이미지를 재배포했다. 새 CI/GHCR 게시·이미지 rebuild·모델 재학습은 수행하지 않았다.
+- 실행 전에 운영 DB dump, pipeline 전체, runtime env 및 기존 예측 비교용 기록을 `/srv/coffee/backups/retry-daily-20260930-7cmor3xd`에 보관했다. dump는 `pg_restore --list`로 검증했다. live 모델 목록의 Jev 입력 가격은 토큰당 $0.000000042·출력 $0이었다. 기존 코드의 $1 한도를 유지하고 archive directory lock 안에서 worker의 `stopped`만 `waiting`으로 재개했다. 이전 403 응답·분류 결과·요청 ID는 보존했다.
+- Actions job `109735066211`에서 대기 기사 2건을 한 요청으로 분류했다. Gateway는 HTTP 200, 입력 939토큰·출력 151토큰, 응답 비용 **$0.000039438**을 기록했다. worker는 `completed`, pending 0이며 마지막 성공 시각은 2026-09-30 04:09 UTC다. 원격 archive에서 기존 응답 1건과 분석 이력 2,958건의 내용이 유지되고 새 응답 1건·분석 2건이 추가된 것을 대조했다.
+- 전체 Actions 결과는 **실패(exit 1)**다. `numeric=success`, `classification=completed`, `collection=failed`여서 `refresh=partial`이다. VM에서 같은 main의 pipeline 이미지로 `news_incremental.collect_pending`을 실행하며 소스별 HTTP 상태를 확인했고, `dailycoffeenews.com`이 3회 모두 HTTP 403을 반환했다. 실제 GitHub runner의 원문 HTTP 상태는 기존 로그에 없지만 실패 구간의 WordPress snapshot도 0개다. 수집 완료일은 9월 26일·요청 종료일은 9월 29일이며, 뒤의 RSS/Yahoo 단계로 진행하지 못했다. 이는 Jev Gateway 접근 복구와 별개의 뉴스 원천 장애다. 차단 우회·원천 생략·실패를 성공으로 바꾸는 변경이나 같은 조건의 추가 재실행은 하지 않았다.
+- 수치 DB run `cf090f05-5d83-4060-8d01-7b8f311ba218`은 success이며 가격 3,078행·선택 모델 예측 558행을 UPSERT했다. 전체 예측은 2,616→2,619건이고 기존 2,616건의 모델·기준일·목표일·지평·예측 수익률·가격이 모두 동일하다. 기존 DB·Jev 자료를 삭제하거나 새 분석을 과거 예측에 소급하지 않았다.
+- Compose로 API·web만 같은 이미지에서 재생성했다. API image ID `sha256:d4a18068d486706c1f973ffdb0f04c27ccc18349f99686300573540519d83e48`, web `sha256:74b6fdb587971d869ed9b13acb2fd35bd2c7e6133393e2e8cb03d26a30bbcf8a`를 유지한다. PostgreSQL·Caddy는 재생성하지 않았고 DB·인증서 volume을 보존했다. runner용 artifact 21개 중 manifest가 지정한 20개 파일의 SHA-256도 모두 일치했다.
+- [공개 HTTPS](https://coffee-price-sjinie.koreacentral.cloudapp.azure.com/)의 health·모델·가격·5/20/60일 예측·뉴스 API를 확인했다. 최신 기준일은 9월 29일, 종가 289.450012¢/lb, 예측가는 289.333786/304.722246/383.632869¢/lb다. 새 분석은 9월 29일의 23:00 UTC 마감 이후 이용 가능해졌으므로 해당 예측은 가용 뉴스 0건·`numeric_fallback`이다. 기사 목록은 1,448건 전부 분석 완료·미분석 0건이며, 원천 수집 완료일과 구분한다. 실제 브라우저에서도 최신 가격·분석 완료 수를 확인했고 5/20/60일 차트 전환과 기사 상세 패널·Escape 닫기를 검증했다.
+- 남은 작업은 WordPress 원천 접근 문제 해결, Ubuntu 고정 커밋의 사용자 push/병합, 이후 전체 성공과 다음 예약 실행 검증이다. 현재 배포·Jev 분류의 정상 결과를 Actions 전체 성공으로 표현하지 않는다.
+
 ## 2026-09-30 — Daily Actions 실패 원인 분석·Ubuntu24.04 고정
 
 - GitHub 플러그인으로 최근 3회 job/로그를 조회했다. 최신 [9월29일 실행 36572288229](https://github.com/sjinie/Coffee_Price_Prediction/actions/runs/36572288229)은 main `2406489`에서 의존성 설치와 SSH 연결 후 `numeric=success`, `collection=failed`, `classification=failed`, `status=partial`로 종료했다. `refresh.serve(..., once=True)`는 전체 성공이 아니면 exit1을 반환한다. 뉴스 실패가 수치 처리까지 실패했다는 뜻은 아니다.

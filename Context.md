@@ -1,5 +1,12 @@
 # Project Context
 
+## 2026-09-30 — 크레딧 추가 후 Jev 재개·Actions 재실행·서비스 재배포
+
+- 사용자 요청으로 Jev의 기존 403 중단 상태를 재개했다. [일일 Actions attempt 2](https://github.com/sjinie/Coffee_Price_Prediction/actions/runs/36572288229/attempts/2)에서 대기 기사 2건의 분류가 HTTP 200으로 완료됐고, 응답에 기록된 비용은 $0.000039438이다. 기존 $1 한도와 모델을 유지했다.
+- 전체 Actions는 여전히 `partial`/실패다. 수치 처리는 성공했지만 WordPress 뉴스 수집이 실패했다. 같은 코드의 VM 실행에서 Daily Coffee News API의 HTTP 403을 3회 확인했다. 수집 완료일은 9월 26일에 머물며 다음 조치는 해당 원천 접근 문제 해결이다. 실패를 성공으로 바꾸거나 원천을 생략하지 않았다.
+- 원격 main `2406489`의 기존 이미지로 API·web을 재배포했다. HTTPS·실제 브라우저에서 9월 29일 종가 289.45¢/lb, 최신 5/20/60일 예측, 보관 기사 1,448건 전부 분석 완료·미분석 0건을 확인했다. 새 분석은 이용 가능 시각 이후에만 사용하며 현재 최신 예측은 `numeric_fallback`이다.
+- 기존 예측 2,616건과 분석 이력을 보존하고 새 예측 3건을 추가했다. DB·pipeline·runtime env 백업은 `/srv/coffee/backups/retry-daily-20260930-7cmor3xd`에 있다. Ubuntu 고정 커밋 `78554d4`는 로컬 상태이며 원격 push·병합·새 이미지 게시 없이 현재 main을 재실행/재배포했다.
+
 ## 2026-09-30 — 일일 Actions 실패 분석·Ubuntu runner 고정
 
 - 최근 9월29일 일일 실행은 수치 처리 성공·뉴스 수집/분류 실패로 `partial` 및 exit 1이다. VM 보관 기록에서 Jev의 무료 계정 모델 접근 거부(9월27일 HTTP403)와 `stopped` 재개 차단을 확인했다. 뉴스 수집은 WordPress 요청 단계 실패로 좁혀지지만 당시 HTTP 상태는 보존되지 않았다. 9월28일 실행은 별도의 SSH 연결 timeout이다.
@@ -33,14 +40,14 @@ PostgreSQL → FastAPI → Vue로 이어지는 DA/DE 포트폴리오다.
 - PR #4가 main 61c4cff로 병합됐다. 해당 main CI에서 Python 183 passed/1 skipped, Vue 8 passed·build, 세 Docker build를 확인했다. VM에서는 같은 main으로 세 이미지를 빌드한 뒤 API·web을 재기동했다. 기존 GHCR 게시와 구분한다.
 - 별도 digest 배포 Compose와 CLI를 추가했고, 기존 게시 이미지의 로컬 복원·반복 실행·컨테이너 재생성 후 영속성과 브라우저 표시를 검증했다. 수정 소스의 실제 PostgreSQL 회귀는 79개 통과했다.
 - Azure for Students VM `vm-coffee-demo`(Korea Central/B2ats_v2)를 생성했고 API·DB·Vue를 상시 운영한다. `https://coffee-price-sjinie.koreacentral.cloudapp.azure.com/`에서 최신 가격·5/20/60일 예측을 제공한다. Azure DNS 이름과 Let’s Encrypt HTTPS를 설정했고 HTTP는 HTTPS로 이동한다. 인증서는 Caddy named volume에 보존하며 자동 갱신한다.
-- 작업 브랜치·검증용 화면은 5일 LightGBM+DLinear, 20일 LightGBM+XGBoost 가격 단순평균, 60일 DLinear를 가격 서빙 모델로 선택했다. 모두 조건부 뉴스 feature를 사용한다. 공개 운영은 기존 main 61c4cff의 모델이며 전환은 별도 작업이다.
+- 공개 운영은 main `2406489`의 선택 모델이다. 5일 LightGBM+DLinear, 20일 LightGBM+XGBoost 가격 단순평균, 60일 DLinear이며 모두 조건부 뉴스 feature를 사용한다. 9월 30일 같은 이미지의 API·web 재배포와 실제 브라우저 동작을 확인했다.
 - 뉴스는 실제 이용 가능 시각을 검사한 조건부 feature다. 과거 기사 재분류 연구와 운영 결과를 구분한다.
 - LLM 뉴스 분석은 계획·구현·실행 검증 상태를 구분해 관리한다.
 
 ## 다음 작업
 - 입력 이력 부족을 적재 전 차단하는 pipeline 수정은 PR #4에 게시했다. 새 GHCR 게시·digest 재검증은 남아 있으며 기존 이미지의 collect는 차단한다.
-- 일일 workflow(KST 15:17)는 main에서 활성화됐고 실제 GitHub runner→VM 수치 수집·DB 적재·상태 동기화를 확인했다. 뉴스 분류의 기존 403 중단 상태 때문에 전체 배치는 partial/실패다. 접근 제한 해결 후 명시적 재개가 남아 있다.
-- Jev Gateway 무료 계정 모델 접근 거부(403)로 전체 배치는 partial이다. 기존 분석과 새 대기 기사를 보존하고 사용 권한을 결정한 뒤 재개한다. 유료 전환·모델 교체는 하지 않았다.
+- 일일 workflow(KST 15:17)는 main에서 활성 상태다. 9월 30일 재실행에서 runner→VM 수치 수집·DB 적재·Jev 분류·상태 동기화를 확인했지만 WordPress 수집 실패로 전체 배치는 partial/실패다. 해당 원천의 접근 문제 해결과 다음 예약 실행 검증이 남아 있다.
+- 사용자가 Gateway 크레딧을 추가한 뒤 Jev 분류를 재개했고 대기 기사 2건의 처리를 완료했다. 모델과 $1 한도는 그대로이며 자동 수집의 실패는 별도 문제다.
 
 ## 참고
 - 작업·권한 규칙: AGENTS.md
