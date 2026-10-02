@@ -1,5 +1,12 @@
 # Project Context
 
+## 2026-10-02 — 뉴스 수집 소스 분리·실패 신호 정리 (브랜치 `feat/news-collection-resilience`)
+
+- WordPress(Daily Coffee News) 403이 RSS·Yahoo 수집까지 막아 9월 26일 이후 새 기사가 들어오지 않던 문제를 고쳤다. RSS를 필수 소스로, WordPress·Yahoo를 보조 소스로 나눴다. 보조 소스 실패는 `source_gaps`에 기록하고 수집을 계속한다.
+- `refresh --once`는 0/3/1을 반환한다. 일일 Actions는 "예측 적재 + 뉴스 불완전"(3)을 실패가 아닌 경고로 표시한다. 수집 실패 원인(HTTP 상태)과 기상 입력 결측 지역이 로그·`pipeline_runs.message`에 남는다. 로컬 refresh는 하루마다 실행한다.
+- 검증: 임시 PostgreSQL 포함 235 passed. 실제 Actions·VM 반영은 아직이다.
+- 다음: 사용자가 push·PR을 병합한 뒤 다음 예약 실행에서 `collection=partial`, 수집 완료일 전진, 경고 표시를 확인한다. 일일 runner는 Actions에서 main 소스를 직접 실행하므로 pipeline 변경에는 VM 이미지 재빌드가 필요 없다. WordPress 403 자체와 누락 구간 보충, 점검 문서의 C6~C11·D1~D6은 남아 있다.
+
 ## 2026-09-30 — 크레딧 추가 후 Jev 재개·Actions 재실행·서비스 재배포
 
 - 사용자 요청으로 Jev의 기존 403 중단 상태를 재개했다. [일일 Actions attempt 2](https://github.com/sjinie/Coffee_Price_Prediction/actions/runs/36572288229/attempts/2)에서 대기 기사 2건의 분류가 HTTP 200으로 완료됐고, 응답에 기록된 비용은 $0.000039438이다. 기존 $1 한도와 모델을 유지했다.

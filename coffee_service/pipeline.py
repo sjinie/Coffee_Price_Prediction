@@ -14,7 +14,7 @@ from dotenv import load_dotenv
 import yfinance as yf
 
 from . import db
-from .features import assemble_features, load_sources
+from .features import LOOKBACK, assemble_features, load_sources
 from .inference import generate_predictions
 from .ingestion import (
     SOURCE_GROUPS,
@@ -26,6 +26,7 @@ from .ingestion import (
 )
 from .modeling import load_bundle
 from .selected_models import DEFAULT_SELECTED as DEFAULT_ARTIFACT
+from .transform import REGIONS
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -35,6 +36,14 @@ REQUIRED_SOURCES = {
 }
 REQUIRED_MACRO_SOURCES = tuple(sorted(REQUIRED_SOURCES - {"coffee"}))
 MAX_MACRO_STALENESS_DAYS = 14
+
+
+class PipelineInputError(ValueError):
+    """Input check failure; its message names only sources, regions, or horizons."""
+
+
+class PipelineRunError(RuntimeError):
+    """Failed run; the message holds the error type and, for input checks, the safe cause."""
 
 
 def collect(
@@ -121,7 +130,7 @@ def validate_macro_freshness(sources: dict[str, pd.DataFrame], cutoff: date) -> 
     coffee = sources["coffee"]
     coffee_latest = pd.to_datetime(coffee["date"]).max()
     if pd.isna(coffee_latest):
-        raise ValueError("커피 가격 데이터가 없습니다.")
+        raise PipelineInputError("커피 가격 데이터가 없습니다.")
     cutoff_at = pd.Timestamp(cutoff)
     for name in REQUIRED_MACRO_SOURCES:
         macro = sources[name].dropna(subset=["value"]).copy()
@@ -129,22 +138,39 @@ def validate_macro_freshness(sources: dict[str, pd.DataFrame], cutoff: date) -> 
         macro = macro.loc[available_at.le(cutoff_at)]
         latest = pd.to_datetime(macro["date"]).max()
         if pd.isna(latest) or (coffee_latest - latest).days > MAX_MACRO_STALENESS_DAYS:
-            raise ValueError(f"거시 데이터가 오래되었습니다: {name}")
+            raise PipelineInputError(f"거시 데이터가 오래되었습니다: {name}")
 
 
 def validate_latest_prediction_coverage(dataset, predictions: pd.DataFrame) -> None:
     """Reject a run that cannot serve every advertised horizon at the latest price."""
     if "close" not in dataset.prices:
-        raise ValueError("가격 데이터에 close 열이 없습니다.")
+        raise PipelineInputError("가격 데이터에 close 열이 없습니다.")
     latest = dataset.prices.loc[dataset.prices["close"].notna()].index.max()
     if pd.isna(latest):
-        raise ValueError("최신 커피 가격이 없습니다.")
+        raise PipelineInputError("최신 커피 가격이 없습니다.")
     latest_date = pd.Timestamp(latest).date()
     origins = pd.to_datetime(predictions["origin_date"], errors="coerce").dt.date
     present = set(predictions.loc[origins.eq(latest_date), "horizon"])
     missing = sorted({5, 20, 60} - present)
     if missing:
-        raise ValueError("최신 가격일 예측이 없습니다: " + ", ".join(f"horizon {value}" for value in missing))
+        raise PipelineInputError("최신 가격일 예측이 없습니다: " + ", ".join(f"horizon {value}" for value in missing))
+
+
+def validate_selected_weather(dataset, columns) -> None:
+    """Name stale weather regions before they surface as a generic missing-horizon error.
+
+    NASA collection failures stay auxiliary: an older saved file can still cover the
+    latest window. Only an incomplete 60-session window of model inputs blocks the run.
+    """
+    latest = dataset.prices.loc[dataset.prices["close"].notna()].index.max()
+    if pd.isna(latest):
+        return  # validate_latest_prediction_coverage reports the missing price.
+    weather = [column for column in columns if column in dataset.weather_columns]
+    window = dataset.features.loc[:latest, weather].tail(LOOKBACK)
+    stale = [region for region in REGIONS
+             if window[[column for column in weather if column.startswith(region + "_")]].isna().to_numpy().any()]
+    if stale:
+        raise PipelineInputError("기상 입력이 오래되었거나 비어 있습니다: " + ", ".join(stale))
 
 
 def run_pipeline(
@@ -221,7 +247,7 @@ def run_pipeline(
                 db.upsert_source_status(connection, statuses)
             blocking_failures = required_failures(failures)
             if blocking_failures:
-                raise RuntimeError("수집 실패: " + ", ".join(blocking_failures))
+                raise PipelineInputError("수집 실패: " + ", ".join(blocking_failures))
             sources = sources_as_of(source_dir, end)
             validate_macro_freshness(sources, end)
             if selected:
@@ -231,6 +257,7 @@ def run_pipeline(
                     raise ValueError("선택 모델에는 별도 뉴스 잔차/분류 보정을 중복 적용하지 않습니다.")
                 bundle = SelectedBundle(artifact)
                 dataset = assemble_selected(load_weather(sources, source_dir, end), bundle.manifest["train_cutoff"])
+                validate_selected_weather(dataset, bundle.columns)
                 news = daily_news(records, dataset.sessions)
                 predictions = selected_predictions(dataset, bundle, news)
             else:
@@ -280,8 +307,11 @@ def run_pipeline(
         except Exception as exc:
             connection.rollback()
             message = f"파이프라인 처리 실패: {type(exc).__name__}"
+            if isinstance(exc, PipelineInputError):
+                # Other exceptions may carry URLs or SQL values, so only input checks add a cause.
+                message += f" ({exc})"
             db.finish_pipeline_run(connection, run_id, "failed", message)
-            raise RuntimeError(message) from None
+            raise PipelineRunError(message) from None
 
 
 def build_parser() -> argparse.ArgumentParser:

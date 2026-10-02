@@ -38,7 +38,38 @@ def test_refresh_uses_all_numeric_sources_and_four_file_archive(monkeypatch,tmp_
     assert calls[0]==('numeric','incremental',date(2014,7,1),date(2026,9,26),{'database_url':None, 'jev_cache':tmp_path/'jev/responses.json'})
     assert [c[0] for c in calls]==['numeric','collect','classify']
     assert set(p.name for p in (tmp_path/'jev').iterdir())=={'news.json','requests.json','responses.json','sentiment.csv'}
-    assert result['next_run_epoch']-refresh.time.time()==pytest.approx(refresh.WEEK,abs=1)
+    assert result['next_run_epoch']-refresh.time.time()==pytest.approx(refresh.REFRESH_INTERVAL,abs=1)
+    assert refresh.REFRESH_INTERVAL == 24*60*60
+
+
+@pytest.mark.parametrize('status,numeric,collection,classification,expected', [
+    ('success', 'success', 'success', 'completed', 0),
+    ('partial', 'success', 'partial', 'completed', refresh.PARTIAL_EXIT),  # supplement gap only
+    ('partial', 'partial', 'success', 'completed', refresh.PARTIAL_EXIT),  # auxiliary numeric gap
+    ('partial', 'success', 'success', 'waiting', refresh.PARTIAL_EXIT),  # provider retry wait
+    ('partial', 'success', 'failed', 'completed', 1),  # core RSS collection failed
+    ('partial', 'success', 'success', 'stopped', 1),  # classification needs an operator
+    ('partial', 'success', 'success', 'budget_stop', 1),
+    ('partial', 'failed', 'success', 'completed', 1),
+    ('interrupted', 'success', 'success', 'completed', 1),
+])
+def test_once_exit_code_separates_forecast_failure_from_incomplete_news(
+        monkeypatch,tmp_path,status,numeric,collection,classification,expected):
+    monkeypatch.setattr(refresh,'run_cycle',lambda *args,**kwargs:{
+        'status':status,'numeric':numeric,'collection':collection,'classification':classification})
+    assert refresh.serve(tmp_path,tmp_path,tmp_path,date(2014,7,1),once=True)==expected
+    assert refresh.PARTIAL_EXIT not in (1, 2)  # 2 is argparse usage error.
+
+
+def test_pipeline_run_error_cause_reaches_refresh_state(monkeypatch,tmp_path):
+    setup_cycle(monkeypatch,tmp_path)
+    message='파이프라인 처리 실패: PipelineInputError (기상 입력이 오래되었거나 비어 있습니다: br_cerrado)'
+    def numeric(*_args,**_kwargs):
+        raise pipeline.PipelineRunError(message)
+    monkeypatch.setattr(pipeline,'run_pipeline',numeric)
+    result=refresh.run_cycle(tmp_path/'sources',tmp_path/'model',tmp_path/'jev',date(2014,7,1))
+    assert result['errors']==['numeric: '+message]
+    assert refresh.exit_code(result)==1
 
 
 def test_numeric_failure_does_not_drop_news_and_is_secret_safe(monkeypatch,tmp_path):
@@ -72,15 +103,15 @@ def test_stop_interrupts_gateway_wait_without_new_request(monkeypatch,tmp_path):
     assert len([c for c in calls if c[0]=='classify'])==1
 
 
-def test_startup_runs_even_if_last_run_was_recent_then_waits_one_week(monkeypatch,tmp_path):
+def test_startup_runs_even_if_last_run_was_recent_then_waits_one_interval(monkeypatch,tmp_path):
     calls=[]
     def cycle(*args,**kwargs):
         calls.append('cycle')
-        return {'status':'success','next_run_epoch':refresh.time.time()+refresh.WEEK}
+        return {'status':'success','next_run_epoch':refresh.time.time()+refresh.REFRESH_INTERVAL}
     monkeypatch.setattr(refresh,'run_cycle',cycle)
     class Stop(Event):
         def wait(self,timeout=None):
-            assert refresh.WEEK-1 <= timeout <= refresh.WEEK
+            assert refresh.REFRESH_INTERVAL-1 <= timeout <= refresh.REFRESH_INTERVAL
             self.set(); return True
     for _ in range(2):
         assert refresh.serve(tmp_path,tmp_path,tmp_path,date(2014,7,1),stop=Stop())==0

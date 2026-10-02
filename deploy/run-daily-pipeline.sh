@@ -90,4 +90,9 @@ python -m coffee_service.pipeline refresh --once \
 pipeline_pid=$!
 wait "$pipeline_pid" || pipeline_status=$?
 pipeline_pid=
+if (( pipeline_status == 3 )); then
+  # refresh.PARTIAL_EXIT: forecasts were stored; only news or auxiliary sources are incomplete.
+  echo '::warning title=Daily pipeline partial::Forecasts were stored, but news or auxiliary sources are incomplete. See the Refresh line above.'
+  pipeline_status=0
+fi
 exit "$pipeline_status"

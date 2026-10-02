@@ -1,5 +1,14 @@
 # Coffee Price Prediction Architecture
 
+## 2026-10-02 — 뉴스 수집 소스 정책·실패 신호·갱신 주기
+
+- **뉴스 수집 소스 등급**: `news_incremental.collect_pending`의 필수 소스는 날짜로 다시 조회할 수 있는 Google News RSS다. RSS가 실패하면 기존과 같이 해당 7일 구간을 실패로 두고 `coverage_end`를 전진시키지 않는다. Daily Coffee News WordPress와 Yahoo KC=F는 보조 소스다. 보조 소스에서 원천 오류(요청 실패·응답 형식 오류: `requests.RequestException`, `RuntimeError`, `ValueError`)가 나면 `{source, start, end, error}`를 `news.json.selection_metadata.incremental.source_gaps`에 누적하고, 그 실행의 `source_status`를 `partial`로 두며, 남은 소스로 선정하고 `coverage_end`를 전진시킨다. 그 밖의 예외는 코드 오류로 보고 수집 실패로 올린다. RSS가 실패해 다시 시도할 구간의 보조 소스 누락은 확정 기록에 넣지 않는다. 누락 구간 재수집은 자동으로 하지 않는다. 기록은 나중 보충의 근거로 남긴다.
+- **실패 기록**: 원천 요청 실패는 `news.SourceRequestError`로 HTTP 상태만 보존한다. 저장 문자열은 `wordpress 2026-09-27~2026-10-01: HTTP 403`처럼 소스·구간·상태(또는 `connection failed`, 예외 타입명)만 담고 URL·질의·응답 본문은 남기지 않는다.
+- **refresh 종료 코드**: `refresh --once`는 0(수치·수집·분류 모두 성공), 3(`PARTIAL_EXIT`: 가격 예측은 적재했고 뉴스는 보조 소스 누락·RSS 상한·Gateway 재시도 대기처럼 다음 실행에서 이어지는 수준), 1(가격 예측 실패·중단, 필수 RSS 수집 실패, 분류가 `failed`·`stopped`·`budget_stop`·`cost_unknown`·`retry_exhausted`로 멈춤)을 반환한다. 2는 argparse 사용 오류와 겹쳐 쓰지 않는다. `deploy/run-daily-pipeline.sh`는 3을 GitHub `::warning`으로 바꾸고 0으로 종료하며, 상태 동기화는 기존과 같다.
+- **선택 모델의 기상 입력 검사**: NASA 수집 실패는 계속 보조 실패로 기록한다. 저장된 이전 파일로도 최신 60거래일 창을 채울 수 있기 때문이다. 대신 `pipeline.validate_selected_weather`가 모델이 쓰는 기상 열에서 최신 가격일까지 60거래일 창의 결측을 검사하고, 비어 있는 지역명을 담은 `PipelineInputError`로 중단한다.
+- **실패 메시지**: `run_pipeline`은 실패하면 `PipelineRunError`를 낸다. 입력 검사 실패(`PipelineInputError`)일 때만 원인 문장을 `pipeline_runs.message`와 refresh 상태에 덧붙인다. 다른 예외는 URL·SQL 값을 담을 수 있어 기존대로 타입명만 남긴다.
+- **로컬 refresh 주기**: `compose.yaml`의 `pipeline refresh`는 7일이 아니라 1일마다 다시 실행한다(`refresh.REFRESH_INTERVAL`). 뉴스 feature는 일 단위 도착을 전제로 학습했다. 주 단위로 모으면 일주일치 기사가 한 기준일에 몰리고, 7일 넘게 지연된 기사는 `MAX_NEWS_DELAY`에 걸려 빠진다. 운영 일일 Actions의 일정(KST 15:17)은 바꾸지 않았다.
+
 ## 2026-09-28 — 사용자 확정 모델 운영 적용
 
 - 5일 **LightGBM300 + DLinear10**, 20일 **LightGBM100 + XGBoost100**의 가격 50:50 평균, 60일 **DLinear30**을 사용한다. 모두 가격·기후·거시 27개 + 조건부 뉴스 feature이며 Naive는 구성원에 없다.
@@ -36,7 +45,7 @@
 | 처리 | 소스별 수집·Parquet, 가격·거시 피처, 저장 모델 추론·적재 | 빈 환경의 데이터·artifact 초기화와 복원 검증 |
 | 뉴스 | Yahoo·Google News 등의 제목/짧은 설명, Jev 분류·캐시, 조건부 뉴스 feature | 전향적 효과·분류 품질 검증 |
 | 실행 | PostgreSQL·FastAPI·Vue·pipeline의 native/Docker E2E, Azure 소스 build 운영 | 새 GHCR digest의 Azure 복원 E2E |
-| 자동화 | GitHub Actions CI·GHCR 게시, 운영 일일 배치, 로컬 주간 refresh | 뉴스 접근 제한 해소·장애 복원 검증 |
+| 자동화 | GitHub Actions CI·GHCR 게시, 운영 일일 배치, 로컬 일일 refresh | 뉴스 접근 제한 해소·장애 복원 검증 |
 
 GHCR 게시 [실행 35455393542](https://github.com/sjinie/Coffee_Price_Prediction/actions/runs/35455393542)는 게시 성공의 근거다. Azure 실행·데이터 기반 전체 E2E의 근거는 아니며, 후속 실행 증거는 STATUS에서 관리한다.
 
@@ -492,7 +501,7 @@ LLM과 DB/API의 메모리·CPU 경합을 측정하고 요청 동시성·timeout
 
 이 절은 앞선 수동 jobs profile·스케줄링 미구현 설명을 대체하는 현재 소스 계약이다. `compose.yaml`의 `pipeline`은 기존 수집·추론 image로 `pipeline refresh`를 실행하고, `api`는 기존 경량 FastAPI image를 유지한다. 두 컨테이너를 합치거나 FastAPI lifespan에 수집 작업을 넣지 않는다. API health 이후 worker가 시작되지만 API는 데이터 갱신 완료를 기다리지 않는다.
 
-프로세스 시작 → 소스별 저장일 이후 수치 보충·고정 모델 추론·DB 적재 → 뉴스 조회 날짜 이후 기간별 보충 → 미분류 Jev 요청·네 파일 저장 → 7일 대기 순서다. 오프라인 기간의 주간 실행 횟수를 재생하지 않고 날짜 범위를 합쳐 처리한다. refresh 상태는 `requests.json.refresh_state`, 뉴스 조회 완료 범위와 제한은 `news.json.selection_metadata.incremental`에 보관한다. 수치 source directory 잠금으로 CLI 수치 작업 충돌을 막으며 뉴스 조회·Jev 대기 중에는 이 잠금을 해제한다. 보조 소스를 포함한 수치 수집 또는 뉴스 조회 실패는 1시간 뒤 재시도한다. 뉴스 조회 체크포인트는 동시 실행에도 뒤로 돌아가지 않는다. Jev 원문 저장·재시도·비용 중단은 기존 archive 코드가 담당한다.
+프로세스 시작 → 소스별 저장일 이후 수치 보충·고정 모델 추론·DB 적재 → 뉴스 조회 날짜 이후 기간별 보충 → 미분류 Jev 요청·네 파일 저장 → 1일 대기 순서다(2026-10-02에 7일에서 변경, 문서 상단 참조). 오프라인 기간의 실행 횟수를 재생하지 않고 날짜 범위를 합쳐 처리한다. refresh 상태는 `requests.json.refresh_state`, 뉴스 조회 완료 범위와 제한은 `news.json.selection_metadata.incremental`에 보관한다. 수치 source directory 잠금으로 CLI 수치 작업 충돌을 막으며 뉴스 조회·Jev 대기 중에는 이 잠금을 해제한다. 보조 소스를 포함한 수치 수집 또는 뉴스 조회 실패는 1시간 뒤 재시도한다. 뉴스 조회 체크포인트는 동시 실행에도 뒤로 돌아가지 않는다. Jev 원문 저장·재시도·비용 중단은 기존 archive 코드가 담당한다.
 
 `/seed`와 `/seed-jev`는 읽기 전용 초기 자료이며 `/data/sources`와 `/data/jev`가 영구 작업 자료다. Jev 네 파일은 최초에 원자적으로 복사하고 기존 archive를 재시작 때 덮어쓰지 않는다. 최신 뉴스 CSV를 서빙 앙상블에 자동 채택하지 않는다. 소스별 API 범위·응답 상한 때문에 조회 성공과 전 세계 뉴스 완전 확보는 다르다. 이 구현의 컨테이너 실동작·GHCR/VM 검증 범위는 STATUS를 따른다.
 

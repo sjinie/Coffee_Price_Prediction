@@ -27,6 +27,19 @@ ARTICLE_COLUMNS = (
 TRACKING_PARAMS = {"fbclid", "gclid", "mc_cid", "mc_eid"}
 
 
+class SourceRequestError(RuntimeError):
+    """Exhausted source request; keeps only the HTTP status, never the URL or query."""
+
+    def __init__(self, message: str, status: int | None):
+        super().__init__(message)
+        self.status = status
+
+    @classmethod
+    def from_exception(cls, message: str, exc: requests.RequestException) -> "SourceRequestError":
+        response = getattr(exc, "response", None)
+        return cls(message, None if response is None else response.status_code)
+
+
 class _TextParser(HTMLParser):
     def __init__(self):
         super().__init__()
@@ -197,9 +210,9 @@ def fetch_wordpress(session, start, end, endpoint=DEFAULT_ENDPOINT) -> pd.DataFr
                 response = session.get(endpoint, params=params, timeout=(10, 30))
                 response.raise_for_status()
                 break
-            except requests.RequestException:
+            except requests.RequestException as exc:
                 if attempt == 2:
-                    raise RuntimeError("Daily Coffee News WordPress request failed") from None
+                    raise SourceRequestError.from_exception("Daily Coffee News WordPress request failed", exc) from None
                 time.sleep(attempt + 1)
         payload = response.json()
         try:

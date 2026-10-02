@@ -1,5 +1,22 @@
 # 작업 상태
 
+## 2026-10-02 — 뉴스 수집 소스 분리·실패 신호 정리·일일 refresh
+
+- 배경: 2026-10-02 [코드·정합성 점검](code_review_2026-10-02.md)의 C1~C5. 9월 27일부터 10월 1일까지 일일 Actions가 5회 연속 실패로 끝났다. 9월 28일은 SSH timeout이었고, 나머지 네 번은 수치 처리와 예측 적재가 성공했다. 10월 1일 실행 [36869017753](https://github.com/sjinie/Coffee_Price_Prediction/actions/runs/36869017753)은 `numeric=success`, `collection=failed`, `classification=completed`였다. Daily Coffee News WordPress가 HTTP 403을 반환하자 같은 블록의 Google News RSS·Yahoo 수집까지 중단됐고, 수집 완료일이 9월 26일에 멈춰 있었다.
+- 로컬 `main`을 `origin/main` `9181b7c`로 fast-forward한 뒤 `feat/news-collection-resilience`에서 작업했다.
+- 변경 사항
+  - **C1**: Google News RSS만 필수 소스로 둔다. WordPress·Yahoo가 실패하면 `news.json.selection_metadata.incremental.source_gaps`에 `{source,start,end,error}`를 누적하고 `partial`로 표시한 뒤 수집 완료일을 전진시킨다. RSS가 실패하면 기존처럼 그 구간을 다음 실행에서 다시 받는다.
+  - **C2**: `news.SourceRequestError`가 HTTP 상태만 보존한다. 오류 문자열은 `wordpress 2024-01-01~2024-01-07: HTTP 403` 형식이다.
+  - **C3**: `refresh --once`가 0(전체 성공)·3(예측 적재 + 보조 소스 누락·Gateway 재시도 대기)·1(예측 실패, 필수 RSS 실패, 분류 중단 상태)을 반환한다. `run-daily-pipeline.sh`는 3을 `::warning`과 exit 0으로 바꾼다. `Refresh:` 로그에는 `errors`·`collection_errors`가 추가됐다.
+  - **C4**: `validate_selected_weather`가 최신 60거래일 창에서 비어 있는 기상 지역을 이름으로 알려 준다. 입력 검사 실패만 원인을 `pipeline_runs.message`에 남긴다. 예: `파이프라인 처리 실패: PipelineInputError (기상 입력이 오래되었거나 비어 있습니다: br_cerrado)`.
+  - **C5**: 로컬 refresh 주기를 7일에서 1일로 바꿨다. 운영 Actions 일정은 그대로다.
+- 독립 리뷰(읽기 전용): BLOCKER/HIGH 없음. MEDIUM 2건(종료 코드 3의 범위가 너무 넓음, 보조 소스의 광범위한 `except`)과 LOW 1건(재시도할 구간의 누락이 확정 기록에 남음)을 반영했다. `source_gaps` 상한 없음(LOW)은 보류했다.
+- 바꾸지 않은 것: 모델, DB schema, API, 프론트엔드, 의존성, 운영 VM·workflow 일정. 보조 소스 누락 구간의 자동 재수집도 넣지 않았다.
+- 검증
+  - 외부 venv Python 3.12와 임시 UTF8 PostgreSQL 17.11(scratchpad, localhost TCP)에서 `pytest tests --ignore=tests/test_core4_environment.py`를 실행했다. 결과는 **235 passed, 2 subtests passed**이고, `test_postgres_e2e`를 포함해 skip은 없다. 경고 3건(sklearn 단일 클래스, Starlette/httpx, AnyIO)은 기존과 같다.
+  - 새 회귀 테스트: 분류 중단·RSS 실패 시 exit 1, 보조 소스 코드 오류가 수집 실패로 전파됨, 재시도 구간 누락 미기록, WordPress HTTP 403 구간 기록·RSS 선정·수집 완료일 전진·회복 후 누적 보존, Yahoo 실패 시 RSS 선정, 오류 문자열에 URL이 남지 않음, 종료 코드 0/3/1, 원인 메시지가 refresh 상태까지 전달됨, 기상 결측 지역 이름, runner의 exit 3 → 경고/exit 0과 상태 동기화.
+- 미검증: 실제 GitHub runner·VM에서의 실행(push·병합 후 다음 예약 실행으로 확인), Docker 이미지 build, 실제 WordPress·RSS 원천 호출. 일일 runner는 Actions에서 main 소스를 직접 실행하므로 VM 이미지 재빌드 없이 사용자의 push·PR 병합 뒤 다음 예약 실행으로 확인한다.
+
 ## 2026-09-30 — Gateway 크레딧 추가 후 재실행·운영 재배포
 
 - 사용자가 크레딧 추가와 Actions·배포 재시도를 요청했다. 원격 main은 `2406489e633910f41584536424e1867a79678909`이며 Ubuntu runner 고정 커밋 `78554d4`는 아직 로컬이다. 원격 Git 변경 없이 해당 main의 [일일 Actions attempt 2](https://github.com/sjinie/Coffee_Price_Prediction/actions/runs/36572288229/attempts/2)를 실행하고 운영 중인 같은 API·web 이미지를 재배포했다. 새 CI/GHCR 게시·이미지 rebuild·모델 재학습은 수행하지 않았다.

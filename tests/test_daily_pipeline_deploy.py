@@ -118,6 +118,7 @@ else:
             calls = commands.read_text().splitlines()
             self.assertFalse(list(root.glob("coffee-pipeline.*")), "temporary SSH key and state must be removed")
             self.assertNotIn("fixture-password", output)
+            self.last_output = output
             self.assertEqual((remote / "models/production_dlinear_60.pt").read_text(), "model")
             return status, calls, (remote / "sources/updated.parquet").exists(), (remote / "jev/responses.json").read_text()
 
@@ -131,6 +132,14 @@ else:
     def test_pipeline_failure_keeps_status_and_uploads_both_state_directories(self):
         status, calls, source_updated, jev = self.run_case(pipeline_status=7)
         self.assertEqual(status, 7)
+        self.assertEqual([call.split()[0] for call in calls], ["download"] * 3 + ["pipeline", "upload", "upload"])
+        self.assertTrue(source_updated)
+        self.assertEqual(jev, "new")
+
+    def test_partial_refresh_warns_without_failing_and_still_uploads(self):
+        status, calls, source_updated, jev = self.run_case(pipeline_status=3)
+        self.assertEqual(status, 0)
+        self.assertIn("::warning title=Daily pipeline partial::", self.last_output)
         self.assertEqual([call.split()[0] for call in calls], ["download"] * 3 + ["pipeline", "upload", "upload"])
         self.assertTrue(source_updated)
         self.assertEqual(jev, "new")

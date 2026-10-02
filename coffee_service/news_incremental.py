@@ -82,10 +82,30 @@ def _checkpoint(document: dict, status: dict) -> None:
         status.update({key: previous[key] for key in ("coverage_end", "source_status", "errors")})
     if previous.get("source_status") == "failed" and previous["requested_end"] > status["coverage_end"]:
         status.update(source_status="failed", errors=previous["errors"])
-    status.update(requested_end=requested, capped_days=capped, limited=bool(capped))
+    gaps = list(previous.get("source_gaps", []))
+    gaps += [gap for gap in status["source_gaps"] if gap not in gaps]
+    status.update(requested_end=requested, capped_days=capped, limited=bool(capped), source_gaps=gaps)
     if capped and status["source_status"] == "success":
         status["source_status"] = "partial"
     document["selection_metadata"]["incremental"] = status.copy()
+
+
+# Source-side failures: exhausted requests and malformed responses (JSON, pagination,
+# Yahoo payload checks). Other exceptions are code bugs and must fail the collection.
+SOURCE_ERRORS = (requests.RequestException, RuntimeError, ValueError)
+
+
+def _gap(source: str, first: date, last: date, exc: Exception) -> dict:
+    """Describe a failed source query without its URL, query string, or response body."""
+    if isinstance(exc, news.SourceRequestError):
+        error = f"HTTP {exc.status}" if exc.status else "connection failed"
+    else:
+        error = type(exc).__name__
+    return {"source": source, "start": first.isoformat(), "end": last.isoformat(), "error": error}
+
+
+def _message(gap: dict) -> str:
+    return f"{gap['source']} {gap['start']}~{gap['end']}: {gap['error']}"
 
 
 def collect_pending(data: Path, end: date, *, start: date | None = None, session=None) -> dict:
@@ -107,7 +127,8 @@ def collect_pending(data: Path, end: date, *, start: date | None = None, session
         capped_days = set(previous.get("capped_days", []))
         status = {"source_status": "partial" if capped_days else "success", "requested_end": end.isoformat(),
                   "coverage_end": coverage.isoformat(), "selected_count": 0, "limited": bool(capped_days),
-                  "capped_days": sorted(capped_days), "errors": []}
+                  "capped_days": sorted(capped_days), "source_gaps": [], "errors": []}
+        run_gaps = []
         window_start = coverage + timedelta(days=1)
         while window_start <= completed_end:
             window_end = min(window_start + timedelta(days=6), completed_end)
@@ -130,28 +151,41 @@ def collect_pending(data: Path, end: date, *, start: date | None = None, session
                 right, right_capped = rss(middle + timedelta(days=1), last, query, index)
                 return left + right, left_capped | right_capped
 
+            records, window_capped, window_gaps = [], set(), []
+            # Google News RSS is the date-queryable core: its failure retries the window later.
+            # Daily Coffee News and Yahoo are supplements; record their outage as a gap instead
+            # of letting it stop coverage (Daily Coffee News returned HTTP 403 from 2026-09-27).
             try:
                 frame = news.fetch_wordpress(client, window_start - timedelta(days=1), window_end + timedelta(days=1))
                 wordpress = json.loads(frame.to_json(orient="records", date_format="iso"))
                 capture("wordpress", window_start, window_end, wordpress)
-                records = list(wordpress)
-                window_capped = set()
+                records.extend(wordpress)
+            except SOURCE_ERRORS as exc:
+                window_gaps.append(_gap("wordpress", window_start, window_end, exc))
+            try:
                 for index, query in enumerate(sources.QUERIES):
                     rows, query_capped = rss(window_start, window_end, query, index)
                     records.extend(rows)
                     window_capped.update(query_capped)
-                if window_end >= today - timedelta(days=7):
-                    yahoo = jev._fetch_yahoo(window_start, window_end, 1000)
-                    capture("yahoo", window_start, window_end, yahoo)
-                    records.extend(yahoo)
             except Exception as exc:
-                status.update(source_status="failed", errors=[f"{type(exc).__name__} in collection window"])
+                failure = _gap("rss", window_start, window_end, exc)
+                # This window is retried later, so its supplement gaps are not recorded as final.
+                status.update(source_status="failed", source_gaps=list(run_gaps),
+                              errors=[_message(gap) for gap in (*run_gaps, *window_gaps, failure)])
                 with jev._cache_lock(data / "responses.json"):
                     document = jev_store.read_news(data)
                     document["sources"].update(snapshots)
                     _checkpoint(document, status)
                     jev_store.write_news(data, document)
                 break
+            if window_end >= today - timedelta(days=7):
+                try:
+                    yahoo = jev._fetch_yahoo(window_start, window_end, 1000)
+                    capture("yahoo", window_start, window_end, yahoo)
+                    records.extend(yahoo)
+                except SOURCE_ERRORS as exc:
+                    window_gaps.append(_gap("yahoo", window_start, window_end, exc))
+            run_gaps.extend(window_gaps)
             with jev._cache_lock(data / "responses.json"):
                 document = jev_store.read_news(data)
                 document["sources"].update(snapshots)
@@ -162,7 +196,8 @@ def collect_pending(data: Path, end: date, *, start: date | None = None, session
                 capped_days.update(day.isoformat() for day in window_capped)
                 status.update(coverage_end=coverage.isoformat(), selected_count=status["selected_count"] + len(added),
                               limited=bool(capped_days), capped_days=sorted(capped_days),
-                              source_status="partial" if capped_days else "success")
+                              source_gaps=list(run_gaps), errors=[_message(gap) for gap in run_gaps],
+                              source_status="partial" if capped_days or run_gaps else "success")
                 _checkpoint(document, status)
                 jev_store.write_news(data, document)
                 coverage = date.fromisoformat(status["coverage_end"])

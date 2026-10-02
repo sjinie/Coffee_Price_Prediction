@@ -1,4 +1,4 @@
-"""Refresh on process start, then once a week while the server stays running."""
+"""Refresh on process start, then once a day while the server stays running."""
 from __future__ import annotations
 
 from datetime import datetime, timedelta
@@ -11,8 +11,13 @@ import time
 from . import jev, jev_store, news_backfill
 from .ingestion import source_lock
 
-WEEK = 7 * 24 * 60 * 60
+# Daily, like the production Actions schedule: the news feature was trained on daily
+# arrivals, and a weekly batch would push a week of articles onto one forecast date.
+REFRESH_INTERVAL = 24 * 60 * 60
 SOURCE_RETRY = 60 * 60
+# Forecasts were issued, but news or auxiliary sources were incomplete. Distinct from
+# 1 (forecast failed) and argparse's 2 so callers can report a warning instead of a failure.
+PARTIAL_EXIT = 3
 
 
 def save_state(data, state):
@@ -44,7 +49,9 @@ def run_cycle(source_dir, artifact, data, start, *, stop=None, end=None, databas
                 state["numeric"] = "partial"
         except Exception as exc:
             state["numeric"] = "failed"
-            state["errors"].append("numeric: " + type(exc).__name__)
+            # Only the pipeline's own run error carries a message built from safe parts.
+            detail = str(exc) if isinstance(exc, pipeline.PipelineRunError) else type(exc).__name__
+            state["errors"].append("numeric: " + detail)
         save_state(data, state)
 
     selected = Path(artifact).suffix == ".json"
@@ -54,6 +61,7 @@ def run_cycle(source_dir, artifact, data, start, *, stop=None, end=None, databas
         try:
             collected = news_incremental.collect_pending(data, end)
             state["collection"] = collected["source_status"]
+            state["collection_errors"] = collected.get("errors", [])
         except Exception as exc:
             state["collection"] = "failed"
             state["errors"].append("collection: " + type(exc).__name__)
@@ -91,16 +99,33 @@ def run_cycle(source_dir, artifact, data, start, *, stop=None, end=None, databas
                        state["numeric"] == "success" and state["collection"] == "success" and
                        state["classification"] == "completed" else "partial")
     retry_source = state["numeric"] in {"failed", "partial"} or state["collection"] == "failed"
-    state["next_run_epoch"] = time.time() + (SOURCE_RETRY if retry_source else WEEK)
+    state["next_run_epoch"] = time.time() + (SOURCE_RETRY if retry_source else REFRESH_INTERVAL)
     if classification_retry_epoch is not None:
         state["next_run_epoch"] = min(state["next_run_epoch"], classification_retry_epoch)
     save_state(data, state)
-    print("Refresh: " + str({k: state[k] for k in ("status", "numeric", "collection", "classification")}), flush=True)
+    print("Refresh: " + str({k: state.get(k) for k in ("status", "numeric", "collection", "classification",
+                                                        "errors", "collection_errors")}), flush=True)
     return state
 
 
+# Classification states that need an operator: the worker will not resume on its own.
+CLASSIFICATION_HALTED = {"failed", "stopped", "budget_stop", "cost_unknown", "retry_exhausted"}
+
+
+def exit_code(state):
+    """0 = all done; PARTIAL_EXIT = forecasts issued, news only degraded (supplement gaps,
+    capped days, provider retry wait); 1 = forecasts failed or news pipeline halted."""
+    if state["status"] == "success":
+        return 0
+    if (state["status"] == "partial" and state["numeric"] in {"success", "partial"}
+            and state.get("collection") != "failed"
+            and state.get("classification") not in CLASSIFICATION_HALTED):
+        return PARTIAL_EXIT
+    return 1
+
+
 def serve(source_dir, artifact, data, start, *, once=False, database_url=None, stop=None):
-    """Restart means one catch-up; missed weekly ticks are coalesced into that run."""
+    """Restart means one catch-up; missed daily ticks are coalesced into that run."""
     stop = stop if stop is not None else Event()
     previous = {}
     if not once:
@@ -110,7 +135,7 @@ def serve(source_dir, artifact, data, start, *, once=False, database_url=None, s
         while not stop.is_set():
             state = run_cycle(source_dir, artifact, data, start, stop=stop, database_url=database_url)
             if once:
-                return 0 if state["status"] == "success" else 1
+                return exit_code(state)
             if stop.wait(max(0, state["next_run_epoch"] - time.time())):
                 break
         return 0

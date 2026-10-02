@@ -1,4 +1,4 @@
-"""Seed immutable inputs once, then run the pipeline or weekly refresh worker."""
+"""Seed immutable inputs once, then run the pipeline or daily refresh worker."""
 
 from __future__ import annotations
 

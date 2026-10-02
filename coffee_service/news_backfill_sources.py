@@ -14,7 +14,7 @@ import xml.etree.ElementTree as ET
 import pandas as pd
 import requests
 
-from coffee_service import jev
+from coffee_service import jev, news
 
 
 START = date(2022, 1, 1)
@@ -68,9 +68,9 @@ def _fetch_rss_range(session: requests.Session, start: date, end: date, query: s
             response = session.get(RSS_URL, params=params, timeout=(10, 30))
             response.raise_for_status()
             break
-        except requests.RequestException:
+        except requests.RequestException as exc:
             if attempt == 2:
-                raise RuntimeError("Historical RSS source request failed") from None
+                raise news.SourceRequestError.from_exception("Historical RSS source request failed", exc) from None
             time.sleep(60)
     return _rss_items(response.content, collected_at)
 

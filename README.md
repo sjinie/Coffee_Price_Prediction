@@ -242,7 +242,7 @@ uv pip install \
 
 ## Docker Compose로 로컬 실행
 
-`pipeline`(수집·분석)과 `api`(FastAPI)는 별도 컨테이너입니다. `docker compose up`은 기존 네 서비스(`postgres`, `api`, `web`, `pipeline`)를 시작합니다. API는 DB를 조회하고, pipeline은 시작할 때 한 번 갱신한 뒤 실행 중에는 갱신 종료로부터 7일마다 다시 실행합니다. 여러 주 꺼져 있어도 재시작 시 밀린 기간을 한 번의 작업으로 보충합니다.
+`pipeline`(수집·분석)과 `api`(FastAPI)는 별도 컨테이너입니다. `docker compose up`은 기존 네 서비스(`postgres`, `api`, `web`, `pipeline`)를 시작합니다. API는 DB를 조회하고, pipeline은 시작할 때 한 번 갱신한 뒤 실행 중에는 갱신 종료로부터 하루마다 다시 실행합니다. 여러 주 꺼져 있어도 재시작 시 밀린 기간을 한 번의 작업으로 보충합니다. 다만 뉴스는 실제로 수집·분석된 뒤 처음 맞는 거래일에만 반영되므로, 꺼져 있던 기간의 과거 기준일 예측에는 그 사이 뉴스가 들어가지 않습니다.
 
 모델 artifact와 수치 원본 디렉터리를 준비합니다. 기본 경로는 `model_artifacts/production_dlinear_60.pt`와 `data/processed/2014-07-01_2025-12-31/`이며, 후자는 검증된 Parquet seed 또는 빈 디렉터리일 수 있습니다. 빈 상태의 수치 수집은 설정의 2014-07-01부터 시작하므로 더 오래 걸립니다. `data/jev/`에는 기존 네 파일을 준비하거나 새 수집용 빈 디렉터리를 둡니다. 기존 `.env`를 바꾸지 않고 Docker 전용 설정을 사용합니다.
 
@@ -376,6 +376,8 @@ PR과 main push에서 `CI`가 Python·PostgreSQL fixture 테스트, Vue 테스�
 | Variables | `COFFEE_HOST`, `COFFEE_SSH_USER`, `COFFEE_STATE_DIR`, `COFFEE_DB_NAME`, `COFFEE_DB_USER` |
 
 SSH 호스트 키를 고정하고 runner의 loopback 터널로 DB에 연결합니다. [`run-daily-pipeline.sh`](deploy/run-daily-pipeline.sh)는 실패나 SIGINT/SIGTERM에서도 확보한 체크포인트를 VM에 동기화한 뒤 임시 키를 삭제하며, 강제 종료·runner 소실 시에는 마지막 동기화 이후 상태가 유실될 수 있습니다. API·web 소스 변경의 자동 재배포는 포함하지 않습니다.
+
+`refresh --once`의 종료 코드는 0(전체 성공), 3(가격 예측은 적재했고 뉴스는 보조 소스 누락이나 Gateway 재시도 대기 수준), 1(가격 예측 실패, 필수 RSS 수집 실패, 또는 Jev 분류가 사람의 조치가 필요한 상태로 멈춤)입니다. 일일 Actions는 3을 실패가 아닌 `Daily pipeline partial` 경고로 표시하므로, 경고가 보이면 같은 로그의 `Refresh:` 줄에서 `collection_errors`(예: `wordpress 2026-09-27~2026-10-01: HTTP 403`)를 확인합니다. 뉴스 수집에서 Google News RSS는 필수, Daily Coffee News WordPress와 Yahoo는 보조 소스입니다. 보조 소스가 실패하면 해당 구간을 `news.json`의 `selection_metadata.incremental.source_gaps`에 남기고 수집을 계속합니다.
 
 **현재 연결 상태:** GitHub 환경·Secrets·Variables 등록 후 main에 workflow를 반영했습니다. [main CI](https://github.com/sjinie/Coffee_Price_Prediction/actions/runs/36326804333)와 VM의 세 이미지 build·API/web 재기동·브라우저 차트 전환을 확인했습니다. [실제 Actions 수동 배치](https://github.com/sjinie/Coffee_Price_Prediction/actions/runs/36327207257)에서는 수치 적재·뉴스 수집·상태 동기화가 성공했습니다. 다만 아래 분류 제한으로 배치 전체는 실패했습니다. 일일 schedule은 활성 상태이며 [예약 실행은 기본 브랜치 기준이고 지연될 수 있습니다](https://docs.github.com/en/actions/reference/workflows-and-actions/events-that-trigger-workflows#schedule).
 
