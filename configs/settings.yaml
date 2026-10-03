@@ -1,0 +1,48 @@
+# 프로젝트 설정. 코드는 coffee/config.py를 통해서만 읽는다.
+
+horizons: [5, 20, 60]           # 거래일 기준 예측 지평
+collect_start: "2014-07-01"     # 2015년 이전은 이동 집계용 버퍼
+
+# 모든 선택(피처·모델·설정)은 train/validation 안에서 한다.
+# seen_test는 이전 연구에서 이미 본 구간이라 보고만 하고 결정에 쓰지 않는다.
+periods:
+  train: ["2015-01-01", "2021-12-31"]
+  validation: ["2022-01-01", "2023-12-31"]
+  seen_test: ["2024-01-01", "2025-12-31"]
+  forward_start: "2026-01-01"
+
+market:
+  symbol: "KC=F"                # ICE 아라비카 커피 선물 근월물 (Yahoo Finance)
+  # NYSE 달력에 없지만 커피 선물이 거래된 날
+  extra_sessions: ["2018-12-05", "2025-01-09"]
+
+# FRED/ALFRED 최초 공개값. 공개일 다음 날부터 사용한다.
+macro:
+  brl: DEXBZUS                  # 브라질 헤알/달러 환율
+  rate: DFF                     # 미국 실효 연방기금금리
+  oil: DCOILWTICO               # WTI 원유 현물
+
+weather:
+  variables: [PRECTOTCORR, T2M, T2M_MIN]
+  availability_lag_days: 4      # 관측일 + 4일에 이용 가능하다고 가정
+  normals_period: ["1991-01-01", "2013-12-31"]   # 표본 이전 평년값
+  regions:
+    - {id: br_sul_minas,    country: Brazil,   name: Sul de Minas,   lat: -21.37,   lon: -45.51}
+    - {id: br_cerrado,      country: Brazil,   name: Cerrado Mineiro, lat: -18.9439, lon: -46.9925}
+    - {id: br_alta_mogiana, country: Brazil,   name: Alta Mogiana,   lat: -20.5389, lon: -47.4008}
+    - {id: co_huila,        country: Colombia, name: Huila,          lat: 2.3333,   lon: -75.5167}
+    - {id: co_caldas,       country: Colombia, name: Caldas,         lat: 4.9667,   lon: -75.65}
+    - {id: co_antioquia,    country: Colombia, name: Antioquia,      lat: 5.9667,   lon: -75.7}
+
+news:
+  queries:
+    - "coffee (price OR harvest OR crop OR supply OR drought OR frost OR export)"
+    - "(Brazil OR Colombia) (agriculture OR farming OR drought OR rainfall OR fertilizer OR coffee)"
+  articles_per_day: 2
+
+jev:
+  endpoint: "https://ai-gateway.vercel.sh/typesafe/v1/systemone"
+  model: "typesafe-ai/jev"
+  prompt_version: "arabica-kc-futures-v2"   # 기존 분석을 재사용하려면 바꾸지 않는다
+  max_requests_per_run: 20
+  budget_usd: 1.0
