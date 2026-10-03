@@ -9,7 +9,6 @@ SETTINGS = yaml.safe_load((ROOT / "configs" / "settings.yaml").read_text(encodin
 
 DATA_DIR = ROOT / "data"
 SOURCES_DIR = DATA_DIR / "sources"   # 수집한 가격·거시·기상 Parquet
-NEWS_DIR = DATA_DIR / "news"         # 선정 기사와 Jev 분석 결과
 ARTIFACTS_DIR = ROOT / "model_artifacts"
 
 HORIZONS = tuple(SETTINGS["horizons"])

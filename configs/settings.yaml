@@ -49,6 +49,8 @@ news:
     - "(Brazil OR Colombia) (agriculture OR farming OR drought OR rainfall OR fertilizer OR coffee)"
   articles_per_day: 2
 
+model_version: "2026-10-03"   # 서비스가 읽는 model_artifacts/<버전> (노트북 06에서 동결)
+
 jev:
   endpoint: "https://ai-gateway.vercel.sh/typesafe/v1/systemone"
   model: "typesafe-ai/jev"
