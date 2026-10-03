@@ -194,6 +194,42 @@ class LightGBMClassifier:
         return self.model_.predict_proba(self._x(data, rows))[:, 1]
 
 
+class ShrunkProbability:
+    """분류기의 상승 확률을 학습 구간 상승 비율 쪽으로 당긴다.
+
+    03에서 원래 확률은 너무 극단적이어서 Brier가 기본 비율보다 나빴다. weight=1이면 원래 확률,
+    0이면 늘 기본 비율이다.
+    """
+
+    def __init__(self, model, weight: float):
+        self.model, self.weight = model, weight
+        self.name, self.features = model.name, model.features
+
+    def fit(self, data, rows, y):
+        self.base_ = float((np.asarray(y) > 0).mean())
+        self.model.fit(data, rows, y)
+        return self
+
+    def predict(self, data, rows):
+        return self.base_ + self.weight * (self.model.predict(data, rows) - self.base_)
+
+
+def buy_signal(prob_up, threshold: float) -> np.ndarray:
+    """상승 확률 ≥ threshold면 'buy'(지금 구매), ≤ 1−threshold면 'wait'(미루기), 그 사이는 'hold'(보류)."""
+    prob_up = np.asarray(prob_up, float)
+    return np.where(prob_up >= threshold, "buy", np.where(prob_up <= 1 - threshold, "wait", "hold"))
+
+
+Z80 = 1.2815515655446004  # 표준정규 90% 분위수. 양쪽 10%씩 뺀 80% 범위
+
+
+def price_range(close, log_vol, horizon: int, multiplier: float):
+    """h거래일 뒤 가격의 80% 범위: close · exp(±1.28 · k · σ · √h). σ는 예측한 일간 변동성(exp(log_vol))."""
+    half = Z80 * multiplier * np.exp(np.asarray(log_vol, float)) * np.sqrt(horizon)
+    close = np.asarray(close, float)
+    return close * np.exp(-half), close * np.exp(half)
+
+
 def _sha256(path: Path) -> str:
     return hashlib.sha256(path.read_bytes()).hexdigest()
 

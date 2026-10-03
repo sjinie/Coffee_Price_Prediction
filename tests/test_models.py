@@ -4,7 +4,8 @@ import pytest
 from coffee.evaluate import usable_rows
 from coffee.features import ALL_FEATURES, FEATURE_GROUPS, build_dataset
 from coffee.models import (DLinearModel, LightGBMClassifier, LightGBMModel, LogisticModel, Momentum, Naive,
-                           RidgeModel, ScaledReturn, _moving_average, load_bundle, save_bundle)
+                           RidgeModel, ScaledReturn, ShrunkProbability, _moving_average, buy_signal, load_bundle,
+                           price_range, save_bundle)
 
 
 @pytest.fixture
@@ -59,3 +60,20 @@ def test_saved_bundle_predicts_the_same_and_rejects_changed_files(dataset, tmp_p
     (tmp_path / "h5.joblib").write_bytes(b"changed")
     with pytest.raises(ValueError, match="해시"):
         load_bundle(tmp_path)
+
+
+def test_shrunk_probability_moves_toward_training_up_rate(dataset):
+    data, train, test = dataset
+    y = data["y_5"].to_numpy()[train]
+    inner = LogisticModel(FEATURE_GROUPS["price"]).fit(data, train, y).predict(data, test)
+    for weight in (0.0, 0.25, 1.0):
+        model = ShrunkProbability(LogisticModel(FEATURE_GROUPS["price"]), weight).fit(data, train, y)
+        assert model.base_ == (y > 0).mean()
+        assert np.allclose(model.predict(data, test), model.base_ + weight * (inner - model.base_))
+
+
+def test_buy_signal_and_price_range():
+    assert buy_signal([0.61, 0.5, 0.39, 0.6], 0.6).tolist() == ["buy", "hold", "wait", "buy"]
+    low, high = price_range(100.0, np.log(0.02), 20, 1.0)
+    half = 1.2815515655446004 * 0.02 * np.sqrt(20)  # 80% 범위의 로그 반폭
+    assert np.isclose(low, 100 * np.exp(-half)) and np.isclose(high, 100 * np.exp(half))
