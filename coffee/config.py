@@ -11,14 +11,15 @@ DATA_DIR = ROOT / "data"
 SOURCES_DIR = DATA_DIR / "sources"   # 수집한 가격·거시·기상 Parquet
 NEWS_DIR = DATA_DIR / "news"         # 선정 기사와 Jev 분석 결과
 ARTIFACTS_DIR = ROOT / "model_artifacts"
-NORMALS_FILE = ROOT / "configs" / "weather_normals.csv"
 
 HORIZONS = tuple(SETTINGS["horizons"])
+VOL_HORIZONS = (20, 60)              # 변동성은 한 달·석 달 지평만 예측한다
 REGIONS = SETTINGS["weather"]["regions"]
 REGION_IDS = tuple(region["id"] for region in REGIONS)
 MACRO_SERIES = SETTINGS["macro"]
 
-
-def period(name: str) -> tuple[pd.Timestamp, pd.Timestamp]:
-    start, end = SETTINGS["periods"][name]
-    return pd.Timestamp(start), pd.Timestamp(end)
+_periods = SETTINGS["periods"]
+TRAIN_START = pd.Timestamp(_periods["train_start"])
+DEV_YEARS = tuple(range(_periods["development"][0], _periods["development"][1] + 1))
+HOLDOUT_YEARS = tuple(range(_periods["holdout"][0], _periods["holdout"][1] + 1))
+FORWARD_START = pd.Timestamp(_periods["forward_start"])

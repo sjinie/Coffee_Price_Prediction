@@ -127,6 +127,73 @@ class DLinearModel:
         return self.pipeline_.predict(self._x(data, rows))
 
 
+class ScaledReturn:
+    """수익률을 최근 변동성으로 나눠 학습하고, 예측은 다시 곱해 돌려준다.
+
+    변동성이 두 배로 커진 국면(예: 2024–2025)에서도 '평소 변동 폭의 몇 배'라는 같은 척도로
+    배우게 하려는 장치다. 척도는 그날 알려진 60일 변동성 × √h다.
+    """
+
+    def __init__(self, model, horizon: int):
+        self.model, self.horizon = model, horizon
+        self.name, self.features = model.name, model.features
+
+    def _scale(self, data, rows):
+        return data["vol_60"].to_numpy(float)[rows] * np.sqrt(self.horizon)
+
+    def fit(self, data, rows, y):
+        self.model.fit(data, rows, y / self._scale(data, rows))
+        return self
+
+    def predict(self, data, rows):
+        return self.model.predict(data, rows) * self._scale(data, rows)
+
+
+class LogisticModel:
+    """상승 확률을 내는 로지스틱 회귀. predict()는 P(상승)을 돌려준다."""
+    name = "Logistic"
+
+    def __init__(self, features, C: float = 0.1):
+        self.features, self.C = list(features), C
+
+    def _x(self, data, rows):
+        return data[self.features].to_numpy(float)[rows]
+
+    def fit(self, data, rows, y):
+        from sklearn.linear_model import LogisticRegression
+
+        self.pipeline_ = make_pipeline(StandardScaler(), LogisticRegression(C=self.C, max_iter=1000))
+        self.pipeline_.fit(self._x(data, rows), (np.asarray(y) > 0).astype(int))
+        return self
+
+    def predict(self, data, rows):
+        return self.pipeline_.predict_proba(self._x(data, rows))[:, 1]
+
+
+class LightGBMClassifier:
+    """상승 확률을 내는 LightGBM. predict()는 P(상승)을 돌려준다."""
+    name = "LightGBM분류"
+
+    def __init__(self, features, n_estimators: int = 200, learning_rate: float = 0.03,
+                 num_leaves: int = 7, min_child_samples: int = 80, seed: int = 42):
+        self.features = list(features)
+        self.params = dict(n_estimators=n_estimators, learning_rate=learning_rate, num_leaves=num_leaves,
+                           min_child_samples=min_child_samples, subsample=0.8, subsample_freq=1,
+                           colsample_bytree=0.8, random_state=seed, n_jobs=1, verbose=-1)
+
+    def _x(self, data, rows):
+        return data[self.features].to_numpy(float)[rows]
+
+    def fit(self, data, rows, y):
+        from lightgbm import LGBMClassifier
+
+        self.model_ = LGBMClassifier(**self.params).fit(self._x(data, rows), (np.asarray(y) > 0).astype(int))
+        return self
+
+    def predict(self, data, rows):
+        return self.model_.predict_proba(self._x(data, rows))[:, 1]
+
+
 def _sha256(path: Path) -> str:
     return hashlib.sha256(path.read_bytes()).hexdigest()
 

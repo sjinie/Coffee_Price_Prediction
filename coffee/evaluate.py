@@ -1,28 +1,47 @@
 """시간순 분할, 평가 지표, 블록 bootstrap."""
 import numpy as np
 import pandas as pd
+from sklearn.metrics import roc_auc_score
+
+from .config import TRAIN_START
 
 LOOKBACK = 60  # 창 입력 모델(DLinear·LSTM)이 쓰는 과거 거래일 수. 모든 모델을 같은 행으로 비교한다.
 
 
-def usable_rows(data: pd.DataFrame, features: list[str], horizon: int, start, end, fit_end=None) -> np.ndarray:
+def usable_rows(data: pd.DataFrame, features: list[str], horizon: int, start, end, fit_end=None,
+                target: str | None = None) -> np.ndarray:
     """[start, end] 구간에서 학습·평가에 쓸 행 번호.
 
     - 직전 LOOKBACK 거래일의 피처가 모두 있어야 한다.
-    - 타깃이 있어야 한다(P[t], P[t+h] 모두 존재).
+    - 타깃이 있어야 한다(기본은 y_h, 변동성은 v_h).
     - fit_end를 주면 목표일이 fit_end를 넘는 행은 뺀다. 학습 구간 끝에서 미래 가격이
       타깃으로 새어 들어오는 것을 막는다(embargo).
     """
+    target = target or f"y_{horizon}"
     complete = data[features].notna().all(axis=1).rolling(LOOKBACK, min_periods=LOOKBACK).sum().eq(LOOKBACK)
-    mask = complete & data[f"y_{horizon}"].notna()
+    mask = complete & data[target].notna()
     mask &= (data.index >= pd.Timestamp(start)) & (data.index <= pd.Timestamp(end))
     if fit_end is not None:
         mask &= data[f"target_date_{horizon}"] <= pd.Timestamp(fit_end)
     return np.flatnonzero(mask.to_numpy())
 
 
+def walk_forward(years) -> list[tuple[int, pd.Timestamp, pd.Timestamp]]:
+    """평가 연도마다 (연도, 학습 끝, 평가 끝). 학습은 TRAIN_START부터 전년 말까지 쓴다."""
+    return [(year, pd.Timestamp(f"{year - 1}-12-31"), pd.Timestamp(f"{year}-12-31")) for year in years]
+
+
+def fold_rows(data, features, horizon, year, target=None):
+    """walk-forward 한 해의 (학습 행, 평가 행). 평가 행도 목표일이 그해를 넘지 않게 자른다."""
+    fit = usable_rows(data, features, horizon, TRAIN_START, f"{year - 1}-12-31", fit_end=f"{year - 1}-12-31",
+                      target=target)
+    test = usable_rows(data, features, horizon, f"{year}-01-01", f"{year}-12-31", fit_end=f"{year}-12-31",
+                       target=target)
+    return fit, test
+
+
 def metrics(y_true, y_pred) -> dict:
-    """RMSE·MAE(로그수익률)와 방향 지표.
+    """RMSE·MAE와 방향 지표.
 
     방향 지표는 실제 수익률이 0인 날을 뺀다. 예측이 정확히 0이면 방향을 말하지 않은 것이므로
     오답으로 센다. 모든 예측이 0인 Naive는 방향 지표를 계산하지 않는다(NaN).
@@ -37,6 +56,30 @@ def metrics(y_true, y_pred) -> dict:
     up, down = y_true[moved] > 0, y_true[moved] < 0
     recalls = [hit[side].mean() for side in (up, down) if side.any()]
     return {**result, "direction_acc": float(hit.mean()), "balanced_acc": float(np.mean(recalls))}
+
+
+def direction_metrics(y_true, prob_up, base_rate: float, threshold: float = 0.6) -> dict:
+    """상승 확률 예측의 평가.
+
+    - brier: 확률 오차의 제곱 평균. base_brier는 학습 구간의 상승 비율을 늘 말했을 때의 값이다.
+    - auc: 상승한 날에 더 높은 확률을 줬는지(0.5면 구분 못 함).
+    - 신호: 확률이 threshold 이상이면 '지금 구매', 1-threshold 이하면 '미루기', 사이는 보류.
+      precision은 신호를 낸 날 중 맞힌 비율, coverage는 신호를 낸 날의 비율이다.
+    """
+    y_true, prob_up = np.asarray(y_true, float), np.asarray(prob_up, float)
+    moved = y_true != 0
+    up, prob = (y_true[moved] > 0).astype(float), prob_up[moved]
+    buy, wait = prob >= threshold, prob <= 1 - threshold
+    signals = buy | wait
+    correct = (buy & (up == 1)) | (wait & (up == 0))
+    return {
+        "n": int(moved.sum()), "up_rate": float(up.mean()),
+        "brier": float(np.mean((prob - up) ** 2)), "base_brier": float(np.mean((base_rate - up) ** 2)),
+        "auc": float(roc_auc_score(up, prob)) if 0 < up.mean() < 1 else np.nan,
+        "coverage": float(signals.mean()),
+        "precision": float(correct[signals].mean()) if signals.any() else np.nan,
+        "buy_precision": float(up[buy].mean()) if buy.any() else np.nan,
+    }
 
 
 def block_bootstrap_rmse_diff(y_true, pred_a, pred_b, block: int, n_boot: int = 1000, seed: int = 42) -> dict:
