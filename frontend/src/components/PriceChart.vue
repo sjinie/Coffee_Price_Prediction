@@ -87,7 +87,7 @@ function onMove(event) {
     </div>
     <ul class="legend">
       <li><i class="key line" />종가</li>
-      <li><i class="key band" />{{ horizon }}거래일 전에 예측한 80% 범위</li>
+      <li><i class="key band" />{{ horizon }}거래일 전에 예측한 80% 범위 (2026년은 소급 계산)</li>
       <li><i class="key fan" />오늘 기준 예상 범위</li>
     </ul>
     <div ref="box" class="chart-box">
@@ -117,7 +117,7 @@ function onMove(event) {
         <template v-else>
           <span>종가 {{ formatNumber(hover.close) }}</span>
           <span v-if="hover.past">예측 범위 {{ formatNumber(hover.past.price_low) }} ~ {{ formatNumber(hover.past.price_high) }}
-            <small>(기준일 {{ hover.past.origin_date }})</small></span>
+            <small>(기준일 {{ hover.past.origin_date }}{{ hover.past.kind === 'backfill' ? ' · 소급 계산' : '' }})</small></span>
         </template>
       </div>
     </div>

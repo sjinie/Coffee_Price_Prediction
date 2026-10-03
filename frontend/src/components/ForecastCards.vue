@@ -34,16 +34,18 @@ const ICONS = { buy: '▲', wait: '▼', hold: '■' }
               <dt>예측 변동성(연율)</dt>
               <dd>{{ formatPercent(item.predicted_vol) }}</dd>
             </div>
-            <div>
+            <div class="risk">
               <dt>위험 수준</dt>
-              <dd>{{ riskLevel(item.vol_percentile) }} <span class="muted">(최근 3년 중 {{ formatPercent(item.vol_percentile) }})</span></dd>
-            </div>
-            <div class="meter" role="img" :aria-label="`최근 3년 대비 변동성 위치 ${formatPercent(item.vol_percentile)}`">
-              <span :style="{ left: `${item.vol_percentile * 100}%` }" />
+              <dd>
+                {{ riskLevel(item.vol_percentile) }} <span class="muted">(최근 3년 중 {{ formatPercent(item.vol_percentile) }})</span>
+                <span class="meter" role="img" :aria-label="`최근 3년 대비 변동성 위치 ${formatPercent(item.vol_percentile)}`">
+                  <span :style="{ left: `${item.vol_percentile * 100}%` }" />
+                </span>
+              </dd>
             </div>
           </template>
-          <p v-else class="muted small">5일 변동성 모델은 검증하지 않아 범위를 표시하지 않습니다.</p>
         </dl>
+        <p v-if="!isNumber(item.price_low)" class="muted small">5일 변동성 모델은 검증하지 않아 범위를 표시하지 않습니다.</p>
       </article>
     </div>
     <p class="note">

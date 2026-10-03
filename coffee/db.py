@@ -120,9 +120,11 @@ def read_forecast_history(conn, horizon: int, start: date) -> list[dict]:
 
 
 def read_news(conn, since: date) -> dict:
+    # 화면은 기사가 나온 뉴욕 날짜로 묶는다(참고 정보). 모델 입력 시점 규칙(available_at)은 news.daily_news가 따른다.
     articles = conn.execute(
-        "SELECT title, url, source, event_at, label, p_bullish, p_bearish, relevance FROM news_articles "
-        "WHERE event_at >= %s ORDER BY event_at DESC", (since,)).fetchall()
+        "SELECT title, url, source, event_at, (event_at AT TIME ZONE 'America/New_York')::date AS day, label, "
+        "p_bullish, p_bearish, relevance FROM news_articles WHERE event_at >= %s ORDER BY event_at DESC",
+        (since,)).fetchall()
     daily = conn.execute(
         "SELECT (event_at AT TIME ZONE 'America/New_York')::date AS day, "
         "tanh(sum((p_bullish - p_bearish) * relevance)) AS score, count(*) AS articles "

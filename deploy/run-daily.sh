@@ -6,8 +6,12 @@ set -euo pipefail
 umask 077
 
 for name in RUNNER_TEMP COFFEE_HOST COFFEE_SSH_USER COFFEE_STATE_DIR COFFEE_SSH_KEY COFFEE_KNOWN_HOSTS \
-            PGDATABASE PGUSER PGPASSWORD FRED_API_KEY AI_GATEWAY_API_KEY; do
+            PGDATABASE PGUSER PGPASSWORD; do
   [[ -n "${!name:-}" ]] || { printf 'Missing %s\n' "$name" >&2; exit 1; }
+done
+# 거시 수집·뉴스 분류 키가 없어도 가격 예측은 저장한다(해당 단계만 경고).
+for name in FRED_API_KEY AI_GATEWAY_API_KEY; do
+  [[ -n "${!name:-}" ]] || echo "::warning title=Missing secret::$name 없음. 해당 수집·분류 단계는 경고로 끝납니다."
 done
 [[ "$COFFEE_HOST" =~ ^[A-Za-z0-9.-]+$ && "$COFFEE_SSH_USER" =~ ^[A-Za-z_][A-Za-z0-9_-]*$ \
    && "$COFFEE_STATE_DIR" =~ ^/[A-Za-z0-9_./-]+$ ]] || { echo 'Invalid SSH destination or state path' >&2; exit 1; }
@@ -56,10 +60,16 @@ pulled=1
 
 ssh -F "$work/ssh_config" -N -o ExitOnForwardFailure=yes -L 127.0.0.1:15432:127.0.0.1:15432 coffee-vm &
 tunnel_pid=$!
-sleep 2
-kill -0 "$tunnel_pid" 2>/dev/null || { echo 'SSH tunnel failed' >&2; exit 1; }
+# 접속 재시도에 몇 초 걸릴 수 있으므로 포워딩 포트가 실제로 열릴 때까지 기다린다(최대 30초).
+tunnel_ready=0
+for _ in $(seq 30); do
+  kill -0 "$tunnel_pid" 2>/dev/null || break
+  if (exec 3<>/dev/tcp/127.0.0.1/15432) 2>/dev/null; then tunnel_ready=1; break; fi
+  sleep 1
+done
+(( tunnel_ready )) || { echo 'SSH tunnel failed' >&2; exit 1; }
 
-export PGHOST=127.0.0.1 PGPORT=15432 DATABASE_URL=postgresql://   # 비밀번호는 PGPASSWORD로만 넘긴다
+export PGHOST=127.0.0.1 PGPORT=15432 PGCONNECT_TIMEOUT=10 DATABASE_URL=postgresql://   # 비밀번호는 PGPASSWORD로만 넘긴다
 status=0
 python -m coffee.pipeline daily || status=$?
 if (( status == 3 )); then

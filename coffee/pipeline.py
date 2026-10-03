@@ -35,11 +35,23 @@ def load_models(version: str = SETTINGS["model_version"]) -> dict:
 
 
 def _rolling_percentile(values: pd.Series) -> pd.Series:
-    """각 날짜의 값이 직전 RISK_WINDOW개(그날 포함) 가운데 몇 번째인지(0~1)."""
+    """각 날짜의 값이 직전 RISK_WINDOW개(그날 포함) 가운데 몇 번째인지(0~1). 그날 값이 없으면 결측."""
     def rank(window):
+        if np.isnan(window[-1]):
+            return np.nan
         window = window[~np.isnan(window)]
         return np.mean(window <= window[-1])
     return values.rolling(RISK_WINDOW, min_periods=RISK_WINDOW // 3).apply(rank, raw=True)
+
+
+def closed_prices(prices: pd.DataFrame, now: datetime) -> pd.DataFrame:
+    """23:00 UTC 마감이 지난 거래일의 가격만 남긴다.
+
+    장중에 실행하면 Yahoo가 아직 끝나지 않은 오늘 봉을 준다. 그 값으로 예측을 저장하면
+    덮어쓰지 않는 규칙 때문에 영영 고칠 수 없다.
+    """
+    last_closed = (pd.Timestamp(now).tz_convert("UTC") - pd.Timedelta(hours=23)).date()
+    return prices[prices["date"].dt.date <= last_closed]
 
 
 def make_forecasts(data: pd.DataFrame, origins, models: dict, kind: str) -> list[dict]:
@@ -110,6 +122,7 @@ def daily(conn, now: datetime | None = None) -> tuple[int, list]:
         warnings.append(f"수집 실패: {', '.join(failed)}")
 
     sources = load_sources()
+    sources["prices"] = closed_prices(sources["prices"], now)
     data = build_dataset(sources)
     db.upsert_prices(conn, sources["prices"].tail(30))
     models = load_models()
@@ -140,8 +153,9 @@ def daily(conn, now: datetime | None = None) -> tuple[int, list]:
     return (EXIT_WARNING if warnings else EXIT_OK), steps
 
 
-def backfill(conn) -> tuple[int, list]:
+def backfill(conn, now: datetime | None = None) -> tuple[int, list]:
     sources = load_sources()
+    sources["prices"] = closed_prices(sources["prices"], now or datetime.now(timezone.utc))
     data = build_dataset(sources)
     models = load_models()
     _activate(conn, models)
@@ -184,9 +198,10 @@ def main(argv=None) -> int:
             code, steps = (daily if command == "daily" else backfill)(conn)
         except Exception as exc:
             conn.rollback()
-            message = f"{type(exc).__name__}: {exc}"
-            db.finish_run(conn, run_id, "failed", [], message)
-            print(f"실패: {message}", file=sys.stderr)
+            # 실행 기록은 공개 API로 보이므로 첫 줄만 짧게 남기고, 전체 메시지는 실행 로그에만 출력한다.
+            detail = (str(exc).splitlines() or [""])[0][:200]
+            db.finish_run(conn, run_id, "failed", [], f"{type(exc).__name__}: {detail}")
+            print(f"실패: {type(exc).__name__}: {exc}", file=sys.stderr)
             return EXIT_FAILED
         status = "warning" if code == EXIT_WARNING else "success"
         db.finish_run(conn, run_id, status, steps)

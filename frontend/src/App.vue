@@ -21,11 +21,14 @@ async function load() {
   loading.value = true
   error.value = ''
   try {
-    const [prices, latest, news, model, status, ...histories] = await Promise.all([
-      getJson('/api/prices?days=400'), getJson('/api/forecasts/latest'), getJson('/api/news?days=30'),
-      getJson('/api/models'), getJson('/api/status'),
+    const core = Promise.all([
+      getJson('/api/prices?days=400'), getJson('/api/forecasts/latest'),
       ...HORIZONS.map(h => getJson(`/api/forecasts/history?horizon=${h}&days=1000`)),
     ])
+    // 뉴스·모델·상태는 하나가 실패해도 예측 화면은 보여 준다.
+    const extra = Promise.allSettled([getJson('/api/news?days=30'), getJson('/api/models'), getJson('/api/status')])
+    const [prices, latest, ...histories] = await core
+    const [news, model, status] = (await extra).map(result => (result.status === 'fulfilled' ? result.value : null))
     const history = Object.fromEntries(HORIZONS.map((h, i) => [h, histories[i]]))
     data.value = { prices, latest, news, model, status, history }
   } catch (exc) {
@@ -63,7 +66,8 @@ onMounted(load)
         <PriceChart :prices="data.prices" :history="data.history" :latest="data.latest" />
         <TrackRecord :history="data.history" />
       </template>
-      <NewsPanel :news="data.news" />
+      <NewsPanel v-if="data.news" :news="data.news" />
+      <section v-else><p class="muted">뉴스를 불러오지 못했습니다.</p></section>
       <StatusPanel :model="data.model" :status="data.status" />
     </template>
 

@@ -100,6 +100,7 @@
 
 - `backfill`: 모델 등록, 가격 전체, 2026-01-01부터 최신 기준일까지 예측(`kind='backfill'`), 보관 뉴스 1,446건.
 - `daily`: 소스 갱신 → 최신 기준일 예측(`kind='live'`) → 최근 7일 기사 중 새 기사를 Jev로 분류(누적 비용 상한 1 USD, 한 번에 20건).
+- 두 명령 모두 23:00 UTC 마감이 지난 거래일의 가격만 쓴다. 장중에 실행해도 끝나지 않은 오늘 봉으로 예측을 저장하지 않는다.
 - 종료 코드: `0` 성공, `3` 경고(예측은 저장, 일부 소스 실패·가격 지연·기준일 피처 결측·뉴스 실패), `1` 실패.
 
 ## 배포
@@ -116,7 +117,7 @@ Azure VM (deploy/compose.azure.yaml)
   postgres (127.0.0.1:15432만 열림) · api (coffee_api) · web (nginx) · caddy (80/443, HTTPS)
 ```
 
-- VM의 SSH 계정 `coffee-actions`는 15432 포트 포워딩과 rsync만 허용한다(`deploy/prepare-vm.sh`).
+- VM의 SSH 계정 `coffee-actions`는 키로만 접속하고, 포트 포워딩은 127.0.0.1:15432로만 허용한다(`deploy/prepare-vm.sh`). 명령 실행까지 막지는 않아서 키가 새면 VM 안에서 명령을 실행할 수 있다. rsync 전용 강제 명령(`rrsync`)으로 좁히는 것은 후속 과제다.
 - 이미지는 digest로 고정하고, VM에서는 커밋 SHA를 태그로 붙여 빌드한다.
 - CI(`ci.yml`)는 PostgreSQL 서비스와 함께 pytest, 프론트 테스트·빌드, Docker 빌드를 돈다.
 

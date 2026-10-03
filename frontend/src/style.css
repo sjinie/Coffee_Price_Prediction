@@ -65,7 +65,9 @@ footer { margin-top: 32px; font-size: 0.8rem; }
 .signal { display: inline-block; margin: 12px 0 0; padding: 2px 10px; border: 1px solid var(--axis); border-radius: 999px; font-weight: 600; }
 .signal.buy span { color: var(--red); }
 .signal.wait span { color: var(--blue); }
-.meter { position: relative; height: 6px; margin: 2px 0 6px; border: 0 !important; border-radius: 3px;
+.card .risk { flex-wrap: wrap; }
+.card .risk dd { flex: 1; }
+.meter { display: block; position: relative; height: 6px; margin: 8px 0 2px; border-radius: 3px;
   background: linear-gradient(to right, var(--grid) 33.3%, var(--axis) 33.3% 66.6%, var(--muted) 66.6%); }
 .meter span { position: absolute; top: -4px; width: 4px; height: 14px; margin-left: -2px; border-radius: 2px; background: var(--ink); }
 
@@ -93,7 +95,8 @@ footer { margin-top: 32px; font-size: 0.8rem; }
 .crosshair { stroke: var(--ink-2); stroke-width: 1; stroke-dasharray: 3 3; }
 .bar.up { fill: var(--red); }
 .bar.down { fill: var(--blue); }
-.bar:hover, .bar:focus { opacity: 0.75; outline: none; }
+.bar:hover { opacity: 0.75; }
+.bar:focus-visible { outline: none; stroke: var(--ink); stroke-width: 2; }
 .tooltip { position: absolute; top: 8px; display: grid; gap: 2px; min-width: 190px; padding: 8px 10px; pointer-events: none;
   background: var(--surface); border: 1px solid var(--border); border-radius: 8px; box-shadow: 0 4px 14px rgba(0, 0, 0, 0.12);
   font-size: 0.8rem; font-variant-numeric: tabular-nums; }

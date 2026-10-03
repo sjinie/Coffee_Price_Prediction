@@ -29,6 +29,7 @@ const articles = computed(() => props.news.articles.slice(0, 12))
     <p class="note">
       매일 커피 시장 기사를 골라 TypeSafe Jev로 가격 상승·하락 압력을 분류합니다. 과거 기사를 분석한 결과, 점수는 앞으로의 가격보다
       이미 일어난 움직임과 더 관련되어 예측에 넣지 않았습니다(노트북 05). 실시간 점수가 쌓이면 다시 검증합니다.
+      막대와 목록은 기사가 나온 날(뉴욕 기준)로 묶었습니다.
     </p>
     <ul class="legend">
       <li><i class="key up" />상승 압력</li>
@@ -55,7 +56,7 @@ const articles = computed(() => props.news.articles.slice(0, 12))
         <span class="label" :class="item.label">{{ NEWS_LABELS[item.label] }}</span>
         <a v-if="safeUrl(item.url)" :href="safeUrl(item.url)" target="_blank" rel="noopener noreferrer">{{ item.title }}</a>
         <span v-else>{{ item.title }}</span>
-        <small class="muted">{{ item.event_at.slice(0, 10) }} · 관련성 {{ formatNumber(item.relevance, 2) }}</small>
+        <small class="muted">{{ item.day }} · 관련성 {{ formatNumber(item.relevance, 2) }}</small>
       </li>
     </ol>
   </section>
