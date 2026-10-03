@@ -69,6 +69,18 @@ def test_training_rows_exclude_targets_beyond_fit_end(sources):
     data = build_dataset(sources)
     rows = usable_rows(data, ALL_FEATURES, 20, "2015-01-01", "2015-12-31", fit_end="2015-12-31")
     assert (data["target_date_20"].iloc[rows] <= pd.Timestamp("2015-12-31")).all()
-    fit, test = fold_rows(data, ALL_FEATURES, 20, 2016)
+    fit, test = fold_rows(data, ALL_FEATURES, 20, 2016, 2016)
     assert data["target_date_20"].iloc[fit].max() <= pd.Timestamp("2015-12-31")
     assert data.index[test].min().year == 2016 and data["target_date_20"].iloc[test].max().year == 2016
+
+
+def test_evaluation_rows_keep_year_end_origins_until_the_segment_ends(sources):
+    data = build_dataset(sources)
+    _, cut_at_year = fold_rows(data, ALL_FEATURES, 20, 2015, 2015)
+    _, segment = fold_rows(data, ALL_FEATURES, 20, 2015, 2016)
+    targets = data["target_date_20"].iloc[segment]
+    assert data["target_date_20"].iloc[cut_at_year].max().year == 2015
+    assert data.index[segment].max().year == 2015  # 기준일은 그해 안
+    late = data.index[segment][(targets.dt.year == 2016).to_numpy()]
+    assert len(late) > 0 and late.min().month == 12  # 목표일이 다음 해인 연말 기준일도 채점한다
+    assert len(segment) == len(cut_at_year) + len(late)

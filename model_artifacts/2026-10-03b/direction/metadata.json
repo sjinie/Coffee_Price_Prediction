@@ -1,8 +1,8 @@
 {
-  "version": "2026-10-03",
+  "version": "2026-10-03b",
   "train_end": "2025-12-31",
   "data_end": "2026-10-02 00:00:00",
-  "code_commit": "6582ebb",
+  "code_commit": "2f16905",
   "train_rows": {
     "방향_5": 4844,
     "방향_20": 4829,
@@ -53,7 +53,7 @@
         "enso",
         "enso_chg_3m"
       ],
-      "shrink": 0.2,
+      "shrink": 0.25,
       "threshold": 0.52,
       "base_rate": 0.49380677126341865
     },
@@ -97,8 +97,8 @@
         "enso",
         "enso_chg_3m"
       ],
-      "shrink": 0.25,
-      "threshold": 0.52,
+      "shrink": 0.35000000000000003,
+      "threshold": 0.58,
       "base_rate": 0.4860219507144336
     },
     "60": {
@@ -141,14 +141,14 @@
         "enso",
         "enso_chg_3m"
       ],
-      "shrink": 0.25,
+      "shrink": 0.35000000000000003,
       "threshold": 0.6,
       "base_rate": 0.4986427229066611
     }
   },
   "files": {
-    "h5.joblib": "b7ea447d584c2c27079380eb931a2793cc4891ce4dfbd914a8059c16e5dd1196",
-    "h20.joblib": "9702b2c6136878121f9fc9b04e06f2ffdee4e31454bbe4f4d3d7242b0504a5e3",
-    "h60.joblib": "1612514c45392c50bcfe03675ee393817b06009e4909071e1dbe0b37d7ea68d8"
+    "h5.joblib": "65f2b0cb64df8f87fe1c180078c7c6c1f851adfc429a095e9ebf16f1512c83cf",
+    "h20.joblib": "a8f709c4e5818f9f9cd9b4071a507f07d369c0f8d9eb4672fb61c35b924bc237",
+    "h60.joblib": "f69c8acc1e0bed8e0fdf6f19c2a56ac47fb34db2b61224dabd557b1ae6331efa"
   }
 }

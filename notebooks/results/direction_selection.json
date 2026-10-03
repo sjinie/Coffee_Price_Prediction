@@ -1,7 +1,7 @@
 {
   "5": {
     "model": "LightGBM분류(약한 정규화)",
-    "shrink": 0.2,
+    "shrink": 0.25,
     "threshold": 0.52,
     "features": [
       "ret_1",
@@ -45,8 +45,8 @@
   },
   "20": {
     "model": "LightGBM분류(약한 정규화)",
-    "shrink": 0.25,
-    "threshold": 0.52,
+    "shrink": 0.35000000000000003,
+    "threshold": 0.58,
     "features": [
       "ret_1",
       "ret_5",
@@ -89,7 +89,7 @@
   },
   "60": {
     "model": "LightGBM분류(약한 정규화)",
-    "shrink": 0.25,
+    "shrink": 0.35000000000000003,
     "threshold": 0.6,
     "features": [
       "ret_1",

@@ -26,16 +26,17 @@ def usable_rows(data: pd.DataFrame, features: list[str], horizon: int, start, en
     return np.flatnonzero(mask.to_numpy())
 
 
-def walk_forward(years) -> list[tuple[int, pd.Timestamp, pd.Timestamp]]:
-    """평가 연도마다 (연도, 학습 끝, 평가 끝). 학습은 TRAIN_START부터 전년 말까지 쓴다."""
-    return [(year, pd.Timestamp(f"{year - 1}-12-31"), pd.Timestamp(f"{year}-12-31")) for year in years]
+def fold_rows(data, features, horizon, year, last_year, target=None):
+    """walk-forward 한 해의 (학습 행, 평가 행).
 
-
-def fold_rows(data, features, horizon, year, target=None):
-    """walk-forward 한 해의 (학습 행, 평가 행). 평가 행도 목표일이 그해를 넘지 않게 자른다."""
+    - 학습 행: TRAIN_START부터 전년 말까지. 목표일도 전년 말을 넘지 않는다(embargo).
+    - 평가 행: 기준일이 그해인 행. 목표일은 평가 구간의 마지막 해(last_year) 끝까지 허용한다.
+      그해 끝에서 자르면 h일 예측의 연말 기준일(60일이면 10–12월)이 해마다 빠져 계절이 치우친다.
+      구간 끝은 넘지 않으므로 개발 구간과 보류 구간의 정답이 섞이지 않는다.
+    """
     fit = usable_rows(data, features, horizon, TRAIN_START, f"{year - 1}-12-31", fit_end=f"{year - 1}-12-31",
                       target=target)
-    test = usable_rows(data, features, horizon, f"{year}-01-01", f"{year}-12-31", fit_end=f"{year}-12-31",
+    test = usable_rows(data, features, horizon, f"{year}-01-01", f"{year}-12-31", fit_end=f"{last_year}-12-31",
                        target=target)
     return fit, test
 

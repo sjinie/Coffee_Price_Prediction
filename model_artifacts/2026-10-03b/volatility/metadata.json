@@ -1,8 +1,8 @@
 {
-  "version": "2026-10-03",
+  "version": "2026-10-03b",
   "train_end": "2025-12-31",
   "data_end": "2026-10-02 00:00:00",
-  "code_commit": "6582ebb",
+  "code_commit": "2f16905",
   "train_rows": {
     "방향_5": 4844,
     "방향_20": 4829,
@@ -19,7 +19,7 @@
         "log_vol_20",
         "log_vol_60"
       ],
-      "interval_multiplier": 1.01,
+      "interval_multiplier": 1.0,
       "z": 1.2815515655446004
     },
     "60": {
@@ -28,7 +28,7 @@
         "log_vol_20",
         "log_vol_60"
       ],
-      "interval_multiplier": 0.9,
+      "interval_multiplier": 0.89,
       "z": 1.2815515655446004
     }
   },
