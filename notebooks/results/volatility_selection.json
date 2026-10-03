@@ -1,0 +1,20 @@
+{
+  "20": {
+    "model": "HAR",
+    "interval_multiplier": 1.01,
+    "har_features": [
+      "log_vol_5",
+      "log_vol_20",
+      "log_vol_60"
+    ]
+  },
+  "60": {
+    "model": "HAR",
+    "interval_multiplier": 0.9,
+    "har_features": [
+      "log_vol_5",
+      "log_vol_20",
+      "log_vol_60"
+    ]
+  }
+}
