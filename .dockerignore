@@ -1,0 +1,8 @@
+*
+!requirements-api.txt
+!requirements-pipeline.txt
+!coffee/
+!configs/
+!model_artifacts/
+model_artifacts/old/
+**/__pycache__

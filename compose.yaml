@@ -1,0 +1,73 @@
+# 로컬 재현
+#   docker compose up -d --build                 PostgreSQL, API, 대시보드(http://localhost:8080)
+#   docker compose run --rm pipeline migrate     스키마 적용
+#   docker compose run --rm pipeline backfill    가격·보관 뉴스·2026년 예측 적재 (data/ 필요)
+#   docker compose run --rm pipeline daily       매일 실행하는 갱신
+# 로컬에서는 API도 소유자 계정을 쓴다. 운영(deploy/)은 API에 읽기 전용 계정을 쓴다.
+x-database: &database
+  DATABASE_URL: "postgresql://"   # 나머지 접속 정보는 아래 PG* 변수에서 읽는다(비밀번호를 URL에 넣지 않는다)
+  PGHOST: postgres
+  PGPORT: "5432"
+  PGDATABASE: coffee
+  PGUSER: coffee
+  PGPASSWORD: ${POSTGRES_PASSWORD:?.env에 POSTGRES_PASSWORD를 넣으세요}
+
+services:
+  postgres:
+    image: postgres:17.11-bookworm@sha256:639ab7ceb90e13123085b741fb31ef493fba25463002f6da665352e7b534b652
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: coffee
+      POSTGRES_USER: coffee
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?.env에 POSTGRES_PASSWORD를 넣으세요}
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U coffee -d coffee"]
+      interval: 5s
+      timeout: 5s
+      retries: 12
+
+  api:
+    build:
+      context: .
+      target: api
+    restart: unless-stopped
+    environment: *database
+    depends_on:
+      postgres:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/health')"]
+      interval: 5s
+      timeout: 5s
+      retries: 12
+
+  web:
+    build: ./frontend
+    restart: unless-stopped
+    environment:
+      API_UPSTREAM: http://api:8000
+    ports:
+      - "127.0.0.1:${WEB_PORT:-8080}:80"
+    depends_on:
+      api:
+        condition: service_healthy
+
+  pipeline:
+    build:
+      context: .
+      target: pipeline
+    profiles: [tools]   # up에는 포함하지 않고 run으로만 실행한다
+    environment:
+      <<: *database
+      FRED_API_KEY: ${FRED_API_KEY:-}
+      AI_GATEWAY_API_KEY: ${AI_GATEWAY_API_KEY:-}
+    volumes:
+      - ./data:/app/data
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+volumes:
+  postgres-data:

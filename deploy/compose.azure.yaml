@@ -1,0 +1,73 @@
+# VM 운영 구성. deploy/setup-db.sh가 이 파일로 이미지를 만들고 서비스를 띄운다.
+# 파이프라인은 GitHub runner에서 돌고 SSH 터널(127.0.0.1:15432)로 이 PostgreSQL에 적재한다.
+# postgres 서비스와 볼륨은 이전 버전과 같고, 새 버전은 같은 클러스터의 새 database(COFFEE_DB_NAME)를 쓴다.
+services:
+  postgres:
+    image: postgres:17.11-bookworm@sha256:639ab7ceb90e13123085b741fb31ef493fba25463002f6da665352e7b534b652
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: coffee_price   # 볼륨을 처음 만들 때만 쓰인다(이전 버전 database)
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: ${POSTGRES_ADMIN_PASSWORD:?required}
+    ports:
+      - "127.0.0.1:15432:5432"
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres -d coffee_price"]
+      interval: 5s
+      timeout: 5s
+      retries: 12
+
+  api:
+    image: coffee-api:${COFFEE_SOURCE_SHA:?required}
+    build:
+      context: ..
+      target: api
+    restart: unless-stopped
+    environment:
+      DATABASE_URL: "postgresql://"
+      PGHOST: postgres
+      PGPORT: "5432"
+      PGDATABASE: ${COFFEE_DB_NAME:?required}
+      PGUSER: coffee_api   # SELECT 권한만 있는 계정
+      PGPASSWORD: ${COFFEE_API_DB_PASSWORD:?required}
+    depends_on:
+      postgres:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/health')"]
+      interval: 5s
+      timeout: 5s
+      retries: 12
+
+  web:
+    image: coffee-web:${COFFEE_SOURCE_SHA:?required}
+    build:
+      context: ../frontend
+    restart: unless-stopped
+    environment:
+      API_UPSTREAM: http://api:8000
+    depends_on:
+      api:
+        condition: service_healthy
+
+  caddy:
+    image: caddy:2.11.4-alpine@sha256:6aeddd44c3078b0f9a35206472a11420648a79c184603ef95957d0a20044cb2b
+    restart: unless-stopped
+    environment:
+      COFFEE_DOMAIN: ${COFFEE_DOMAIN:?required}
+    depends_on:
+      - web
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy-data:/data
+      - caddy-config:/config
+
+volumes:
+  postgres-data:
+  caddy-data:
+  caddy-config:
