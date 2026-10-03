@@ -53,5 +53,5 @@ jev:
   endpoint: "https://ai-gateway.vercel.sh/typesafe/v1/systemone"
   model: "typesafe-ai/jev"
   prompt_version: "arabica-kc-futures-v2"   # 기존 분석을 재사용하려면 바꾸지 않는다
-  max_requests_per_run: 20
+  max_articles_per_run: 20      # 한 번 실행에 분류할 기사 수 (배치 요청 1회)
   budget_usd: 1.0
