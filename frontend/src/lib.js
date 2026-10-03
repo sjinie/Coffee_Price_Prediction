@@ -110,11 +110,18 @@ export function trackRecord(rows) {
   const share = (part, whole) => (whole.length ? part.length / whole.length : null)
   return {
     evaluated: done.length,
-    live: done.filter(row => row.kind === 'live').length,
     pending: rows.length - done.length,
     upRate: share(done.filter(row => row.actual_close > row.origin_close), done),
     signalRate: share(signals, done),
     signalHit: share(correct, signals),
     rangeHit: share(inside, ranged),
+  }
+}
+
+// 동결 이후 매일 저장한 예측(live)과 나중에 소급 계산한 예측(backfill)은 섞지 않고 따로 채점한다.
+export function trackRecordByKind(rows) {
+  return {
+    live: trackRecord(rows.filter(row => row.kind === 'live')),
+    backfill: trackRecord(rows.filter(row => row.kind === 'backfill')),
   }
 }

@@ -1,7 +1,9 @@
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
 
-import { bandPath, barPath, extent, linePath, linearScale, nearestIndex, riskLevel, safeUrl, ticks, trackRecord } from '../src/lib.js'
+import {
+  bandPath, barPath, extent, linePath, linearScale, nearestIndex, riskLevel, safeUrl, ticks, trackRecord, trackRecordByKind,
+} from '../src/lib.js'
 
 test('선은 결측에서 끊기고 범위 띠는 닫힌 영역이 된다', () => {
   assert.equal(linePath([[0, 1], [1, 2], null, [3, 4]]), 'M0.0,1.0 L1.0,2.0 M3.0,4.0')
@@ -39,10 +41,22 @@ test('적중 기록은 목표일 가격이 확인된 예측만 센다', () => {
     { signal: 'buy', origin_close: 100, actual_close: null, price_low: 90, price_high: 110, kind: 'live' },
   ]
   assert.deepEqual(trackRecord(rows), {
-    evaluated: 3, live: 2, pending: 1, upRate: 2 / 3, signalRate: 2 / 3, signalHit: 0.5, rangeHit: 0.5,
+    evaluated: 3, pending: 1, upRate: 2 / 3, signalRate: 2 / 3, signalHit: 0.5, rangeHit: 0.5,
   })
   assert.equal(trackRecord([]).signalHit, null)
   assert.equal(riskLevel(0.2), '낮음')
   assert.equal(riskLevel(0.5), '보통')
   assert.equal(riskLevel(0.9), '높음')
+})
+
+test('실시간 성적은 소급 계산과 섞지 않는다', () => {
+  const hit = { signal: 'buy', origin_close: 100, actual_close: 110, price_low: 90, price_high: 120 }
+  const miss = { signal: 'buy', origin_close: 100, actual_close: 90, price_low: 95, price_high: 120 }
+  const rows = [...Array(100).fill({ ...hit, kind: 'backfill' }), ...Array(10).fill({ ...miss, kind: 'live' })]
+  assert.equal(trackRecord(rows).signalHit, 100 / 110)  // 합치면 90.9%로 보인다
+  const byKind = trackRecordByKind(rows)
+  assert.equal(byKind.live.signalHit, 0)
+  assert.equal(byKind.live.rangeHit, 0)
+  assert.equal(byKind.backfill.signalHit, 1)
+  assert.equal(byKind.live.evaluated, 10)
 })

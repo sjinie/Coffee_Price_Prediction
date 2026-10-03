@@ -133,3 +133,4 @@ th small { display: block; color: var(--muted); font-weight: 400; }
 }
 .small { margin: 8px 0 0; font-size: 0.8rem; }
 td:first-child, th:first-child { white-space: nowrap; }
+.record + .record { margin-top: 20px; }
