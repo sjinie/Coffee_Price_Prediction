@@ -1,5 +1,10 @@
 # Project Context
 
+## 2026-10-03 — Actions 반복 실패 원인과 조치
+
+- 반복 실패는 모두 일일 배치다. 9/29~10/2는 WordPress 403 때문에 뉴스 수집 전체가 중단된 것이고(브랜치 `07d3ead`에서 수정, 원격 `main`에는 아직 없음), 9/28은 SSH timeout이다. SSH·rsync 연결에 3회 재시도를 추가했다. CI·GHCR은 정상이다.
+- 다음: 사용자가 브랜치를 push·PR 병합한 뒤 다음 예약 실행에서 녹색(경고 포함)으로 끝나는지, 수집 완료일이 9/26 이후로 전진하는지 확인한다.
+
 ## 2026-10-02 — 뉴스 수집 소스 분리·실패 신호 정리 (브랜치 `feat/news-collection-resilience`)
 
 - WordPress(Daily Coffee News) 403이 RSS·Yahoo 수집까지 막아 9월 26일 이후 새 기사가 들어오지 않던 문제를 고쳤다. RSS를 필수 소스로, WordPress·Yahoo를 보조 소스로 나눴다. 보조 소스 실패는 `source_gaps`에 기록하고 수집을 계속한다.

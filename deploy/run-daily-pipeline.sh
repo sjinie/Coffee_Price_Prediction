@@ -65,6 +65,8 @@ Host coffee-vm
   BatchMode yes
   IdentitiesOnly yes
   ConnectTimeout 15
+  # A single port-22 timeout failed the whole batch on 2026-09-28; retry each connection.
+  ConnectionAttempts 3
   ServerAliveInterval 15
   ServerAliveCountMax 3
 EOF

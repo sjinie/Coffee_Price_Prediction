@@ -1,5 +1,14 @@
 # 작업 상태
 
+## 2026-10-03 — 반복되는 GitHub Actions 실패 조사·SSH 연결 재시도
+
+- 조사 범위: 최근 실행 25건(`gh run list`·`gh run view --log`·check-run annotation, 읽기 전용). CI(`ci.yml`)와 GHCR 게시는 전부 성공했다. 실패한 것은 모두 `Daily production pipeline`이다.
+  - 9/29, 9/30, 10/1, 10/2 (`2406489`·`9181b7c`): `numeric=success`, `collection=failed`. 같은 runner에서 9/27에는 수집이 성공했다. 9/28 이후 Daily Coffee News WordPress가 막히면서(VM에서 HTTP 403 재현, 9/30 STATUS) 같은 블록의 RSS·Yahoo까지 중단된 것이 원인이다. 2026-10-02 브랜치 `feat/news-collection-resilience`의 C1~C3(`07d3ead`)이 고친 내용이며, 원격 `main`에는 아직 없다. 병합하면 WordPress 장애는 `collection=partial` → 종료 코드 3 → Actions 경고(성공)로 표시된다. 필수 RSS 실패나 분류 중단은 계속 실패다.
+  - 9/28 (`2406489`): `ssh: connect to host … port 22: Connection timed out` → 첫 rsync가 exit 255로 끝났다. runner의 임시 `ssh_config`에 `ConnectionAttempts 3`을 추가해 SSH·rsync 연결을 3회까지 시도한다(`ConnectTimeout 15`는 유지). VM이 꺼져 있거나 몇 분 넘게 막힌 장애에는 효과가 없고, 그런 경우는 계속 실패로 남는다.
+- 참고: 예약(cron 06:17 UTC)은 실제로 12:44~14:08 UTC에 시작됐다. GitHub 예약 지연이며 실패 원인은 아니다.
+- 작업 트리 복구: 세션 밖에서 추적 파일 13개(`configs/regions.yaml`·`sources.yaml`, `docs/images/` 5개, `docs/old_docs/` 5개, `data_code/old_code/` 노트북 1개)가 삭제된 상태였다. 사용자 승인을 받아 `git restore`로 HEAD 내용을 되살렸다. 삭제 원인은 확인하지 못했다.
+- 검증: OpenSSH `ssh -G`로 `connectionattempts 3`·`connecttimeout 15` 적용 확인, `bash -n` 통과, `pytest tests`(CI 제외 범위) 228 passed·6 skipped(PostgreSQL 테스트, 전날 임시 DB에서 235 passed로 확인). 실제 runner·VM 실행은 push·병합 뒤 다음 예약 실행에서 확인해야 한다.
+
 ## 2026-10-02 — 뉴스 수집 소스 분리·실패 신호 정리·일일 refresh
 
 - 배경: 2026-10-02 [코드·정합성 점검](code_review_2026-10-02.md)의 C1~C5. 9월 27일부터 10월 1일까지 일일 Actions가 5회 연속 실패로 끝났다. 9월 28일은 SSH timeout이었고, 나머지 네 번은 수치 처리와 예측 적재가 성공했다. 10월 1일 실행 [36869017753](https://github.com/sjinie/Coffee_Price_Prediction/actions/runs/36869017753)은 `numeric=success`, `collection=failed`, `classification=completed`였다. Daily Coffee News WordPress가 HTTP 403을 반환하자 같은 블록의 Google News RSS·Yahoo 수집까지 중단됐고, 수집 완료일이 9월 26일에 멈춰 있었다.
