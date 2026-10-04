@@ -46,6 +46,6 @@ const marks = computed(() => {
         <text class="direct-label" :x="m.tx" :y="m.ty" :text-anchor="m.anchor">{{ m.text }}</text>
       </g>
     </svg>
-    <p v-else class="cap">전체 가격을 불러오는 중입니다.</p>
+    <p v-else class="cap">표시할 가격 자료가 없습니다.</p>
   </div>
 </template>

@@ -1,6 +1,6 @@
 <script setup>
 import { computed } from 'vue'
-import { seasonality, weeklyRainGrid, weeklyReturnGrid } from '../lib.js'
+import { isNumber, seasonality, weeklyRainGrid, weeklyReturnGrid } from '../lib.js'
 import {
   DIRECTION_STATS, FINDINGS, FIXES, MODEL_VERSION, NEWS_DECISION, NEWS_FACTS, RESEARCH, VOLATILITY_NOTE,
 } from '../research.js'
@@ -17,9 +17,11 @@ const props = defineProps({
   allPrices: { type: Array, default: null },
   weather: { type: Object, default: null },
   weatherFailed: Boolean,
+  fullError: { type: String, default: '' },
   model: { type: Object, default: null },
   forecast: { type: Object, default: null },
 })
+const emit = defineEmits(['retry-prices', 'retry-weather'])
 const metadata = computed(() => props.model?.metadata ?? null)
 // 연간 시계는 끝까지 관측한 해만 쓴다(올해는 아직 52주가 차지 않았다)
 const years = computed(() => {
@@ -28,6 +30,12 @@ const years = computed(() => {
 })
 const returnGrid = computed(() => (props.allPrices ? weeklyReturnGrid(props.allPrices, years.value) : null))
 const rainGrid = computed(() => (props.weather ? weeklyRainGrid(props.weather, years.value) : null))
+// 자료마다 불러오는 중, 실패(다시 시도), 빈 응답을 구별한다. 실패를 '불러오는 중'으로 남겨 두지 않는다.
+const hasValues = grid => Boolean(grid?.some(row => row.some(isNumber)))
+const priceState = computed(() => (props.allPrices?.length ? 'ready' : props.fullError ? 'error' : props.allPrices ? 'empty' : 'loading'))
+const weatherState = computed(() => (hasValues(rainGrid.value) ? 'ready' : props.weatherFailed ? 'error' : props.weather ? 'empty' : 'loading'))
+const PRICE_TEXT = { loading: '전체 가격을 불러오는 중입니다.', error: '전체 가격을 불러오지 못했습니다.', empty: '표시할 가격 자료가 없습니다.' }
+const WEATHER_TEXT = { loading: '산지 기상 자료를 불러오는 중입니다.', error: '산지 기상 자료를 불러오지 못했습니다.', empty: '표시할 기상 자료가 없습니다.' }
 const consistency = grid => { const value = grid && seasonality(grid); return value === null || value === undefined ? '-' : value.toFixed(2) }
 const stale = computed(() => props.model?.model_version && props.model.model_version !== MODEL_VERSION)
 </script>
@@ -42,8 +50,8 @@ const stale = computed(() => props.model?.model_version && props.model.model_ver
         <p class="side">문제 정의</p>
         <div class="body">
           <h3 class="h3">{{ FINDINGS.problem }}</h3>
-          <LongPrice v-if="allPrices" :prices="allPrices" />
-          <p v-else class="cap">전체 가격을 불러오는 중입니다.</p>
+          <LongPrice v-if="priceState === 'ready'" :prices="allPrices" />
+          <p v-else class="cap" role="status">{{ PRICE_TEXT[priceState] }} <button v-if="priceState === 'error'" class="text-button" type="button" @click="emit('retry-prices')">다시 시도</button></p>
           <p class="prose">그래서 거래일 t의 종가를 기준으로 h거래일 뒤의 로그수익률 ln(P<sub>t+h</sub> / P<sub>t</sub>)을 예측 대상으로 정했다. 가격 수준이 아니라 지금 가격에서 얼마나 움직이는지를 배우게 하려는 것이다.</p>
           <p class="cap">대상은 아라비카 커피 선물(KC=F) 근월물 종가, 센트/파운드. 카페의 실제 원두 납품 가격과는 다르다.</p>
         </div>
@@ -55,17 +63,17 @@ const stale = computed(() => props.model?.model_version && props.model.model_ver
           <h3 class="h3">{{ FINDINGS.seasons }}</h3>
           <div class="clocks">
             <figure class="clock-figure">
-              <YearClock v-if="rainGrid" :grid="rainGrid" :years="years" kind="rain" label="브라질 남미나스 산지의 주간 강수 연간 시계" />
-              <p v-else class="clock-empty cap">{{ weatherFailed ? '산지 기상 자료를 불러오지 못했습니다.' : '산지 기상 자료를 불러오는 중입니다.' }}</p>
+              <YearClock v-if="weatherState === 'ready'" :grid="rainGrid" :years="years" kind="rain" label="브라질 남미나스 산지의 주간 강수 연간 시계" />
+              <p v-else class="clock-empty cap" role="status"><span>{{ WEATHER_TEXT[weatherState] }} <button v-if="weatherState === 'error'" class="text-button" type="button" @click="emit('retry-weather')">다시 시도</button></span></p>
               <div class="ramp"><span>적음</span><i class="ramp-rain" /><span>많음</span></div>
-              <p v-if="rainGrid" class="big">{{ consistency(rainGrid) }}</p>
+              <p v-if="weatherState === 'ready'" class="big">{{ consistency(rainGrid) }}</p>
               <figcaption class="cap">브라질 남미나스 산지의 주간 강수(7일 기준). 숫자는 한 해의 모양이 나머지 해들의 평균과 얼마나 닮았는지(상관의 중앙값)다.</figcaption>
             </figure>
             <figure class="clock-figure">
-              <YearClock v-if="returnGrid" :grid="returnGrid" :years="years" kind="return" label="KC=F 주간 로그수익률 연간 시계" />
-              <p v-else class="clock-empty cap">전체 가격을 불러오는 중입니다.</p>
+              <YearClock v-if="priceState === 'ready' && hasValues(returnGrid)" :grid="returnGrid" :years="years" kind="return" label="KC=F 주간 로그수익률 연간 시계" />
+              <p v-else class="clock-empty cap" role="status"><span>{{ PRICE_TEXT[priceState === 'ready' ? 'empty' : priceState] }} <button v-if="priceState === 'error'" class="text-button" type="button" @click="emit('retry-prices')">다시 시도</button></span></p>
               <div class="ramp"><span>하락</span><i class="ramp-return" /><span>상승</span></div>
-              <p v-if="returnGrid" class="big">{{ consistency(returnGrid) }}</p>
+              <p v-if="priceState === 'ready' && hasValues(returnGrid)" class="big">{{ consistency(returnGrid) }}</p>
               <figcaption class="cap">KC=F 주간 로그수익률. 같은 방법으로 잰 해마다의 닮은 정도다.</figcaption>
             </figure>
           </div>

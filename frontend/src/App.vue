@@ -93,7 +93,8 @@ onMounted(load)
 
   <main v-if="data">
     <HowItWorks :prices="data.prices" :history="data.history" :latest="data.latest" />
-    <WhySection :all-prices="allPrices" :weather="weather" :weather-failed="weatherFailed" :model="data.model" :forecast="forecast20" />
+    <WhySection :all-prices="allPrices" :weather="weather" :weather-failed="weatherFailed" :full-error="fullError"
+      :model="data.model" :forecast="forecast20" @retry-prices="loadAllPrices" @retry-weather="loadWeather" />
     <section class="block explore">
       <div class="inner">
         <PriceChart v-model:horizon="exploreHorizon" :prices="data.prices" :history="data.history" :latest="data.latest"

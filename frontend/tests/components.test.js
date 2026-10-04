@@ -58,3 +58,16 @@ test('전체 가격이 빈 배열이면 2005년부터의 축을 꾸며 그리지
   assert.ok(html.includes('이 기간에 표시할 가격 자료가 없습니다.'))
   assert.equal(html.includes('<svg'), false)
 })
+
+test('Why 섹션: 전체 가격 요청이 실패하면 계속 불러오는 중이라고 하지 않고 다시 시도를 준다', async () => {
+  const { default: WhySection } = await server.ssrLoadModule('/src/components/WhySection.vue')
+  const failed = await renderToString(createSSRApp(WhySection, {
+    allPrices: null, fullError: '전체 가격을 불러오지 못했습니다.', weather: null, weatherFailed: true,
+  }))
+  assert.doesNotMatch(failed, /전체 가격을 불러오는 중입니다/)
+  assert.match(failed, /전체 가격을 불러오지 못했습니다\.\s*<button[^>]*>다시 시도<\/button>/)
+
+  const empty = await renderToString(createSSRApp(WhySection, { allPrices: [], weather: null }))
+  assert.doesNotMatch(empty, /전체 가격을 불러오는 중입니다/)   // 빈 응답은 로딩이 아니다
+  assert.match(empty, /표시할 가격 자료가 없습니다/)
+})
