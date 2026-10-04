@@ -6,9 +6,11 @@ set -euo pipefail
 test "$(id -u)" = 0
 cd "$(dirname "$0")/.."
 env_file=${1:-/srv/coffee/.env}
+source_sha=${COFFEE_SOURCE_SHA:-}  # 명령에서 넘긴 커밋이 .env의 값보다 우선한다
 set -a
 source "$env_file"
 set +a
+export COFFEE_SOURCE_SHA=${source_sha:-${COFFEE_SOURCE_SHA:-}}
 for name in POSTGRES_ADMIN_PASSWORD COFFEE_PIPELINE_DB_PASSWORD COFFEE_API_DB_PASSWORD; do
   [[ "${!name:-}" =~ ^[a-f0-9]{64}$ ]] || { echo "Invalid generated credential: $name" >&2; exit 1; }
 done
