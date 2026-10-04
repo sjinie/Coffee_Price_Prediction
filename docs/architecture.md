@@ -87,7 +87,7 @@
 
 수익률 모델은 개발·보류 구간에서 Naive보다 RMSE가 컸다. 그래도 예측 가격을 보여 주는 것은 사용자 결정이고(개발 기록 17), 그래서 지평별 검증 성적을 metadata(`return.horizons[h].dev`, `.holdout`)에 넣어 카드에 함께 표시한다.
 
-설정값은 `model_artifacts/<버전>/*/metadata.json`에 있고 대시보드는 활성 모델의 metadata에서 신호 기준과 모델 이름(`algorithm`)을 읽는다. 가격 차트는 지평(5·20·60)마다 위 칸에 종가, n거래일 전에 낸 예측 가격·범위(목표일에 맞춰), 오늘의 예측 가격·범위를, 아래 칸에 기준일별 상승 확률을 그린다. 모델 이름은 지평 항목, 묶음 순서로 찾아(`lib.modelFor`) 칸마다 적는다. 지평마다 다른 모델을 쓸 수 있기 때문이다. 대시보드의 적중 기록은 실시간(`live`)과 소급(`backfill`) 예측을 나눠 따로 계산하고, 수익률 방향 적중률, 가격 오차(모델 대 현재가 유지), 범위 적중률, 신호 적중률을 보여 준다.
+설정값은 `model_artifacts/<버전>/*/metadata.json`에 있고 대시보드는 활성 모델의 metadata에서 신호 기준과 모델 이름(`algorithm`)을 읽는다. 가격 차트는 지평(5·20·60)마다 위 칸에 종가, n거래일 전에 낸 예측 가격·범위(목표일에 맞춰), 오늘의 예측 가격·범위를, 아래 칸에 기준일별 상승 확률을 그린다. 모델 이름은 지평 항목, 묶음 순서로 찾아(`lib.modelFor`) 칸마다 적는다. 지평마다 다른 모델을 쓸 수 있기 때문이다. 대시보드의 적중 기록은 실시간(`live`)과 소급(`backfill`) 예측을 나눠 따로 계산하고, 수익률 방향 적중률, 가격 오차(모델 대 현재가 유지), 범위 적중률, 신호 적중률과 그 기준선(같은 신호일에 늘 '구매'라고 했을 때의 적중률)을 보여 준다.
 
 ## DB
 
@@ -104,7 +104,7 @@
 ## 파이프라인
 
 - `backfill`: 모델 등록, 가격 전체, 2026-01-01부터 최신 기준일까지 예측(`kind='backfill'`), 보관 뉴스 1,446건.
-- `daily`: 소스 갱신 → 최신 기준일 예측(`kind='live'`) → 최근 7일 기사 중 새 기사를 Jev로 분류(누적 비용 상한 1 USD, 한 번에 20건).
+- `daily`: 소스 갱신 → 최신 기준일 예측(`kind='live'`) → 최근 7일 기사 중 새 기사를 Jev로 분류(한 번에 20건). 비용은 응답을 받아야 알 수 있어 실행마다 0.01 USD를 미리 잡고, 누적 상한 1 USD까지 남은 예산이 그보다 작으면 분류하지 않는다.
 - 두 명령 모두 23:00 UTC 마감이 지난 거래일의 가격만 쓴다. 장중에 실행해도 끝나지 않은 오늘 봉으로 예측을 저장하지 않는다.
 - 종료 코드: `0` 성공, `3` 경고(예측은 저장, 일부 소스 실패·가격 지연·기준일 피처 결측·뉴스 실패), `1` 실패.
 
@@ -131,7 +131,7 @@ Azure VM (deploy/compose.azure.yaml)
 기존 운영(이전 코드, database `coffee_price`)은 그대로 두고 같은 PostgreSQL 클러스터에 새 database `coffee_v2`를 만든다. 실행 직전에 사용자 승인을 받는다.
 
 1. 이전 database를 `pg_dump`로 백업한다(`/srv/coffee/backups`).
-2. VM `/srv/coffee/.env`에 `COFFEE_DB_NAME=coffee_v2`를 넣고 `sudo COFFEE_SOURCE_SHA=<커밋> deploy/setup-db.sh /srv/coffee/.env`를 실행한다. database·권한·스키마를 만들고 API·대시보드를 새 이미지로 바꾼다.
+2. VM `/srv/coffee/.env`에 `COFFEE_DB_NAME=coffee_v2`를 넣고 `sudo COFFEE_SOURCE_SHA=<커밋> deploy/setup-db.sh /srv/coffee/.env`를 실행한다(명령에서 넘긴 커밋이 `.env`의 값보다 우선한다). database·권한·스키마를 만들고 API·대시보드를 새 이미지로 바꾼다.
 3. Mac의 `data/sources/`를 VM `/srv/coffee/v2/sources/`로 올린다.
 4. Mac에서 SSH 터널을 열고 `python -m coffee.pipeline backfill`을 실행한다(보관 뉴스 `data/jev/`가 Mac에만 있다). 2와 4 사이에는 대시보드가 비어 있다.
 5. 브랜치를 병합하고 `daily.yml`을 수동 실행해 결과를 확인한다.
