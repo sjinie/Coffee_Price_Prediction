@@ -57,3 +57,4 @@ jev:
   prompt_version: "arabica-kc-futures-v2"   # 기존 분석을 재사용하려면 바꾸지 않는다
   max_articles_per_run: 20      # 한 번 실행에 분류할 기사 수 (배치 요청 1회)
   budget_usd: 1.0
+  reserve_usd: 0.01             # 한 번 실행에 미리 잡아 두는 비용. 남은 예산이 이보다 작으면 분류하지 않는다 (실측 10건 0.000144 USD)

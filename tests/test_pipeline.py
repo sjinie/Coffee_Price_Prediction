@@ -119,12 +119,21 @@ def test_update_news_caps_articles_per_run(monkeypatch, news_stubs):
     assert step["selected"] == 3 and step["classified"] == 3 and len(calls["classified"][0]) == 3
 
 
-def test_update_news_stops_at_the_budget(monkeypatch, news_stubs):
+@pytest.mark.parametrize("left", [0.0, 0.0001])  # 상한에 닿았을 때와, 상한 바로 아래(0.9999 USD)일 때
+def test_update_news_reserves_the_cost_before_calling_jev(monkeypatch, news_stubs, left):
     now, calls = news_stubs
     budget = pipeline.SETTINGS["jev"]["budget_usd"]
-    monkeypatch.setattr(db, "news_state", lambda conn, since, per_day: (set(), set(), budget))
+    monkeypatch.setattr(db, "news_state", lambda conn, since, per_day: (set(), set(), budget - left))
     step = update_news(FakeConn(), now)
     assert "warning" in step and calls["classified"] == []
+
+
+def test_update_news_warns_when_a_request_costs_more_than_the_reserve(monkeypatch, news_stubs):
+    now, calls = news_stubs  # 기사당 0.001 USD, 한 번에 3건 → 0.003 USD
+    monkeypatch.setattr(db, "news_state", lambda conn, since, per_day: (set(), set(), 0.0))
+    monkeypatch.setitem(pipeline.SETTINGS["jev"], "reserve_usd", 0.002)
+    step = update_news(FakeConn(), now)
+    assert step["classified"] == 3 and "warning" in step
 
 
 @pytest.mark.parametrize("news_fails, expected", [(False, EXIT_OK), (True, EXIT_WARNING)])

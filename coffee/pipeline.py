@@ -98,7 +98,11 @@ def _activate(conn, models: dict) -> None:
 
 
 def update_news(conn, now: datetime) -> dict:
-    """최근 며칠의 기사를 모아 새 기사만 Jev로 분류한다. 누적 비용이 상한을 넘으면 분류하지 않는다."""
+    """최근 며칠의 기사를 모아 새 기사만 Jev로 분류한다.
+
+    요청 비용은 응답을 받아야 알 수 있으므로, 실행마다 reserve_usd를 미리 잡아 두고 남은 예산이 그보다
+    작으면 분류하지 않는다. 실제 비용이 예약을 넘으면 경고한다(예약값을 늘려야 상한이 지켜진다).
+    """
     settings = SETTINGS["jev"]
     today = now.astimezone(jev.NY).date()
     since = today - timedelta(days=NEWS_LOOKBACK_DAYS)
@@ -109,12 +113,17 @@ def update_news(conn, now: datetime) -> dict:
     step = {"step": "news", "collected": len(articles), "selected": len(chosen), "spent_usd": round(spent, 6)}
     if not chosen:
         return step
-    if spent >= settings["budget_usd"]:
-        return {**step, "warning": f"누적 비용 {spent:.4f} USD가 상한 {settings['budget_usd']} USD 이상"}
+    remaining, reserve = settings["budget_usd"] - spent, settings["reserve_usd"]
+    if remaining < reserve:
+        return {**step, "warning": f"남은 예산 {remaining:.4f} USD가 실행당 예약 {reserve} USD보다 작아 분류하지 않음"}
     results = jev.classify(chosen)
     inserted = db.insert_news(conn, [{**item, "cost_usd": item["cost"]} for item in results])
     conn.commit()
-    return {**step, "classified": inserted, "cost_usd": sum(item["cost"] for item in results)}
+    cost = sum(item["cost"] for item in results)
+    step = {**step, "classified": inserted, "cost_usd": cost}
+    if cost > reserve:
+        step["warning"] = f"이번 분류 비용 {cost:.4f} USD가 예약 {reserve} USD를 넘음(reserve_usd를 늘려야 함)"
+    return step
 
 
 def daily(conn, now: datetime | None = None) -> tuple[int, list]:
