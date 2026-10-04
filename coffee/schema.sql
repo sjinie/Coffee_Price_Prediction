@@ -10,6 +10,17 @@ CREATE TABLE IF NOT EXISTS prices (
     volume double precision
 );
 
+-- 산지 일별 기상(NASA POWER). 화면 전용이며 모델 피처는 계속 Parquet와 관측일 + 4일 규칙으로 만든다.
+CREATE TABLE IF NOT EXISTS weather (
+    region text NOT NULL,
+    date   date NOT NULL,              -- 관측일(UTC)
+    precip double precision,          -- PRECTOTCORR, mm/일
+    t_mean double precision,           -- T2M, ℃
+    t_min  double precision,           -- T2M_MIN, ℃
+    t_max  double precision,           -- T2M_MAX, ℃
+    PRIMARY KEY (region, date)
+);
+
 -- 동결한 모델 묶음(model_artifacts/<버전>). 서비스 중인 버전은 하나뿐이다.
 CREATE TABLE IF NOT EXISTS models (
     model_version text PRIMARY KEY,

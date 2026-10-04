@@ -106,6 +106,8 @@ for nb in notebooks/0*.ipynb; do jupyter nbconvert --to notebook --execute --inp
 docker compose up -d --build
 docker compose run --rm pipeline migrate
 docker compose run --rm pipeline backfill
+# 이미 모은 원자료에서 기상만 다시 적재할 때(collect_start=2005-01-01부터)
+docker compose run --rm pipeline weather
 ```
 
 대시보드는 http://localhost:8080 입니다. 프론트엔드만 개발할 때는 `uvicorn coffee.api:app`을 띄우고 `frontend/`에서 `npm install && npm run dev`를 실행합니다.
