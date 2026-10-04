@@ -1,11 +1,12 @@
-# Run from the repository root with: docker compose --env-file /srv/coffee/.env -f deploy/compose.azure.yaml
-# pipeline runs on GitHub-hosted runners; only its state is stored on this VM.
+# VM 운영 구성. deploy/setup-db.sh가 이 파일로 이미지를 만들고 서비스를 띄운다.
+# 파이프라인은 GitHub runner에서 돌고 SSH 터널(127.0.0.1:15432)로 이 PostgreSQL에 적재한다.
+# postgres 서비스와 볼륨은 이전 버전과 같고, 새 버전은 같은 클러스터의 새 database(COFFEE_DB_NAME)를 쓴다.
 services:
   postgres:
     image: postgres:17.11-bookworm@sha256:639ab7ceb90e13123085b741fb31ef493fba25463002f6da665352e7b534b652
     restart: unless-stopped
     environment:
-      POSTGRES_DB: coffee_price
+      POSTGRES_DB: coffee_price   # 볼륨을 처음 만들 때만 쓰인다(이전 버전 database)
       POSTGRES_USER: postgres
       POSTGRES_PASSWORD: ${POSTGRES_ADMIN_PASSWORD:?required}
     ports:
@@ -24,13 +25,12 @@ services:
       context: ..
       target: api
     restart: unless-stopped
-    # Schema migration is an explicit deployment step using the database owner.
-    command: ["uvicorn", "coffee_service.api:app", "--host", "0.0.0.0", "--port", "8000"]
     environment:
+      DATABASE_URL: "postgresql://"
       PGHOST: postgres
       PGPORT: "5432"
-      PGDATABASE: coffee_price
-      PGUSER: coffee_api
+      PGDATABASE: ${COFFEE_DB_NAME:?required}
+      PGUSER: coffee_api   # SELECT 권한만 있는 계정
       PGPASSWORD: ${COFFEE_API_DB_PASSWORD:?required}
     depends_on:
       postgres:

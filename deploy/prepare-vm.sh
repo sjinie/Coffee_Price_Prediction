@@ -46,7 +46,7 @@ install -d -m 0700 -o coffee-actions -g coffee-actions /home/coffee-actions/.ssh
 chown coffee-actions:coffee-actions /home/coffee-actions/.ssh/authorized_keys
 chmod 600 /home/coffee-actions/.ssh/authorized_keys
 install -d -m 0755 /srv/coffee
-install -d -m 0700 -o coffee-actions -g coffee-actions /srv/coffee/pipeline
+install -d -m 0700 -o coffee-actions -g coffee-actions /srv/coffee/v2 /srv/coffee/v2/sources
 install -d -m 0700 /srv/coffee/backups
 cat > /etc/ssh/sshd_config.d/00-coffee.conf <<'EOF'
 PasswordAuthentication no

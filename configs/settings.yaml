@@ -1,0 +1,60 @@
+# 프로젝트 설정. 코드는 coffee/config.py를 통해서만 읽는다.
+
+horizons: [5, 20, 60]           # 거래일 기준 예측 지평
+collect_start: "2005-01-01"     # 2006년 이전은 이동 집계용 버퍼
+
+# 학습은 2006년부터. 개발 구간의 매년을 그 전까지의 자료로 다시 학습해 평가한다(walk-forward).
+# 모든 선택(피처·모델·설정·임계값)은 개발 구간에서 한다. 보류 구간은 선택이 끝난 뒤 한 번만 평가한다.
+periods:
+  train_start: "2006-01-01"
+  development: [2012, 2021]     # 평가 연도 (fold 10개)
+  holdout: [2022, 2025]         # 이전 연구에서 결과를 본 적이 있는 구간
+  forward_start: "2026-01-01"   # 최종 모델(2025년까지 학습)의 사후 확인
+
+market:
+  symbol: "KC=F"                # ICE 아라비카 커피 선물 근월물 (Yahoo Finance)
+  # NYSE 달력에 없지만 커피 선물이 거래된 날
+  extra_sessions: ["2018-12-05", "2025-01-09"]
+  cop_symbol: "COP=X"           # 콜롬비아 페소/달러 (FRED에 없어 Yahoo 사용, 하루 늦게 반영)
+
+# FRED/ALFRED. ALFRED 최초 공개값을 쓰고, ALFRED 기록이 시작되기 전 관측은
+# FRED 현재값에 공개 지연(assumed_lag_days)을 가정한다.
+macro:
+  brl: {series: DEXBZUS, assumed_lag_days: 7}                # 브라질 헤알/달러
+  rate: {series: DFF, assumed_lag_days: 1}                   # 미국 실효 연방기금금리
+  oil: {series: DCOILWTICO, assumed_lag_days: 7}             # WTI 원유 현물
+  freight: {series: PCU483111483111, assumed_lag_days: 45}   # 원양 해운 생산자물가지수(월별)
+
+enso:
+  url: "https://www.cpc.ncep.noaa.gov/data/indices/oni.ascii.txt"
+  availability_lag_days: 10     # 3개월 이동평균의 마지막 달 + 10일에 공개된다고 가정
+
+weather:
+  variables: [PRECTOTCORR, T2M, T2M_MIN, T2M_MAX]
+  availability_lag_days: 4      # 관측일 + 4일에 이용 가능하다고 가정
+  start: "1995-01-01"           # 직전 10년 평년값을 만들기 위해 표본보다 10년 먼저 받는다
+  climatology_years: 10         # 평년값 = 직전 10년 같은 달 평균 (그해 자료는 쓰지 않음)
+  heat_threshold_c: 30          # 아라비카는 30℃를 넘는 고온에 꽃·열매가 상한다
+  regions:
+    - {id: br_sul_minas,    country: Brazil,   name: Sul de Minas,   lat: -21.37,   lon: -45.51}
+    - {id: br_cerrado,      country: Brazil,   name: Cerrado Mineiro, lat: -18.9439, lon: -46.9925}
+    - {id: br_alta_mogiana, country: Brazil,   name: Alta Mogiana,   lat: -20.5389, lon: -47.4008}
+    - {id: co_huila,        country: Colombia, name: Huila,          lat: 2.3333,   lon: -75.5167}
+    - {id: co_caldas,       country: Colombia, name: Caldas,         lat: 4.9667,   lon: -75.65}
+    - {id: co_antioquia,    country: Colombia, name: Antioquia,      lat: 5.9667,   lon: -75.7}
+
+news:
+  queries:
+    - "coffee (price OR harvest OR crop OR supply OR drought OR frost OR export)"
+    - "(Brazil OR Colombia) (agriculture OR farming OR drought OR rainfall OR fertilizer OR coffee)"
+  articles_per_day: 2
+
+model_version: "2026-10-04"  # 서비스가 읽는 model_artifacts/<버전> (노트북 06에서 동결)
+
+jev:
+  endpoint: "https://ai-gateway.vercel.sh/typesafe/v1/systemone"
+  model: "typesafe-ai/jev"
+  prompt_version: "arabica-kc-futures-v2"   # 기존 분석을 재사용하려면 바꾸지 않는다
+  max_articles_per_run: 20      # 한 번 실행에 분류할 기사 수 (배치 요청 1회)
+  budget_usd: 1.0
+  reserve_usd: 0.01             # 한 번 실행에 미리 잡아 두는 비용. 남은 예산이 이보다 작으면 분류하지 않는다 (실측 10건 0.000144 USD)

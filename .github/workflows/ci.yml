@@ -1,10 +1,10 @@
 name: CI
 
 on:
-  workflow_call:
   pull_request:
   push:
     branches: [main]
+  workflow_dispatch:
 
 permissions:
   contents: read
@@ -15,7 +15,7 @@ jobs:
     timeout-minutes: 20
     services:
       postgres:
-        image: postgres:17.11-bookworm
+        image: postgres:17.11-bookworm@sha256:639ab7ceb90e13123085b741fb31ef493fba25463002f6da665352e7b534b652
         env:
           POSTGRES_DB: coffee_test
           POSTGRES_USER: postgres
@@ -38,12 +38,8 @@ jobs:
           cache-dependency-path: |
             requirements-api.txt
             requirements-pipeline.txt
-      - run: python -m pip install --upgrade pip
       - run: python -m pip install -r requirements-api.txt -r requirements-pipeline.txt pytest==9.1.1 httpx==0.28.1
-      - run: >-
-          python -m pytest tests
-          --ignore=tests/test_core4_environment.py
-          --ignore=tests/test_postgres_e2e.py
+      - run: python -m pytest
 
   frontend:
     runs-on: ubuntu-24.04
@@ -67,6 +63,6 @@ jobs:
     timeout-minutes: 30
     steps:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
-      - run: docker build --target api --tag coffee-price-api:ci .
-      - run: docker build --target pipeline --tag coffee-price-pipeline:ci .
-      - run: docker build --tag coffee-price-web:ci frontend
+      - run: docker build --target api --tag coffee-api:ci .
+      - run: docker build --target pipeline --tag coffee-pipeline:ci .
+      - run: docker build --tag coffee-web:ci frontend

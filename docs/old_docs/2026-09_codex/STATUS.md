@@ -1,0 +1,644 @@
+# 작업 상태
+
+## 2026-10-03 — 반복되는 GitHub Actions 실패 조사·SSH 연결 재시도
+
+- 조사 범위: 최근 실행 25건(`gh run list`·`gh run view --log`·check-run annotation, 읽기 전용). CI(`ci.yml`)와 GHCR 게시는 전부 성공했다. 실패한 것은 모두 `Daily production pipeline`이다.
+  - 9/29, 9/30, 10/1, 10/2 (`2406489`·`9181b7c`): `numeric=success`, `collection=failed`. 같은 runner에서 9/27에는 수집이 성공했다. 9/28 이후 Daily Coffee News WordPress가 막히면서(VM에서 HTTP 403 재현, 9/30 STATUS) 같은 블록의 RSS·Yahoo까지 중단된 것이 원인이다. 2026-10-02 브랜치 `feat/news-collection-resilience`의 C1~C3(`07d3ead`)이 고친 내용이며, 원격 `main`에는 아직 없다. 병합하면 WordPress 장애는 `collection=partial` → 종료 코드 3 → Actions 경고(성공)로 표시된다. 필수 RSS 실패나 분류 중단은 계속 실패다.
+  - 9/28 (`2406489`): `ssh: connect to host … port 22: Connection timed out` → 첫 rsync가 exit 255로 끝났다. runner의 임시 `ssh_config`에 `ConnectionAttempts 3`을 추가해 SSH·rsync 연결을 3회까지 시도한다(`ConnectTimeout 15`는 유지). VM이 꺼져 있거나 몇 분 넘게 막힌 장애에는 효과가 없고, 그런 경우는 계속 실패로 남는다.
+- 참고: 예약(cron 06:17 UTC)은 실제로 12:44~14:08 UTC에 시작됐다. GitHub 예약 지연이며 실패 원인은 아니다.
+- 작업 트리 복구: 세션 밖에서 추적 파일 13개(`configs/regions.yaml`·`sources.yaml`, `docs/images/` 5개, `docs/old_docs/` 5개, `data_code/old_code/` 노트북 1개)가 삭제된 상태였다. 사용자 승인을 받아 `git restore`로 HEAD 내용을 되살렸다. 삭제 원인은 확인하지 못했다.
+- 검증: OpenSSH `ssh -G`로 `connectionattempts 3`·`connecttimeout 15` 적용 확인, `bash -n` 통과, `pytest tests`(CI 제외 범위) 228 passed·6 skipped(PostgreSQL 테스트, 전날 임시 DB에서 235 passed로 확인). 실제 runner·VM 실행은 push·병합 뒤 다음 예약 실행에서 확인해야 한다.
+
+## 2026-10-02 — 뉴스 수집 소스 분리·실패 신호 정리·일일 refresh
+
+- 배경: 2026-10-02 [코드·정합성 점검](code_review_2026-10-02.md)의 C1~C5. 9월 27일부터 10월 1일까지 일일 Actions가 5회 연속 실패로 끝났다. 9월 28일은 SSH timeout이었고, 나머지 네 번은 수치 처리와 예측 적재가 성공했다. 10월 1일 실행 [36869017753](https://github.com/sjinie/Coffee_Price_Prediction/actions/runs/36869017753)은 `numeric=success`, `collection=failed`, `classification=completed`였다. Daily Coffee News WordPress가 HTTP 403을 반환하자 같은 블록의 Google News RSS·Yahoo 수집까지 중단됐고, 수집 완료일이 9월 26일에 멈춰 있었다.
+- 로컬 `main`을 `origin/main` `9181b7c`로 fast-forward한 뒤 `feat/news-collection-resilience`에서 작업했다.
+- 변경 사항
+  - **C1**: Google News RSS만 필수 소스로 둔다. WordPress·Yahoo가 실패하면 `news.json.selection_metadata.incremental.source_gaps`에 `{source,start,end,error}`를 누적하고 `partial`로 표시한 뒤 수집 완료일을 전진시킨다. RSS가 실패하면 기존처럼 그 구간을 다음 실행에서 다시 받는다.
+  - **C2**: `news.SourceRequestError`가 HTTP 상태만 보존한다. 오류 문자열은 `wordpress 2024-01-01~2024-01-07: HTTP 403` 형식이다.
+  - **C3**: `refresh --once`가 0(전체 성공)·3(예측 적재 + 보조 소스 누락·Gateway 재시도 대기)·1(예측 실패, 필수 RSS 실패, 분류 중단 상태)을 반환한다. `run-daily-pipeline.sh`는 3을 `::warning`과 exit 0으로 바꾼다. `Refresh:` 로그에는 `errors`·`collection_errors`가 추가됐다.
+  - **C4**: `validate_selected_weather`가 최신 60거래일 창에서 비어 있는 기상 지역을 이름으로 알려 준다. 입력 검사 실패만 원인을 `pipeline_runs.message`에 남긴다. 예: `파이프라인 처리 실패: PipelineInputError (기상 입력이 오래되었거나 비어 있습니다: br_cerrado)`.
+  - **C5**: 로컬 refresh 주기를 7일에서 1일로 바꿨다. 운영 Actions 일정은 그대로다.
+- 독립 리뷰(읽기 전용): BLOCKER/HIGH 없음. MEDIUM 2건(종료 코드 3의 범위가 너무 넓음, 보조 소스의 광범위한 `except`)과 LOW 1건(재시도할 구간의 누락이 확정 기록에 남음)을 반영했다. `source_gaps` 상한 없음(LOW)은 보류했다.
+- 바꾸지 않은 것: 모델, DB schema, API, 프론트엔드, 의존성, 운영 VM·workflow 일정. 보조 소스 누락 구간의 자동 재수집도 넣지 않았다.
+- 검증
+  - 외부 venv Python 3.12와 임시 UTF8 PostgreSQL 17.11(scratchpad, localhost TCP)에서 `pytest tests --ignore=tests/test_core4_environment.py`를 실행했다. 결과는 **235 passed, 2 subtests passed**이고, `test_postgres_e2e`를 포함해 skip은 없다. 경고 3건(sklearn 단일 클래스, Starlette/httpx, AnyIO)은 기존과 같다.
+  - 새 회귀 테스트: 분류 중단·RSS 실패 시 exit 1, 보조 소스 코드 오류가 수집 실패로 전파됨, 재시도 구간 누락 미기록, WordPress HTTP 403 구간 기록·RSS 선정·수집 완료일 전진·회복 후 누적 보존, Yahoo 실패 시 RSS 선정, 오류 문자열에 URL이 남지 않음, 종료 코드 0/3/1, 원인 메시지가 refresh 상태까지 전달됨, 기상 결측 지역 이름, runner의 exit 3 → 경고/exit 0과 상태 동기화.
+- 미검증: 실제 GitHub runner·VM에서의 실행(push·병합 후 다음 예약 실행으로 확인), Docker 이미지 build, 실제 WordPress·RSS 원천 호출. 일일 runner는 Actions에서 main 소스를 직접 실행하므로 VM 이미지 재빌드 없이 사용자의 push·PR 병합 뒤 다음 예약 실행으로 확인한다.
+
+## 2026-09-30 — Gateway 크레딧 추가 후 재실행·운영 재배포
+
+- 사용자가 크레딧 추가와 Actions·배포 재시도를 요청했다. 원격 main은 `2406489e633910f41584536424e1867a79678909`이며 Ubuntu runner 고정 커밋 `78554d4`는 아직 로컬이다. 원격 Git 변경 없이 해당 main의 [일일 Actions attempt 2](https://github.com/sjinie/Coffee_Price_Prediction/actions/runs/36572288229/attempts/2)를 실행하고 운영 중인 같은 API·web 이미지를 재배포했다. 새 CI/GHCR 게시·이미지 rebuild·모델 재학습은 수행하지 않았다.
+- 실행 전에 운영 DB dump, pipeline 전체, runtime env 및 기존 예측 비교용 기록을 `/srv/coffee/backups/retry-daily-20260930-7cmor3xd`에 보관했다. dump는 `pg_restore --list`로 검증했다. live 모델 목록의 Jev 입력 가격은 토큰당 $0.000000042·출력 $0이었다. 기존 코드의 $1 한도를 유지하고 archive directory lock 안에서 worker의 `stopped`만 `waiting`으로 재개했다. 이전 403 응답·분류 결과·요청 ID는 보존했다.
+- Actions job `109735066211`에서 대기 기사 2건을 한 요청으로 분류했다. Gateway는 HTTP 200, 입력 939토큰·출력 151토큰, 응답 비용 **$0.000039438**을 기록했다. worker는 `completed`, pending 0이며 마지막 성공 시각은 2026-09-30 04:09 UTC다. 원격 archive에서 기존 응답 1건과 분석 이력 2,958건의 내용이 유지되고 새 응답 1건·분석 2건이 추가된 것을 대조했다.
+- 전체 Actions 결과는 **실패(exit 1)**다. `numeric=success`, `classification=completed`, `collection=failed`여서 `refresh=partial`이다. VM에서 같은 main의 pipeline 이미지로 `news_incremental.collect_pending`을 실행하며 소스별 HTTP 상태를 확인했고, `dailycoffeenews.com`이 3회 모두 HTTP 403을 반환했다. 실제 GitHub runner의 원문 HTTP 상태는 기존 로그에 없지만 실패 구간의 WordPress snapshot도 0개다. 수집 완료일은 9월 26일·요청 종료일은 9월 29일이며, 뒤의 RSS/Yahoo 단계로 진행하지 못했다. 이는 Jev Gateway 접근 복구와 별개의 뉴스 원천 장애다. 차단 우회·원천 생략·실패를 성공으로 바꾸는 변경이나 같은 조건의 추가 재실행은 하지 않았다.
+- 수치 DB run `cf090f05-5d83-4060-8d01-7b8f311ba218`은 success이며 가격 3,078행·선택 모델 예측 558행을 UPSERT했다. 전체 예측은 2,616→2,619건이고 기존 2,616건의 모델·기준일·목표일·지평·예측 수익률·가격이 모두 동일하다. 기존 DB·Jev 자료를 삭제하거나 새 분석을 과거 예측에 소급하지 않았다.
+- Compose로 API·web만 같은 이미지에서 재생성했다. API image ID `sha256:d4a18068d486706c1f973ffdb0f04c27ccc18349f99686300573540519d83e48`, web `sha256:74b6fdb587971d869ed9b13acb2fd35bd2c7e6133393e2e8cb03d26a30bbcf8a`를 유지한다. PostgreSQL·Caddy는 재생성하지 않았고 DB·인증서 volume을 보존했다. runner용 artifact 21개 중 manifest가 지정한 20개 파일의 SHA-256도 모두 일치했다.
+- [공개 HTTPS](https://coffee-price-sjinie.koreacentral.cloudapp.azure.com/)의 health·모델·가격·5/20/60일 예측·뉴스 API를 확인했다. 최신 기준일은 9월 29일, 종가 289.450012¢/lb, 예측가는 289.333786/304.722246/383.632869¢/lb다. 새 분석은 9월 29일의 23:00 UTC 마감 이후 이용 가능해졌으므로 해당 예측은 가용 뉴스 0건·`numeric_fallback`이다. 기사 목록은 1,448건 전부 분석 완료·미분석 0건이며, 원천 수집 완료일과 구분한다. 실제 브라우저에서도 최신 가격·분석 완료 수를 확인했고 5/20/60일 차트 전환과 기사 상세 패널·Escape 닫기를 검증했다.
+- 남은 작업은 WordPress 원천 접근 문제 해결, Ubuntu 고정 커밋의 사용자 push/병합, 이후 전체 성공과 다음 예약 실행 검증이다. 현재 배포·Jev 분류의 정상 결과를 Actions 전체 성공으로 표현하지 않는다.
+
+## 2026-09-30 — Daily Actions 실패 원인 분석·Ubuntu24.04 고정
+
+- GitHub 플러그인으로 최근 3회 job/로그를 조회했다. 최신 [9월29일 실행 36572288229](https://github.com/sjinie/Coffee_Price_Prediction/actions/runs/36572288229)은 main `2406489`에서 의존성 설치와 SSH 연결 후 `numeric=success`, `collection=failed`, `classification=failed`, `status=partial`로 종료했다. `refresh.serve(..., once=True)`는 전체 성공이 아니면 exit1을 반환한다. 뉴스 실패가 수치 처리까지 실패했다는 뜻은 아니다.
+- 같은 실행의 `finished_at=2026-09-29T13:05:05.393821Z`가 보존된 VM `/srv/coffee/pipeline/jev/requests.json`을 읽기 전용으로 대조했다. 분류 오류는 `classification: RuntimeError`이고 worker는9월27일의 `stopped` 상태다. 대응하는 `responses.json`의 HTTP403 응답은 `RestrictedModelsError` 및 무료 계정의 모델 접근 거부를 명시한다. `news_backfill._run_locked`가 저장된 중단 상태를 검사해 새 HTTP 요청 전에 예외를 발생시키는 경로를 임시 fixture로 재현했다. 최신 배치에서403이 새로 발생한 것으로 해석하지 않는다.
+- `news.json`에는 수집 완료일9월26일·요청 종료일9월28일·`RuntimeError in collection window`가 저장돼 있다. 실패 구간9월27~28일의 source snapshot이0개이고 첫 WordPress 호출이 성공해야 snapshot을 기록하므로, 해당 요청의 재시도 소진으로 좁혀진다(기록과 코드에 따른 추론). 당시 HTTP 상태/원문 예외는 저장하지 않아403·429·timeout 중 무엇인지는 확정할 수 없다. 9월30일 로컬에서 같은 날짜 인자로 `news.fetch_wordpress`를 호출한 결과는 HTTP200·5행이며, 이전 GitHub runner에서의 실패 원인을 증명하거나 복구를 보장하지 않는다.
+- [9월28일 실행 36433674270](https://github.com/sjinie/Coffee_Price_Prediction/actions/runs/36433674270)은 `SSH port22: Connection timed out` 뒤 rsync exit255로 Python 배치 진입 전에 실패했다. 당시 VM 전원·NSG·네트워크 중 어느 원인인지는 로그만으로 확정하지 않는다. 9월29일 Actions와 이번 읽기 전용 SSH 조회는 연결됐다. [9월27일 실행 36327207257](https://github.com/sjinie/Coffee_Price_Prediction/actions/runs/36327207257)은 수치/수집 성공·분류 실패였다.
+- `.github/workflows/{ci,daily-pipeline,publish-ghcr}.yml`의 직접 실행 job5곳을 `ubuntu-latest`→`ubuntu-24.04`로 변경했다. 실패한3회 모두 실제 OS는 **Ubuntu24.04.5 LTS**, runner image는 `ubuntu-24.04 / 20260920.314.1`, Python은3.12.14였다. OS 계열 고정이며 GitHub 이미지의 패치·도구 업데이트까지 고정하는 것은 아니다. 2026-09-30 [GitHub 공식 runner 문서](https://docs.github.com/en/actions/reference/runners/github-hosted-runners)와 [Ubuntu24.04 이미지 목록](https://github.com/actions/runner-images/blob/main/images/ubuntu/Ubuntu2404-Readme.md)을 확인했다. Action SHA·Python/Node·패키지·Docker 설정은 그대로다.
+- 검증: 공식 release SHA-256과 대조한 actionlint1.7.12로 workflow3개 통과, 기존 파일 대비 runner5개 외 내용 불변/YAML 검사, `git diff --check` 통과. 기존 외부 Python3.12.14에서 중단 상태의 예외를 재현했으며 Gateway HTTP 요청은0건이다. 이번 변경은 runner label과 문서에 한정돼 전체 Python/프런트엔드 테스트·Docker build는 반복하지 않았다. 원격 push·운영 상태 변경·Actions 재실행은 수행하지 않았다.
+- 후속 장애 해결은 runner 고정과 별도다. 무료 이용 조건 안에서 Jev 접근 가능 여부를 확인한 뒤 중단 상태를 명시적으로 재개하고, 수집 예외의 소스/상태를 secret 없이 보존하도록 진단을 보완해야 한다. 유료 전환·모델 교체·중단 상태 초기화·실패를 성공으로 처리하는 변경은 없다.
+
+## 2026-09-28 — 전체 변경 검토와 문서 정리
+
+문서와 실제 코드를 대조하면서 이전 7개 feature 모델, 현재 뉴스 포함 모델, 공개 서버의 배포 상태가 섞인 설명을 바로잡았다. README는 최근 모델 선택 과정을 따라 읽을 수 있게 보강했고, 트러블슈팅에는 기사 보관 시점과 예측에 쓸 수 있는 시점이 달랐던 문제, 상세 모달의 접근성 수정 과정을 남겼다. `humanize-korean`과 `korean-humanizer`로 긴 기록을 다듬되 명령어·수치·링크와 과거 기록은 보존했다.
+
+외부 Python 3.12와 임시 UTF8 PostgreSQL 17에서 CI와 같은 제외 범위로 217개 테스트와 2개 subtest가 통과했다. 프런트엔드는 12개 테스트와 Vite build가 통과했다. 이번 검증에서 전체 재학습이나 새 LLM 요청은 실행하지 않았다. sklearn 단일 클래스 지표, Starlette/httpx, AnyIO 관련 경고 3건은 남아 있다.
+
+변경된 노트북 7개의 형식과 저장된 오류 출력, 문서의 로컬 링크, 스킬 51개와 lock 목록의 일치를 확인했다. secret·모델 가중치·문서 편집 중간 파일은 커밋 대상에서 제외했다. 가져온 스킬 Markdown 7개 파일의 행 끝 공백 53건은 원문 그대로 유지했으며, 이 중 41건은 Markdown 줄바꿈이다. 공개 서버의 모델 전환은 별도 작업으로 남는다.
+
+## 2026-09-28 — 뉴스 목록과 상세 읽기 패널
+
+- 뉴스 목록을 날짜·수집처·제목·가격 압력 중심의 행으로 정리하고 상태별 건수를 필터에 표시했다. 기사를 선택하면 오른쪽 상세 패널에서 분류 확률 막대, 관련성·확신도·s_i, 원문 링크와 처리 시각을 읽는다. 모바일은 전체 화면이며 미분석/판단 유보를 구분한다.
+- 브라우저 기본 `dialog.showModal()`·Escape·초기 포커스와 CSS 전환을 사용했다. 목록 순차 등장·배경 흐림·패널 이동에 기존 reduced-motion 설정을 적용한다. Vue3.5.43/Vite8.3.0 및 의존성·API·모델·뉴스 계산은 유지했다. 2026-09-28 [MDN dialog 문서](https://developer.mozilla.org/en-US/docs/Web/HTML/Reference/Elements/dialog)의 모달 접근성·CSS 전환을 확인했다.
+- 검증: Vue 12 passed, Vite build, VM 검증용 web 이미지 build 통과. 실제 브라우저에서 상태 필터·페이지 이동, 분석/미분석/판단 유보 기사, 원문 링크 속성, 클릭/Enter 열기·닫기와 Escape 포커스 복귀를 확인했다. 320/390/1280px 및 밝은/어두운 테마에서 가로 넘침 없음. 새 패키지·LLM 호출·재수집 없음.
+- 독립 리뷰에서 지적한 최초 모달 접근성 이름 생성 시점과 응답 분류/계산 신호 혼동을 수정했다. Vue DOM 갱신 후 열고 원래 기사 버튼으로 포커스를 돌리며, 응답 label과 확률 최댓값 기반 신호를 분리 표시한다. 상충 label·확률, 동률, 결측 및 DOM 갱신 순서를 회귀 검사했다. 브라우저 console error/warn 없음.
+- `localhost:18808` 검증용 web만 갱신했다. API·DB·운영 컨테이너·workflow는 변경하지 않았다. 기존 사용자 문서 변경은 보존한다.
+
+## 2026-09-28 — 대시보드 뉴스 수집·분석 조회 개선
+
+- 예측별 뉴스 없음 문구는 해당 기준일에 반영된 기사가 0건이라는 뜻으로 명확히 했다. 전체 보관 뉴스와 시점이 다르다는 설명도 붙였다. 뉴스 목록은 기본 펼침, 상태 필터·10건 페이지와 확률/관련성/확신도/s_i 및 KST 시각을 제공한다. 기존 Vue/native CSS/색상·테마·anchor를 유지한다.
+- pipeline이 기존 `news.json` 선정 자료를 `jev_selections`에 내용 hash 기준으로 적재한다. 연구/서비스 선정의 중복을 합쳤다. 과거 `available_at=null`은 기록된 수집·발생·수정·선정 시각 중 가장 늦은 값으로 보완한다. 원본 파일은 수정하지 않는다. 기존 분석·모델·예측 UPSERT 의미는 유지한다. `/api/v1/news/jev`의 기존 응답에 `inventory`와 상태/offset 조회를 추가하며 API는 파일·LLM을 호출하지 않는다.
+- 실제 VM 검증용 DB에서 보관 수집·선정1,448건/분석1,446건/미분석2건을 확인했다. 최근 수집9월27일14:01KST, 분석11:21KST다. 9월25일 예측의 입력 마감은9월26일08:00KST여서 이후 분석을 과거 예측에 소급하지 않는다. 적재 전후 예측 fingerprint가 같고 원본 archive는 read-only mount로 사용했다.
+- 독립 리뷰의 두 사항을 보완했다. 수치 수집·추론 실패 전에 뉴스 투영을 별도 commit하고, 기사 메타데이터는 선정 기록/감성 수치는 분석 기록에서 가져온다. 가용 시각은 두 기록의 최대값을 유지한다. 해당 실패·중복 메타데이터 회귀를 실제 DB로 검사했다.
+- 검증: 외부 Python3.12·임시 UTF8 PostgreSQL17에서 관련 **23 passed**, Vue **11 passed**, Vite build 및 VM API/pipeline/web 이미지 build 통과. 기존 Starlette/httpx·AnyIO deprecation 2건은 남았다. 최초 임시 DB가 SQL_ASCII여서 한글 JSON 검사3건이 실패했다. UTF8 DB로 교정한 뒤 전부 통과했다. 브라우저에서 분석 완료/미분석 필터,10건 페이지, 확률·시각·기준일 문구를 확인했다. 1280/390px viewport에서 가로 넘침 없음, 밝은/어두운 테마와 키보드 동작 확인, console error/warn 없음.
+- 현재 localhost18808 검증 화면을 갱신했다. 운영 DB·운영 컨테이너·일일 workflow·원격 Git은 변경하지 않았으며 새 LLM 요청도 없다. 신규 API 이전 schema 생성 및 읽기 역할의 SELECT 권한이 필요하다. 기존 사용자 문서 변경은 별도로 보존한다.
+
+## 2026-09-28 — 사용자 확정 모델 운영 적용
+
+- 5일 **LightGBM300 + DLinear10**, 20일 **LightGBM100 + XGBoost100**의 가격 50:50 평균, 60일 **DLinear30**을 사용한다. 모두 가격·기후·거시 27개 + 조건부 뉴스 feature이며 Naive는 구성원에 없다.
+- `03_9_selected_models_serving.ipynb`와 `python -m data_code.export_selected_models`가 03_8의 최종 가중치·표준화 통계를 `model_artifacts/selected_news/manifest.json` 및 구성원 파일로 내보낸다. 학습 정답 cutoff는 2025-12-31이며 재학습·추가 모델 탐색은 없다. artifact는 Git에 포함하지 않는다.
+- 기사 점수는 유일 최댓값 방향 × relevance × confidence, 일별 합에 tanh를 적용한다. 뉴스 없음/일별 점수0이면 동일 설정의 기본 feature 모델로 복귀한다. 실제 서비스는 분석이 이용 가능해진 뒤 처음 맞는 거래일 UTC23시 기준으로 반영한다. 7일 넘게 지연된 소급 분석은 제외하고 과거 기사 사후분류를 오늘의 신규 신호로 투입하지 않는다. 별도 잔차 보정은 중복 적용하지 않는다.
+- 기본 pipeline artifact와 Compose/일일 runner 경로를 선택 manifest로 연결했다. 구 artifact를 명시한 기존 연구 경로는 보존한다. 새 모델 ID로 2026년 이후 예측을 추가하고 기존 예측은 삭제하지 않는다. 새 clone은 연구 실행 산출물 또는 내보낸 artifact 21개 파일 및 10개 원천 Parquet가 필요하다.
+
+- 검증: Python 관련 회귀 36 passed/3 skipped/2 subtests, 03_9 전체 실행·저장 완료. 03_8의 동일 연구 입력467건(179/164/124)으로 대조했다. 운영 모델 수익률 차이는 최대1.86e-9였고 20·60일은 동일했다. 최신9월25일 예측은5일278.213619·20일285.326050·60일362.728512¢/lb다. 실제 가용 뉴스0건이므로 현재는 조건부 기본 모델 경로다. 이는 연구용 사후 뉴스 feature 성과를 실시간 성과로 표시한 것이 아니다.
+- 운영 Linux에 XGBoost3.4.1을 추가하고 기존 Mac 연구 버전과 맞췄다(기존 의존성 버전 변경 없음). 공식 [모델 IO](https://xgboost.readthedocs.io/en/stable/tutorials/saving_model.html), [설치 안내](https://xgboost.readthedocs.io/en/stable/install.html)를2026-09-28 확인했다. JSON 모델과 NPZ 통계 및 SHA-256을 검증한다.
+- Vue 테스트9/9·Vite build 성공. Azure amd64에서 API·pipeline·web 이미지를 `selected-b47bac4ae518` 태그로 별도 빌드했다. 기존 운영 DB·컨테이너·daily workflow는 변경하지 않았다. `coffee_selected_preview` 별도 DB에서 실제 pipeline 3,076가격/552예측 적재와 반복 UPSERT 불변 fingerprint를 확인했다. 새 API의 `/news/jev`도 잔차 forecast 없이 최근50기사 응답을 확인했다.
+- 검증용 화면은 SSH loopback tunnel `http://127.0.0.1:18808/` → VM127.0.0.1:18080이며 외부 포트는 개방하지 않았다. 실제 브라우저에서 모델 이름·5일/60일 차트·균형정확도/RMSE·뉴스 미적용 표시를 확인했다. VM 원천의9월25일 종가는278.100006, 예측은277.718595/284.813979/362.417531¢/lb다. 연구 snapshot의종가는278.600006이다. 원천 종가가 달라 로컬03_9 수치와 차이가 있다.
+- **운영 전환 대기:** main `61c4cff`의 일일 workflow는 아직 기존모델을 활성화한다. 사용자에게 새 대시보드 배포+구버전 자동갱신 일시정지 또는 main 우선 반영 중 선택을 요청했다. 승인 없이 workflow중지·push·PR병합·운영모델 전환을 수행하지 않았다. 재개 시점에는 새 코드와21개artifact를 main/runtime에 맞추고 schedule을 활성화해야 한다. Gateway403 중단·비용제한은 유지하며 새 LLM요청은 수행하지 않았다.
+
+## 2026-09-28 — 뉴스 포함 6개 단일 모델·방향/RMSE 평균 확장 재학습
+
+- 사용자 확인을 받고 학습 표본을 늘려 재학습했다. **기존 예측을 재집계한 결과가 아니다.** `03_8_expanding_news_benchmark.ipynb`와 작은 학습 헬퍼/테스트를 추가하고 03_6·03_7 및 기존 공용 구현은 보존했다. DLinear/NLinear/XGBoost/LightGBM/PatchTST/TimesNet, 5/20/60거래일, 신경망10/30epoch·트리100/300trees를 비교했다. 모든 비교 후보는 뉴스 입력28개 조건부 모델이며 결측/점수0은 동일 설정의27개 기본 모델로 복귀한다. Naive는 구성원에 없다.
+- **시간순 사용:** 2022~2023 학습→2024 검증, 2022~2024 학습→2025 검증의 예측을 합산해 설정·구성원을 선택했다. 각 fold의 학습 정답은 cutoff 이하, Validation 정답은 해당 연말 이하로 제한했다. 최종은2022~2025 학습→2026 평가이며 실제 정답은9월25일까지다. 2024~2026은 이미 본 소급 평가로 미사용 Test가 아니다. 표준화는 각 fold의 학습 창에만 적합했다. 뉴스에는 기존03_6 일별 snapshot을 재사용했다.
+- 최종 학습 표본5/20/60일 **999/984/944건**, Validation **493/463/383건**, 2026 평가 **179/164/124건**이다. 뉴스 적용일은 최종 평가124/111/75일이다. 20일 기존 최종 학습481건·선택230건에서 각각984/463건으로 늘었다. Validation에는72개 모델·설정·fold 조합, 최종에는두 선택 기준의 합집합26개 단일 설정을 평가했다. 신경망은 최대epoch까지 한 번 학습하며 checkpoint를 저장한다.
+- **선택 규칙:** 모델별 균형정확도 최적 설정과 RMSE 최적 설정을 따로 남긴 뒤 전역1위 두 후보의 가격을50:50 평균했다. 같은 설정이면 단일 처리한다. Validation 선택은5일 LightGBM300+DLinear10,20일 LightGBM100+XGBoost100,60일 DLinear30 단일이며 frozen protocol 저장 후2026 평가를 수행했다.
+- **5일:** 평균의 Validation 균형47.69%는 LightGBM53.10%보다 낮다. 반면2026년 평균은균형58.87%/방향53.07%/RMSE18.1677, LightGBM은52.47%/46.93%/18.8319다. 평균의 균형 개선+6.40pp는 블록10 조건부95%구간+0.18~+14.54pp지만 DLinear 대비 구간은0을 포함한다. 평균의 가격 RMSE도 DLinear18.1051보다0.35% 나쁘다. 기간 전체의 일관된 우위는 아니다.
+- **20일:** Validation 평균은두 구성원보다 RMSE·균형이 개선된다. 2026년에는평균균형54.67%/방향54.27%/RMSE43.1259, LightGBM단일55.85%/55.49%/42.9016으로 단일이 점 추정상 더 좋으며 차이의 블록 구간은0을 포함한다. **60일:** 선택된 DLinear30의 Validation균형65.90%가2026년52.24%(방향50.81%,RMSE87.3405)로 낮아졌으며 평균은동일 예측이다. 2024년60일 Validation의 하락 사례는5건뿐이다.
+- 2026년 사후 최고 단일 균형정확도는5일 TimesNet10 58.30%,20일 TimesNet10 59.84%,60일 TimesNet30 54.69%지만 이 결과로 선택을 바꾸지 않았다. 상승 precision·신호건수·연도별 결과와 paired block 구간을 함께 저장했다. 표본·설정·선택 기간을 함께 바꿨으므로 표본 수의 인과 효과는 분리하지 못했다. 뉴스 없는 비교군도 없어 이번 결과로 뉴스 추가 효과를 추정하지 않는다.
+- 실행 산출물은 `data/processed/news_feature_ensemble/expanding_7f2729fd5ce23b69/`의 protocol·학습 상태·전처리·전체 예측·CSV다. 입력·코드·패키지 버전의 해시를 기록했다. 외부 Python3.12.14에서19셀 **Run All 성공(첫 실행720.7초)**, 저장 예측으로 재실행 동일성 확인, 신규13개·관련 기존19개 **총32개 테스트 통과**. checkpoint RNG 검사는 dropout이 있는 PatchTST로 확인했다. 별도 계산으로26개 최종 단일 설정의 방향 confusion count와 가격 RMSE를 재검산했다. 두 그림의 한글 표시도 직접 확인했다. 독립 코드 리뷰에서 지적할 결함은 없었다.
+- 기존 IPython 쓰기 경고·커널 TCP 경고·종료 시 macOS psutil sandbox 권한 오류는 남지만 셀 오류 없이 종료코드0이다. 추가 패키지·외부 API 호출·뉴스 요청·서비스 모델/DB/배포 변경은 없다. 이번 검증은 Mac 분석 실행이며 CI/컨테이너/VM 검증으로 주장하지 않는다.
+
+## 2026-09-28 — 20일 가중평균 5개 비율·방향 우선 해석
+
+- `data_code/03_7_news_weight_grid.ipynb`를 추가해 03_6 run `ed374e9c9c0a19c6`의 고정 예측으로 DLinear 비중 `[0,.25,.5,.75,1]`을 가격 단위로 비교했다. NLinear는 나머지 비중이며 Naive 구성원·추가 학습·뉴스 API 호출은 없다. 뉴스 없는 날/점수0 fallback과 원래 5일 XGBoost·60일 DLinear 연구 후보를 보존한다.
+- **기존 복합 기준:** 2023 Validation 230건에서 정규화 RMSE+정규화 균형 오류로 75:25를 고정한 뒤 이후 구간을 읽었다. 가격 RMSE17.0485, 방향50.00%, 균형51.44%, 상승 누락81.67%. DLinear 단일 대비 RMSE0.16% 악화·누락12.50pp 감소, 50:50 대비 RMSE2.15% 개선·누락10.83pp 증가다. 평가 667건에서는 RMSE46.7790·방향45.88%·균형43.45%로 이후 우위가 없다. 모든 비율의 전체/연도별 표와 기존 단일·50:50 대비 블록 구간을 보존한다.
+- **사용자 후속 목적:** RMSE보다 방향이 중요하고 상승 누락은 허용한다. 방향을 우선하는 새 목적에 맞춰 추천을 다시 제시하되 기존 복합 기준의 선택과 분리했다. 방향 우선 Validation 후보는 5일 XGBoost100(뉴스 유무 방향·precision 동률), 20일 NLinear10+뉴스(방향53.04%/균형53.18%; 비율0:100), 60일 DLinear30·뉴스 없음(55.79%/53.60%)이다. 마지막 설정30은 Validation 예측만 있어 이후 평가가 미검증이며 기존 설정10의 수치를 대신 쓰지 않는다. 새 기준의 재학습·자동 채택은 없다.
+- 상승 precision·신호 건수·실제 상승 비율을 저장 예측에서 추가 산출했다. 20일 DLinear10·뉴스 없음의 Validation precision77.78%는 9건 중7건, NLinear10+뉴스55.56%는108건 중60건이다. 2024~2026년 NLinear+뉴스 precision55.03%는 해당 기간 실제 상승 비율56.52%보다 낮다. 높은 상승 누락만으로 탈락시키거나 적은 신호의 precision만으로 채택하지 않는다. 균형 정확도·전체 방향 적중률·기간별 안정성을 우선하고 RMSE는 보조로 둔다.
+- 뉴스 효과는 방향에서도 일관되지 않다. 기존 최종 5일 XGBoost+뉴스/20일 NLinear+뉴스/60일 DLinear10+뉴스의 이후 균형 정확도49.83%/48.28%/35.80%로 안정적 매수 신호를 입증하지 못했다. 설정부터 방향 기준으로 검증하는 후속 실험이 필요하다. 소급 뉴스·반복 Validation·이미 확인한 과거 평가라는 한계와 UTC23:00 관측 후 실제 실행 가능 가격의 차이를 명시한다.
+- 검증: 외부 Python3.12에서 15셀 새 커널 Run All 성공, 날짜/정답 정렬·끝점·기존50:50 동일성·결측/0 뉴스 복귀·잘못된 비중 거부·CSV/Parquet 일치 검사 통과. 두 그림의 한글 렌더링 확인. 출력은 source run 아래 `weight_grid_*`로 분리한다. 독립 리뷰의 연도별 전체 비율 표시 누락을 수정했다. 기존 IPython 쓰기 경고·커널 종료 시 macOS psutil sandbox 권한 오류는 남지만 셀 오류 없이 실행 종료코드0이다. 의존성·서비스·DB·배포 변경은 없다.
+
+## 2026-09-28 — 뉴스 feature가 있을 때만 사용하는 지정 앙상블 평가
+
+- 사용자 최종 지시에 따라 **별도 뉴스 계수/잔차 보정 대신 입력 feature 1개**를 추가한 `03_6_news_feature_ensemble.ipynb`를 실행했다. 기사 `s_i = argmax 방향 × relevance × confidence`: bullish +1, bearish −1, neutral/uncertain/동률 0. `news_residual` v3 신호에서 누락 relevance/confidence를 거부하며 기존 v2 artifact와 03_4는 legacy 정의를 명시해 재현한다. 실제 서비스 artifact·DB·배포는 교체하지 않았다.
+- **결측 처리:** 공개·수정·선정 완료 이후 처음 만나는 거래일 UTC 23:00 기준시각에만 기사를 배정하고 `tanh(sum(s_i))`를 사용한다. 이 시각은 거래소 마감이 아니다. 뉴스 없는 날짜는 NaN·존재 flag False, 중립 분석이 있는 날짜는 유효한 0·True로 구분한다. 기존 감쇠/forward-fill을 적용하지 않는다. 60일 텐서에서 결측 뉴스만 계산용 0으로 마스킹하고 뉴스 채널을 평균 중심화하지 않는다. **예측 origin의 분석이 없거나 집계 점수가 0이면 27개 기본 모델 예측과 정확히 동일하게 복귀**한다. 존재 flag는 모델 입력에 추가하지 않는다.
+- **공정 비교:** 27개와 28개 모델 모두 같은 2022년 origin/성숙 정답으로 학습하고 2023년으로 설정과 조합을 선택한다. 신경망 10/30 epoch·XGBoost 100/300 trees 중 뉴스 유무 RMSE 평균이 낮은 공통 설정을 택했다(신경망 모두10, XGBoost100). 최종 조합은 정규화 가격 RMSE와 균형 방향 오류를 동등 가중했다. 2023년 이후 정답을 선택에 사용하지 않고 protocol을 저장한 뒤, 동일한 2022~2023년 표본(5/20/60일 496/481/441건)으로 재학습했다. 이전 2015~2023년 학습 모델과 직접 비교해 뉴스 효과로 해석할 수 없다.
+- 평가 origin은 2024-01-02부터 5일 2026-09-18/20일 08-27/60일 07-01, 성숙 정답은 모두 **2026-09-25**까지다(682/667/627건). 뉴스 분석 있는 origin은 635/620/580일, 실제 방향 뉴스 모델 적용일은 **301/288/252일**이다. 결측/0인 나머지 날짜를 버리지 않았으며 뉴스 유무 예측의 완전 동일성을 검사했다.
+- **5일 NLinear+XGBoost:** 뉴스 없음→조건부 뉴스 가격 RMSE **18.7124→18.7214**(0.048% 악화), 방향 **46.77→46.48%**, 균형 **47.10→46.67%**. 같은 기간 XGBoost+뉴스 단일은 RMSE18.7523·균형49.83%로 평균보다 RMSE가 높고 방향은 낫다. 평균+뉴스의 XGBoost+뉴스 대비 가격 MSE 개선 95% 블록5/10일 구간은 **[−15.32,18.48]/[−16.94,21.37]**로 0을 포함한다.
+- **20일 NLinear+DLinear:** RMSE **43.5100→44.5332**(2.352% 악화), 방향 **49.18→48.43%**, 균형 **47.92→46.62%**. 뉴스 없는 NLinear 단일(RMSE41.6822·균형49.11%)보다 열세다. **60일 DLinear:** RMSE **95.0876→100.2179**(5.395% 악화), 방향 **38.12→41.47%**, 균형 **33.69→35.80%**. 뉴스 추가가 RMSE와 방향을 함께 개선했다고 볼 수 없다. 60일 MSE 차이의 블록60/120일 구간도 0을 포함한다.
+- 2023년 Validation 선택은 **5일 XGBoost+뉴스, 20일 DLinear 뉴스 없음, 60일 DLinear+뉴스**이며 평가 결과로 변경하지 않았다. 5일 XGBoost 단일은 뉴스 추가 RMSE **0.088%**·균형 **+0.436pp** 개선이지만 매우 작고 2026년 RMSE는 악화했다. 연도별·방향 뉴스 적용일/미적용일 결과를 공개했다. 한 seed, 작은 학습 구간, 제목 중심 소급 분류와 기간별 기사 선정 정책 차이가 남고, 2024~2025년은 이미 본 평가 구간이다. 실시간/구매 비용 개선의 증거는 아니다.
+- 입력은 가격4·ALFRED 거시3·6지역 기후18·달력2의 **27개**와 뉴스1개다. 최초 학습에서 상수인 서리 파생6개, NASA 최고기온/습도, DTWEXBGS/COT는 기존 피처/시점 계약에 따라 제외돼 **원자료 전 컬럼 사용은 아니다**. 연구용 복사본에 있는 NASA 6지역의 2026-01-31~09-25 결측은 기존 수집 함수를 재사용해 보충했다. 지역별 4,500개 일자·달력 공백0·수치 결측0을 확인했으며 원본 snapshot은 보존했다.
+- 실행 결과는 ignored `data/processed/news_feature_ensemble/ed374e9c9c0a19c6/`에 input/code/version 해시와 고정 protocol을 기록하고 30회 학습한 모델과 표준화 통계·예측·지표를 저장했다. 외부 Python 3.12에서 **14셀 Run All 성공**(57.2초), 모델 저장/재로드 예측 일치·날짜 정렬·정답 성숙·미래 기사 불변성·한글 그래프를 확인했다. 관련 테스트 **42 passed, 4 skipped**(DB URL 없는 API/통합 검사). 독립 읽기 전용 리뷰의 실제 결함 없음은 코드/출력 검토이며 실행 검증과 구분한다. Parquet 재실행 검사에서 초/밀리초 정밀도 차이를 발견했다. 날짜를 nanosecond로 통일한 뒤 관련 26개 검사를 다시 통과했다. 날짜 표현을 제외한 이전 실행의 모든 예측값은 정확히 같다. 재실행 저장 동일성도 확인했다.
+- 중단한 계수 방식은 `03_5_fixed_ensemble_news.ipynb`에 실행 이력으로 보존한다. 2022~2023년 적합에서 초기0.5→최종0이었으며 제약/손실 곡선과 희소 뉴스 설명을 남겼다. 현재 03_6은 이 계수를 호출하지 않는다. 03_4의 legacy 신호 고정 후 Run All 12셀 성공(4.4초), 기존 저장 지표 동일성도 확인했다.
+- 환경 변경·추가 패키지 설치 없음. IPython 임시 경로/커널 TCP 비암호화 경고와 종료 시 psutil의 macOS sandbox 프로세스 열거 PermissionError는 셀/산출물 성공·runner exit 0과 구분해 기록한다. 앞선 계수 실험의 SciPy [minimize](https://docs.scipy.org/doc/scipy/reference/generated/scipy.optimize.minimize.html) 초기값/경계 API와 TypeSafe [confidence](https://docs.typesafe.ai/confidence), [uncertainty](https://docs.typesafe.ai/primitives/noul) 문서는 2026-09-28 확인했으며, 현재 feature 입력 방식에는 별도 SciPy 계수 적합을 사용하지 않는다.
+
+## 2026-09-28 — Validation 안에서 다양성·방향/RMSE·Jev 앙상블 검증
+
+- 새 `03_4_validation_ensemble_news.ipynb`는 기존 6개 가격+기후+거시 모델의 저장 예측을 재사용한다. 모델별 설정·조합·뉴스 계수는 2022년 자료로 결정했다. 최종 Validation 선택에는 2023년 자료를 사용했다. Naive/Persistence는 입력·평균·비교 예측에서 제외했다. 2024~2026년 가격 예측·정답 로딩, 재학습, API/LLM 요청, 서비스 변경은 없다.
+- 우선순위: 2유형 이상·최대 가격 오차상관≤0.95·같은 구성원 수의 평균 상관 하위 50% → 2022년 RMSE/균형 방향 핵심을 모두 포함한 구성원 수별 후보 → 가격 동일 가중 평균에 뉴스 잔차 보정. 임계값은 연구 규칙이며 최적값이 아니다. 최저 상관 진단과 전체 6개 평균도 공개했다. XGBoost/LightGBM의 2022년 오차상관은 지평별 약 0.986~0.993으로 함께 넣은 조합은 탈락했다.
+- Jev 최신 연구 분석 1,445건(2022~2026)을 감사하고 기존 1건/일 정책의 2022~2023 기사 **402건**만 피처에 사용했다. 관련성×(bullish−bearish), 반감기 3일·0/1/3/5거래일 시차·과거 20일 변동성을 사용한다. 공개·수정·선정 완료 시점 이후에만 연구 입력에 반영한다. 실제 분석 시각은 2026년이므로 2022~2023년 live 입력은 0건이며 소급 분류·기사 선정 누락·사전학습 오염 가능성을 제거한 검증이 아니다.
+- 2022년 가격 RMSE 가중 잔차 회귀의 제한 전 뉴스 계수는 **−1.68~−0.94**였다. 감성 방향 유지 β∈[0,1]에서는 전부 0이므로 편향만 보정과 동일했다. 첫 실행 뒤 역방향 β∈[−1,1] 민감도 분석을 추가했다. 2022년 자료로 다시 적합한 뒤 2023년에 고정 적용했다. 이 추가 과정과 Validation 재사용을 명시했다. 동률이면 단순 보정을 우선하므로 β=0을 뉴스 개선으로 표시하지 않는다.
+- **5일:** NLinear+XGBoost+TimesNet+역방향 뉴스. 가격 RMSE **7.5925**, 방향 적중 **58.78%**, 균형 **59.17%**. 동일 조합의 편향 대조군 7.9482보다 RMSE **4.47%**, 균형 **+5.63pp** 개선했다. 2023년 최저 RMSE 단일 TimesNet(7.6802)보다 **1.14%** 낮지만 균형은 TimesNet 61.74%보다 낮다. 최저 단일 대비 가격 MSE 개선의 블록 5/10일 95% 구간은 **[−7.28,9.14]/[−8.13,10.35]**로 0을 포함한다. 뉴스 대조군 대비 구간은 양수지만 고정 예측에 조건부이며 선택·다중 비교 불확실성을 반영하지 않는다.
+- **20일:** DLinear+NLinear+XGBoost+PatchTST+TimesNet+역방향 뉴스. RMSE **16.8251**, 방향 **55.65%**, 균형 **55.15%**; 편향 대조군 대비 RMSE **1.58%** 개선이지만 단일 XGBoost **15.6822/균형 56.33%**에 모두 열세다. **60일:** DLinear+NLinear+LightGBM+편향만. RMSE **31.2559**, 방향 **53.68%**, 균형 **53.51%**로 단일 XGBoost **29.1091/균형 56.78%**에 모두 열세다. 뉴스 추가 후보가 RMSE를 줄여도 방향 손실이 있어 선택되지 않았다. 20·60일 앙상블 채택 근거는 없고 5일만 추가 검증 후보로 남긴다.
+- 재현 결과는 ignored `data/processed/validation_ensemble_news/b2c3c63149beb2f6/`의 예측·지표·연도별·비중첩 4개 파일에 저장했다. 원본 예측/뉴스/시장 SHA-256, 2022 계수, 후보별 결과, 블록 h/2h 구간과 모든 비중첩 offset을 남겼다. 전체 2023년 최고 단일 모델과 2022년에서 고른 기준 모델을 구분해 유리한 비교만 보고하지 않는다.
+- 검증: 외부 Python 3.12 fresh kernel **12셀 Run All 성공**(최종 5.1초), 재실행 저장 동일성·모델별 날짜 불일치 거부·0계수 동률 가드 확인. 독립 읽기 전용 리뷰에서 실제 결함 없음(리뷰어가 Run All을 실행한 것은 아님). 미래 기사 불변성·정답 성숙·허용 모델·가격 산술평균·양/음의 보정·지표 대조·출력 오류 0건 및 한글 그래프 확인. 기존 노트북은 변경하지 않았다. IPython 임시 경로 및 커널 TCP 비암호화 경고, 종료 시 psutil의 macOS sandbox 프로세스 열거 PermissionError는 기존 환경 제한이며 셀 실행/저장과 runner exit 0을 구분해 기록한다. 독립 Test·실시간 뉴스·실제 매입비 개선·운영 교체 검증은 하지 않았다.
+- 방법 근거 확인(2026-09-28): [단순평균](https://otexts.com/fpp3/combinations.html), [시간순 평가](https://otexts.com/fpp3/tscv.html). 추가 의존성·환경 변경은 없다.
+
+## 2026-09-28 — Azure DNS 이름·HTTPS 적용
+
+- Aside 스킬의 Azure Portal UI에서 기존 공용 IP `vm-coffee-demo-ip`에 DNS label `coffee-price-sjinie`를 적용했다. `coffee-price-sjinie.koreacentral.cloudapp.azure.com`의 A 레코드는 기존 `52.141.6.78`이다. `vm-coffee-demo-nsg`에 우선순위 330, TCP 443 Allow 규칙 `HTTPS`를 추가했다. 새 VM·IP·유료 DNS zone·도메인 구매는 없다.
+- `deploy/compose.azure.yaml`에 Caddy 2.11.4-alpine을 공식 image index digest `sha256:6aeddd44c3078b0f9a35206472a11420648a79c184603ef95957d0a20044cb2b`로 고정했다. Caddy만 80/443을 공개하고 web은 내부 80, API·DB 경계는 유지한다. `COFFEE_DOMAIN`을 런타임 env에 추가했으며 `Caddyfile`은 HTTPS reverse proxy와 구 IP의 canonical redirect를 담당한다. `/data`, `/config`는 named volume으로 보존한다. TCP만 공개하므로 도달할 수 없는 HTTP/3를 광고하지 않도록 h1/h2를 설정했다.
+- VM 설정·env 백업은 root 전용 `/srv/coffee/backups/before-https-20260928`에 보존했다. `up --no-build --no-deps web caddy`로 전환했고 API·web image ID는 기존 main `61c4cff` 배포와 동일하다. 로컬 미게시 연구·리팩터링 커밋을 배포하지 않았다. `start-azure.sh`의 Caddy 추가는 향후 새 소스 배포용이며 이번에는 이 빌드 스크립트를 실행하지 않았다.
+- 실제 검증: VM Compose config·Caddy validate·Bash 구문 검사 통과. Let’s Encrypt YE1 인증서 발급, 도메인 일치·신뢰 체인 검증, 외부 HTTPS `/health`·최신 가격·5/20/60일 예측 200 확인. 인증서 유효기간은 2026-09-27 14:29:54~2026-12-26 14:29:53 UTC. 도메인 HTTP는 308, 구 IP HTTP는 경로·쿼리를 유지한 301 HTTPS 이동이다. Caddy 컨테이너 재생성 후 인증서 SHA-256 fingerprint가 동일하고 HTTPS 200이며 자동 인증서 관리·renewal 정보 로드가 확인됐다. 미래 갱신 실행 자체를 지금 검증한 것은 아니다.
+- Aside에서 실제 HTTPS 화면의 한글·가격·5/20/60일 차트 전환을 확인했다. 독립 리뷰의 재빌드 주의점은 위 no-build 전환으로 해소했다. Caddy의 HTTP-only 서버 경고는 80번 redirect listener에 관한 것이며 443의 정상 TLS와 구분한다. 기존 Jev 모델 403 제한은 이번 작업과 별개이며 변경하지 않았다.
+- 공식 근거(2026-09-28): [Azure public IP DNS label](https://learn.microsoft.com/en-us/azure/virtual-network/ip-services/public-ip-addresses#domain-name-label), [Caddy 자동 HTTPS](https://caddyserver.com/docs/automatic-https), [공식 Docker 이미지·영속 볼륨](https://hub.docker.com/_/caddy), [Caddy 2.11.4](https://github.com/caddyserver/caddy/releases/tag/v2.11.4), [HTTP 프로토콜 설정](https://caddyserver.com/docs/caddyfile/options#protocols).
+
+## 2026-09-28 — 모델별 방향 정확도·구매 비용 시나리오·단기 사례 조사
+
+- `03_3_single_model_comparison.ipynb` 13~15절에 기존 저장 예측의 방향 적중률·균형 정확도·상승 정밀도/누락률·하락 재현율, 항상 상승/하락 기준, 연도별·모든 offset 비중첩·블록 h/2h 조건부 95% 구간을 추가했다. 6개 단일 모델·전체 가격 산술평균·기존 검증 RMSE 선택 쌍을 비교하며 재학습·방향 기준 재선택·서빙 변경은 없다.
+- 5/20/60일 사후 균형 정확도 최고 후보는 TimesNet(적중률 **52.61%**, 균형 **53.12%**), 전체 6개 평균(**60.87% / 61.37%**), DLinear(**81.94% / 85.02%**)다. 항상 상승 적중률은 **54.82% / 59.83% / 79.01%**다. 5/20일 최고 후보의 균형 정확도 블록 구간은 50%를 포함하고, 항상 상승 대비 적중률 차이 구간은 세 지평 모두 0을 포함한다. 60일 DLinear의 2024/2025년 균형 정확도는 **51.50% / 83.08%**이며 실제 하락 표본은 **5 / 88건**이므로 전체 수치를 국면 전반의 안정성으로 해석하지 않는다.
+- 같은 수량을 h일 뒤 사용하고 선매수하거나 목표일에 매수하는 최소 비용 시나리오를 추가했다. 지평 전체 보유비용 0/1/2%는 실측 아닌 가정이다. 비용 1%에서 항상 지금 대비 정규화 비용 절감은 5일 TimesNet **+0.2705pp**, 20일 전체 평균 **−0.3333pp**, 60일 DLinear **−0.2784pp**다. 선물가격 대리값·기준일 종가 체결·수요/재고/납기 미반영이며 실제 원두 비용 절감·누적 손익·품절 개선으로 주장하지 않는다.
+- 5/20일 옥수수 방향 분류, 월별 Robusta XGBoost/ARIMA, 월별 Arabica ELM, 5/22일 상품 변동성 HAR, 다음 날 옥수수 뉴스 보도량 Ridge 보정의 원문을 확인하고 15절에 링크·지평·비교 기준·한계를 기록했다. 5일 Logistic/boosting 직접 분류, 20일 방향/분위수 회귀·ARIMAX, 검증에서 고정한 비용 임계값·보정 확률의 단순평균을 후속 후보로 제안했다. 외부 논문 결과를 이 프로젝트의 성능으로 전용하지 않는다.
+- 검증: 외부 Python 3.12에서 새 코드 5셀을 기존 완료 run `20260926T115735770501Z`로 실행(최종 **8.6초**, 기존 31셀 소스·출력 동일). 손검산 가능한 보합/무신호·클래스 결측·입력 거부·블록 구간·구매 비용 검사, 기존 지표 대조, 저장 재실행 동일성, nbformat·구문·출력 오류 0건·한글 그림 시각 검사를 확인했다. 전체 모델 재학습/Run All은 이번에 반복하지 않았다. 결과 네 파일은 ignored `direction_purchase_v1/`에 저장했다. IPython 쓰기 경로 경고로 임시 경로가 사용됐고, 커널 TCP 비암호화 경고 및 종료 시 psutil 자식 프로세스 열거의 macOS sandbox 권한 오류가 있었다. 셀 실행·저장 및 runner 종료 코드는 성공(0)이며 경고를 숨기거나 환경을 변경하지 않았다.
+
+## 2026-09-27 — 병합 main CI·VM 세 이미지 빌드·외부 화면 검증
+
+- PR #4의 main 병합 SHA `61c4cffb475e4f4f3ab986ee9e907ef77a297a1d`를 GitHub에서 확인했다. [main CI 36326804333](https://github.com/sjinie/Coffee_Price_Prediction/actions/runs/36326804333) 성공: Python 183 passed/1 skipped/2 warnings(102.74초), Vue 8 passed/build, API·pipeline·web Docker build 성공. 이전 PR CI와 구분한다. skip과 기존 third-party deprecation/runner 전환 안내는 앞선 항목과 같으며 숨기지 않았다.
+- 로컬 미커밋 작업을 포함하지 않고 해당 main의 runtime 경로만 `git archive`로 전송했다. archive SHA-256 `deb1c6d4018031529fd9a1aa86f64e8ff0338500e9e268c8c0a91866083446c0`를 양쪽에서 대조했다. 배포 전 DB custom dump의 `pg_restore --list`, app/runtime env 백업을 `/srv/coffee/backups/redeploy-61c4cff-tss1CG`에 보존했다. 동일 VM 백업이며 디스크 손실 복구 검증은 아니다.
+- VM에서 `deploy/start-azure.sh`로 API·web을 빌드하고 DB schema 준비와 재기동을 확인했다(exit 0). 별도로 pipeline target을 빌드하고 network-none 컨테이너에서 torch 2.14.0+cpu/pandas 2.3.3/coffee_service.pipeline import를 확인했다(exit 0). 세 이미지는 amd64이며 SHA 태그는 병합 main과 일치한다. image ID: API `sha256:c5bc2ae945973f10abfea05081b573daa7fcba9ecb3f3fdfc8b3fc846e302cc7`, web `sha256:84b3075b916b6c6a664d3d414157050cc520fe0c584f9c782155ef049b5bafec`, pipeline `sha256:90e5c89ce0dc2b748a3d572b3afbf3f607886f3d0cc6786dd7402e316fbe7ae6`. 기존 cache를 재사용했으며 GHCR 재게시를 뜻하지 않는다. pipeline 컨테이너를 상시 켜지 않았다.
+- DB 재기동 후 가격 3,076행·예측 2,061행 보존, 최신일 2026-09-25를 확인했다. 외부 `/health`, 최신 가격과 5/20/60일 예측 모두 HTTP 200. Codex in-app browser에서 [프론트엔드](http://52.141.6.78/)의 한글·차트와 5/20/60일 선택을 직접 확인했고 warning/error console은 0건이었다. 이전 Aside 차단으로 남았던 화면 미검증을 해소했다. HTTPS는 아직 미설정이다.
+- [운영 daily Actions 36327207257](https://github.com/sjinie/Coffee_Price_Prediction/actions/runs/36327207257)를 main에서 수동 실행했다. GitHub runner→SSH tunnel→DB에서 수치 수집·추론·3,076/2,061행 UPSERT 성공(run `8fcc3e5d-37c0-4f1c-a05c-9012d7379482`), 뉴스 수집 성공. VM에 새 refresh_state(14:49:45Z) 동기화까지 확인했다. classification은 기존 `worker_state=stopped`를 발견해 `RuntimeError`로 failed가 됐다. 전체 실행은 partial/exit 1이다. 이전 Gateway 403 기록(05:01:32Z)과 pending 2건을 보존하며 새 모델 요청을 재시도하지 않았다. 일일 workflow는 active/KST 15:17 설정이지만 완전 성공은 아니며 해당 접근 제한 해결·명시적 재개가 필요하다.
+- 실행 소스·Secrets·모델·의존성 선언은 수정하지 않았다. 다른 로컬 코드/문서 변경을 보존하고 이번 운영 검증 기록은 미커밋 문서로 남긴다.
+
+## 2026-09-27 — 기존 역할 경계 검토·기능 보존 리팩토링
+
+- 검토 범위: 수치·뉴스 수집/저장/추론/CLI, FastAPI·DB 접근, Vue·테스트, Docker/Compose와 배포/Actions 경로. 논리 경계는 pipeline 수집·분석·DB 적재 → PostgreSQL 저장 → api 조회/응답 → Vue 표시다. 로컬 Compose의 pipeline 컨테이너와 Azure의 외부 Actions Python 배치는 실행 위치가 다르며 기존 운영 계약을 변경하지 않았다.
+- 중복 제거: `collection_jobs`·`SOURCE_GROUPS`를 ingestion에 모아 수집 전용 CLI와 pipeline이 재사용한다. `source_lock`도 ingestion으로 옮겨 pipeline/seed가 scheduler에 의존하던 경로를 제거했다. 기존 import 호환·소스 순서·CLI 옵션·legacy 기상 앞뒤 30일/pipeline 과거 90일·증분 7일 overlap은 유지한다. Jev JSON writer 세 곳은 기존 `_write_records`를 사용하도록 통합했다. 실행 코드 순감소 31줄이며 새 모듈·의존성·API·DB schema·모델·일정은 추가/변경하지 않았다.
+- 검증: 외부 Python 3.12.14·임시 PostgreSQL 17.11에서 **186 passed, 2 subtests passed, 경고 3건**, Vue **8 passed + build 통과**. Python은 `test_core4_environment.py`(기존 연구 환경 전용)만 제외하고 DB 통합 검사까지 실행했다. 경고는 기존 sklearn 단일 클래스·Starlette/httpx·AnyIO deprecation이며 숨기지 않았다. 독립 최종 diff 리뷰에서 추가 확정 결함 없음. Jev 네 JSON 저장 경로는 변경 전후 UTF-8 bytes가 같고, rename 실패 시 기존 내용이 보존됨을 임시 파일로 대조했다. 원본·Jev·모델·노트북 27개 파일의 SHA-256이 동일하다. 실제 외부 수집·Gateway 요청·운영 DB·VM·GitHub 상태 변경은 하지 않았다.
+- 남은 결함: `frontend/src/App.vue:69`의 뉴스 새로고침에서 이전 요청이 나중에 완료되면 최신 응답을 덮는다. 응답 순서를 제어한 로컬 fixture로 재현했다. 요청 순서 제어는 동작 변경이므로 이번 기능 보존 리팩토링에서 적용하지 않았고 후속 버그 수정 대상으로 남긴다. API/Vue 분리나 DB 계층 추가를 강제할 근거는 확인하지 못했다.
+- 한계: 활성 Docker desktop-linux 엔진 소켓이 없어 이번 컨테이너 build/start는 미검증이다. 기존 Azure/CI 실행 기록을 이번 변경의 실행 증거로 대신하지 않는다. 기존 사용자 변경은 별도로 보존하며 push·배포하지 않는다.
+
+## 2026-09-27 — feature 브랜치 push·PR #4·GitHub CI 통과
+
+- 사용자 승인으로 기존 19개와 Azure 배포 1개, 총 20개 커밋을 `origin/codex/ghcr-vm-deploy`에 push했다. remote/local head는 `9e7455b475bb3c5d61976dcc12de81e537421b09`로 일치한다. [PR #4](https://github.com/sjinie/Coffee_Price_Prediction/pull/4)를 생성했고 main 병합은 하지 않았다.
+- [CI 36301784557](https://github.com/sjinie/Coffee_Price_Prediction/actions/runs/36301784557) 성공: Linux/Python 3.12.14에서 183 passed, 1 skipped, 2 warnings(73.49초), Vue 8 passed와 build, API·pipeline·web Docker build 모두 통과. skip은 저장소에 없는 로컬 production artifact·Parquet 기반 검사다. macOS 전용·별도 데이터 E2E 파일은 기존 CI 범위에서 제외한다.
+- 경고는 sklearn 단일 라벨, Starlette/httpx deprecation, setup-node 내부 punycode/url.parse deprecation, ubuntu-latest의 2026-10-19 Ubuntu 26 전환 안내다. [setup-node 공식 릴리스](https://github.com/actions/setup-node/releases)의 v6.5.0 의존성 보완·v7 ESM 변경과 [Node deprecation](https://nodejs.org/api/deprecations.html#DEP0169)을 확인했다. 이번에는 의존성을 바꾸지 않았으며 별도 호환성 검증 후 갱신이 필요하다.
+- 이 성공은 PR CI이며 production 일일 workflow 실행·GHCR 게시·main 반영 성공이 아니다. main 전용 일일 배치는 병합 후 실행할 수 있고 기존 Jev 무료 계정 403 제한도 남아 있다. PR 본문에 결과를 반영하고 기존 미커밋 사용자 변경을 보존했다. 이 실행 기록과 Context 갱신은 로컬 미커밋 상태로 유지한다.
+
+## 2026-09-27 — Azure VM 생성·서비스 기동·일일 Actions 연결 준비
+
+- 사용자 승인으로 Korea Central `rg-coffee-demo/vm-coffee-demo` 생성 완료. Azure for Students, Ubuntu 24.04 x64 Gen2/Trusted Launch, B2ats_v2(2 vCPU/1 GiB), P6 64 GiB, IPv4 `52.141.6.78`. 포털에서 B2ats_v2 Linux 750시간/월·P6 무료 사용량을 확인했지만 실제 청구액·잔여 크레딧은 미확인이다. 유료 구독 전환은 하지 않았다.
+- 실제 VM에 공식 apt 경로로 Docker 29.8.1·Compose 5.5.1과 2 GiB swap 설치. 소스 `388cd691441e231ecafc389dc1aac1c3d80522c7`에서 API·web을 순차 build하고 `deploy/start-azure.sh`로 DB 계정/스키마와 postgres/api/web 기동(exit 0). 이미지 ID는 API `sha256:3939db849013f77144a05558367fc10f596ab35094bd504148fe462a21b1ed17`, web `sha256:2cae1d31f1980e262188ab607e323cf6e9b5e602d649edf04d28bb1049f320b2`; 새 GHCR 게시를 뜻하지 않는다. PostgreSQL 기존 17.11-bookworm digest를 유지했다.
+- HTTP 80·키 기반 SSH 22 공개. DB는 호스트 loopback 15432, API는 컨테이너 내부 8000이다. 실제 DB 조회로 `coffee_api` SELECT 9개 테이블, API/pipeline 역할 모두 비-superuser·CREATEDB/CREATEROLE 없음 확인. Actions 계정은 sudo/docker 그룹·Docker socket·운영 env 접근 권한이 없다. Azure Run Command로 SSH 호스트 ED25519 fingerprint를 대조해 고정했고 `sshd -t` 및 실제 키 로그인·제한된 DB 터널을 검증했다. HTTPS·도메인은 미설정이다.
+- GitHub `production` 환경(main만 허용)에 전용 SSH key/known_hosts, pipeline DB password, FRED/Gateway key와 host/user/state/DB 변수를 등록했다. `daily-pipeline.yml`은 기존 Actions SHA·Python 3.12/requirements-pipeline을 재사용하며 UTC 06:17/KST 15:17 하루 한 번 실행한다. NY 겨울 01:17·여름 02:17을 직접 계산해 완료된 전날 자료가 포함됨을 확인했다. 동시 실행을 제한하고 배치 종료·실패·SIGINT/SIGTERM 뒤 상태를 VM에 복사한다. workflow push·main 반영·GitHub-hosted 실행은 아직 하지 않았다.
+- 실제 동일 script를 Mac Python 3.12.14에서 Actions용 키·DB 계정으로 실행: 수치 수집·추론·DB 적재 성공(커피 3,083행, 최신 2026-09-25), 뉴스 수집 성공. Gateway의 Jev `typesafe-ai/jev` 요청은 HTTP 403 `RestrictedModelsError`(free tier model access denied, providerAttemptCount=0)로 stopped. 전체 refresh는 partial/exit 1이며 실패 뒤 VM sources/jev 동기화 확인. 기존 분석 1,445건과 대기 2건, 응답 감사 기록을 보존했고 유료 결제·모델 교체·중단 상태 해제는 하지 않았다. 60일 모델은 기존 DLinear를 유지했다.
+- 외부 HTTP 검증: `/health`, `/api/v1/prices/latest`, 5/20/60일 predictions 모두 200. 최신 종가 278.1000061035156, 60일 target 2026-12-21/예측 361.39453125 확인. HTML도 200이며 Aside는 해당 URL을 `ERR_BLOCKED_BY_CLIENT`로 막아 최종 화면 렌더링은 미검증이다. 저부하 관측 web 7.496 MiB/API 60.77 MiB/PostgreSQL 44.95 MiB, 호스트 used 532 MiB/available 310 MiB, swap 69 MiB이며 부하 보장은 아니다.
+- 검증: 전송·실패·중단 보존 mock 회귀 4 passed(신호 2 subtests), Bash 문법·Compose/YAML 정적 검사·diff check 통과. 독립 리뷰의 뉴욕 날짜 경계 지적을 예약 시간 수정으로 해결했고 최종 추가 결함 없음. 실제 Linux 컨테이너 build·DB·외부 HTTP·SSH 데이터 경로는 확인했지만 GitHub runner E2E 및 예약 실행 성공은 미확인이다.
+- 공식 근거 확인(2026-09-27): [Docker Ubuntu apt 설치](https://docs.docker.com/engine/install/ubuntu/), [Actions schedule](https://docs.github.com/en/actions/reference/workflows-and-actions/events-that-trigger-workflows#schedule), [환경 Secrets](https://docs.github.com/en/actions/how-tos/write-workflows/choose-what-workflows-do/use-secrets), [Azure Students](https://azure.microsoft.com/en-us/free/students/). 기존 사용자 문서·연구·데이터·secret은 보존한다. 후속은 workflow main 반영 후 실제 Actions 실행, Jev 접근 권한 결정이다.
+
+## 2026-09-27 — 분리된 pipeline의 서버 시작·주간 갱신
+
+- 사용자 요청에 따라 기존 네 컨테이너와 FastAPI/수집·분석 경계를 유지했다. `compose.yaml`의 수동 pipeline profile을 기본 `refresh` 실행으로 바꾸고, 시작 시 한 번 처리한 뒤 완료로부터 7일마다 다시 갱신한다. 종료 중 놓친 스케줄 횟수를 재생하지 않고 체크포인트 이후 기간을 보충한다. 기존 `jev` 30분 Codex 자동화 삭제 API는 `not_found`를 반환했으며 이미 존재하지 않음을 확인했다. 대체 Codex 자동화는 만들지 않았다.
+- 수치 자료는 기존 모든 소스 그룹·원본별 7일 overlap·고정 모델 추론·DB UPSERT를 재사용한다. 뉴스는 원본·선정·조회 범위를 `news.json`에 누적하고 미분류만 기존 Jev worker로 보낸다. 요청·응답 원문/비용/대기 상태는 기존 JSON에 보존하고 CSV를 재생성한다. 새 뉴스는 연구용 CSV이며 새 앙상블 학습·채택이나 기존 뉴스 예측 snapshot 자동 변경은 포함하지 않는다.
+- `/data` named volume에 수치 자료와 네 Jev 파일을 보관한다. read-only Jev seed는 완전한 네 파일을 함께 복사하고 기존 archive를 덮어쓰지 않는다. numeric CLI와 seed가 같은 디렉터리 잠금을 공유하며 뉴스 조회·Jev 대기에는 수치 잠금을 해제한다. 보조 소스를 포함한 수치·뉴스 조회 실패는 1시간 뒤 재시도하고 정상 주기는 7일이다. 동시 뉴스 수집의 조회 완료일 회귀와 동일 완료일의 미완료 실패 기록 유실을 방지했다. 수동 news CLI도 numeric 작업과 source snapshot 읽기에만 잠금을 건다. FastAPI에는 ML 의존성·스케줄러를 추가하지 않았다. 키가 없으면 수집한 뉴스를 보존하고 분류를 보류하며 기존 Gateway $1 예산을 변경하지 않는다.
+- 검증: **118 passed, 4 skipped**(테스트 DB 미설정), 기존 deprecation 2건. 독립 리뷰의 잠금 범위·실패 재시도·동시 체크포인트 지적을 수정했고 재검토에서 추가 결함은 없었다. Compose 5.5.1에서 fixture 환경으로 config를 해석해 기존 네 서비스·별도 API/worker build·자동 refresh 명령·의존 healthcheck·read-only seed와 영구 volume을 확인했다. 275일 미운영·조회 실패 후 재개·동시 수집·mock HTTP 원문→CSV→재시작 재사용·종료 신호·잠금 충돌을 검증했다. 실제 데이터/DB/LLM에 새 요청을 보내거나 server worker를 현재 실행하지 않았다. 활성 `desktop-linux` Docker 엔진 소켓이 없어 컨테이너 build/start는 미검증이다. 기존 Starlette/httpx·AnyIO deprecation 안내는 숨기지 않았다.
+- 공식 근거 확인(2026-09-27): [Compose startup](https://docs.docker.com/compose/how-tos/startup-order/)·[restart](https://docs.docker.com/reference/compose-file/services/#restart), Python 3.12 표준 라이브러리. 설치 FastAPI 0.141.1/Uvicorn 0.53.0/requests 2.34.2/pandas 2.3.3/yfinance 1.7.0을 유지했고 의존성 추가는 없다. 기존 digest 고정 GHCR 배포 경로는 새 코드를 포함하지 않으며 push·게시·VM 변경은 하지 않았다.
+
+## 2026-09-27 — Jev 네 파일 통합·삭제·품질 및 이용 시점 점검
+
+- 사용자 승인 범위는 Jev 자료 통합과 재생성 가능한 캐시·빌드·임시 산출물 및 참조 없는 중복 파일이다. 저장소 코드·설정·문서·노트북 참조 점검에서 그 밖의 삭제 가능한 추적 파일은 확인하지 못해 보존했다. 옛 Jev 경로의 394개와 `.pytest_cache`, 지정 Python `__pycache__`, `frontend/dist`의 63개 파일(총 457개·27,751,531바이트)을 삭제했다. 개별 해시·미추적 여부·symlink 부재·백필 프로세스 부재를 확인했고 삭제 전 임시 복구본을 `/tmp/coffee-jev-before-cleanup.tar.gz`에 만들었다. `node_modules`, `.agents`, `.codex`, lockfile, `.env`, 기존 연구/old 디렉터리·가격 모델은 이 정리 대상에 넣지 않았다.
+- `data/jev/news.json`에 수집 원본 360개 스냅샷·선정·출처를, `requests.json`에 요청 본문/감사/worker 상태를, `responses.json`에 응답 본문/분석 원기록을, `sentiment.csv`에 모든 분석 시도를 통합했다. 과거 분석 파일 7개를 인덱스로 정확히 재구성할 수 있고 정규화 메타데이터 변형 2,958개를 보존했다. JSON·Parquet 원본(스키마·값·attrs)·선정·감사 기록 왕복 대조를 통과했다. 과거 HTTP 본문은 애초 미보관이므로 legacy 상태를 명시하며 만들어낸 요청/응답을 원본으로 부르지 않는다.
+- CSV는 `(analysis_id, analyzed_at)` 1,449행, 최신 연구 선정은 1,445행(연도별 189/213/256/383/404)이다. 과거 prompt·미선정 probe·재분석 이전 결과도 남기고 최신/연구/제목 단독/라벨 확률 일치 여부를 구분한다. 기존 1,445행의 분류·확률·관련성·confidence·분석 시각·비용/usage 및 서비스 88건은 이전과 동일하다. 원래 선정 960건(1건/일)·549건(2건/일), 날짜가 다른 제목 중복의 앞선 재분류와 단일 대표 날짜 정책을 유지한다. 합집합의 최대 3건/일을 과거 1건/일 실험으로 오해하지 않는다.
+- 후속 요청은 `news_backfill --input <기사목록.json> --once`, API 없는 CSV 재생성은 `news_unify`다. 실제 요청 본문을 전송 전에, 응답 본문을 파싱 전에 저장한다. HTTP 200 원문 저장 후 중단된 분석은 재요청 없이 복구하며 응답 미보관/비용 불명은 중단한다. 429/일시 오류 60초·성공 300초·더 긴 Retry-After를 재시작 후에도 지키고 대기 중에는 공통 잠금을 해제한다. API 원문은 mock으로 검증했으며 이번 정리의 실제 HTTP 요청은 0회다. 기록된 전체 분석 비용 합계 $0.019455030은 계정 청구액이 아니다. Gateway $1 설정과 완료된 heartbeat 일시정지는 유지하고, 30분 확인 프롬프트의 경로를 새 네 파일로 갱신했다.
+- **분류 품질:** 1,445개 중 uncertain 864(59.8%), bullish 307, bearish 187, neutral 87; 요약이 빈 제목 단독 1,321(91.4%)다. 유한 확률·범위·합계 검사를 통과했으나 `Nespresso to supply coffee to The Renaissance Club`(2023-04-20)은 neutral 0.48/uncertain 0.49인데 label이 neutral인 1건이 있다(허용오차 1e-8; 미세한 부동소수 동률 2건 제외). 원값은 수정하지 않고 `label_matches_probabilities=False`로 표시한다. 방향 라벨인데 relevance<0.5인 11건도 재검토 대상이며 이 수치만으로 오답이라고 확정하지 않는다.
+- 연도×라벨 각 1개(seed42)의 20건을 모델 보조로 정성 점검했다. `Brazil’s Safrinha crop improves with each day`는 제목에 커피가 없는데 bearish/relevance 0.76/confidence 0.89이고, `Business: Global coffee prices slide as robusta, arabica fut`는 신규 기초여건 없이 가격 움직임만 있는 불완전 제목인데 bearish다. Yemen 경매 고가 제목도 KC 전체 방향 근거가 약하다. 이들은 검토 후보이며 사람 정답 기반 정확도·Brier score·calibration이나 배치 크기별 품질을 검증한 결과는 아니다. 사용자가 추가 비용을 승인한 것으로 해석해 재분류하지 않았다.
+- **시점별 이용 가능성:** 실제 `available_at`은 2026-09-26T09:12:42Z~2026-09-27T02:21:29Z다. 대표 기사 날짜 당시 이용 가능했던 분류는 0건이다. `research_available_at`은 사건·수정·일별 선정 완료 시각의 보수적 최댓값이며 수집/분석이 과거에 이루어졌다는 증거가 아니다. 2022~23 Validation/이미 본 2024~25 Test 표시를 유지하고, 소급 분류·모델 사전학습 오염 및 시점별 배포 가능성 한계를 구분한다. 앙상블 학습·채택·DB 변경은 하지 않았다.
+- 검증: Mac 외부 Python 3.12에서 **71 passed, 4 skipped**(DB URL 미설정). 비용의 NaN/음수/boolean·비정상 metadata 및 401/402/403 응답 직후 중단 복구 검사 포함. 실제 자료 export 재실행 바이트 동일, 외부 HTTP 차단 transport로 완료 상태 재확인, 서비스 88건/노트북 CSV 읽기 구간 실행 및 기존 모든 output 보존. 독립 리뷰의 잠금 유지·새 import 누락 지적을 수정하고 회귀 검사를 추가했다. DB 통합 검사의 환경 미설정 skip은 실제 DB 실행으로 주장하지 않는다. 의존성·서빙 가격 모델·배포는 변경하지 않았으며 Docker/CI/VM 검증은 이번 범위가 아니다.
+- 공식 근거(2026-09-27): [Choice](https://docs.typesafe.ai/primitives/choice)의 최고확률 라벨·확률합·confidence 정의와 [Noul](https://docs.typesafe.ai/primitives/noul)의 yes 확률 정의를 대조했다. relevance는 영향 크기의 직접 측정값이 아니다.
+
+## 2026-09-27 — 2022~2026 Jev 뉴스 결과 통합
+
+- 원자료·선정·요청 체크포인트는 `data/raw/jev/`에 보존하고, 통합 분석 산출물은 `data/processed/jev_news/articles.json`·`articles.csv`에 둔다. 재생성 명령은 `python -m coffee_service.news_unify`다. 추가 뉴스 수집·DB 적재·가격 모델 변경은 없다.
+- 통합 키는 `content_hash`다. 같은 내용으로 선정된 행은 한 건으로 합치되 `backfill_jobs`와 `source_selections`에 원본 작업·날짜·출처를 남긴다. 날짜가 다른 중복 1건은 사용자 요청에 따라 JeV에 다시 질문해 HTTP 200 응답을 얻었으며, 더 이른 2025-07-18을 대표 날짜로 택했다. 추가 응답 비용은 $0.000023688이다. JeV 감성 결과로 기사 날짜의 진위를 판별할 수는 없고, 같은 제목·요약으로 2026-08-19에 발행된 별도 사건일 가능성은 남는다.
+- `evaluation_split`은 `validation_2022_2023`, `seen_test_2024_2025`, `research_2026`으로 구분한다. 이 컬럼은 연구용 분할 표시이며 2026년 재분류 결과를 과거 시점의 live 신호로 만들지 않는다.
+- 두 선정 정책의 합집합이므로 통합 파일의 2025년에는 날짜당 최대 3건이 있을 수 있다. 원래 2022~2025년 1건/일 실험을 재현할 때는 `backfill_jobs`에 `validation-2022-2025`가 포함된 행만 사용한다. CSV의 중첩 출처 필드는 JSON 배열 문자열로 저장한다.
+- 실측: 선정 1,509건에서 내용 고유 1,445행(2022/23/24/25/26년 189/213/256/383/404)을 생성했다. 날짜가 다른 중복의 재분류 결과는 bearish, `p_bearish=0.69`, 관련성 0.82, 분석 시각 2026-09-27T02:21:29Z다. 원본 전체 선정의 출처 대응·확률 합계·이용 가능 시각·CSV/JSON 일치와 재실행 바이트 동일성을 확인했다. 관련 JeV·백필·통합 테스트 37개 통과. 새 분석 결과는 당시 2025년 실시간 이용 가능 신호가 아니다.
+- 독립 리뷰에서 이 제목 단독 중복이 실제로는 별도 사건일 수 있다는 점과 JSON/CSV 두 파일의 동시 원자 게시가 아니라는 점을 지적했다. 전자는 사용자 지정 단일 날짜 규칙을 적용하되 두 원본 날짜를 `source_selections`에 보존한다. JSON을 기준 데이터로 사용하고 CSV 생성 중 중단되면 동일 명령으로 재생성한다.
+
+## 2026-09-27 — Jev 뉴스 백필 완료
+
+- 2026-09-26T14:46:15Z에 두 작업 모두 완료됐다. 최근 1년 549/549건(완료된 뉴욕 날짜당 최대 2건), 2022~2025년 960/960건(날짜당 최대 1건)을 선정 목록과 JSON/CSV 결과에 대조했다. 2022/2023/2024/2025년은 189/213/256/302건이다. 기사 내용 해시·날짜별 상한·기간·확률 합계·이용 가능 시각을 확인했고 두 기간이 겹치는 64건은 동일한 분석을 재사용했다.
+- 백필 요청 기록은 HTTP 200 22회, 429 6회이며 성공 응답에 기록된 비용 합계는 **$0.016832382**다(계정 전체 청구액 아님). 전체 분석 캐시에 기록된 비용 합계는 $0.019431342다. 최대 성공 배치는 84기사였다. $1 Gateway budget은 변경하지 않았다.
+- 이 채팅의 30분 상태 확인 자동화 `jev`를 완료 후 일시정지했다. 결과는 ignored `data/raw/jev/{year-20250926-20260925,validation-2022-2025}/results.json`과 `results.csv`에 남아 있다. 이는 현재 Jev로 과거 기사를 소급 분류한 연구용 결과이며 당시 실시간 이용 가능 신호가 아니다. 분류 정답의 사람 검토와 가격 예측 개선은 미검증이다. 2022~2023 Validation과 이미 본 2024~2025 Test를 구분한다.
+
+## 2026-09-26 — Jev 요청당 질문 수 확대
+
+- 공식 [TypeSafe API](https://docs.typesafe.ai/api)는 `state`와 질문 ID별 `questions`를 받고 질문별 답을 반환한다. [질문 병렬 처리](https://docs.typesafe.ai/primitives)와 [Jev 모델 한도](https://docs.typesafe.ai/models)를 확인했다. TypeSafe 직접 API는 요청 전체 64k 토큰이지만 [Vercel Gateway 모델 목록](https://vercel.com/ai-gateway/models/providers/typesafe-ai)은 32k 문맥으로 표시하므로 Gateway 사용에서는 더 낮은 표시를 기준으로 삼았다(2026-09-26 확인).
+- 기존 기사별 두 질문과 기사별 입력 분리, 응답·비용 검증을 유지하면서 임의의 20건 상한을 제거했다. 백필은 JSON UTF-8 크기 100,000바이트 이내에 들어가는 질문을 순서대로 채운다. 과거 48건/84,939바이트 요청의 실제 입력 21,915토큰을 근거로 한 경험적 상한이며 정확한 토큰 계산이나 32k 보증은 아니다. 시작 시점 다음 최근 배치는 83기사/166질문/98,969바이트로 구성됐다.
+- 검증: 기존 Python 3.12 venv에서 Jev·뉴스 백필·소스 테스트 **30 passed**. 확대 배치 83기사·166질문이 실제 HTTP 200으로 완료됐다(입력 25,338·출력 6,278토큰, 응답 비용 $0.001064196). 결과 83건 모두 고유 내용·유효한 확률로 저장됐다. 배치 크기별 분류 정확도 비교는 미실시다. 기존 $1 예산·429 재시도·성공 후 5분·Codex 30분 감시는 유지한다.
+
+## 2026-09-26 — Jev 429 재시도 간격 조정
+
+- 사용자 요청대로 429/일시 오류 뒤 60초마다 재시도하고 HTTP 200 뒤에는 300초를 기다린다. 더 긴 `Retry-After`는 우선하며 저장된 다음 요청 시각은 재시작 후에도 지킨다. Codex heartbeat는 기존 30분 간격이다. 요청당 최대 20건과 $1 Gateway 예산은 유지한다.
+- 변경 시점에 최근 208/549건이 완료됐다. 과거 960건 중 기존 분석 캐시와 겹치는 기사는 재사용한다. 잔여 소요 시간은 429 빈도와 배치 완전성에 따라 달라진다.
+- 검증: Python 3.12 기존 venv에서 뉴스 백필·소스·Jev 테스트 **29 passed**. 기존 워커를 대기 상태에서 중지하고 체크포인트로 재시작했다. 실서비스에서 새 간격의 연속 429→200 전환은 아직 관측 전이다.
+
+## 2026-09-26 — Jev 5분 백그라운드 처리와 2022~2025 뉴스 선수집
+
+- 사용자 요청: 최근 365일(2025-09-26~2026-09-25)은 완료된 뉴욕 날짜당 최대 2건, 그 다음 2022-01-01~2025-12-31은 최대 1건. 과거 뉴스는 제한 해제 전에 미리 수집한다. 현재 선정은 각각 549건/309일, 960건/960일이며 적합한 기사 미확보일은 56일/501일이다. 제목·제공된 짧은 요약만 보관하고 본문은 수집하지 않는다.
+- 실제 수집: 최근 자료는 WordPress/Yahoo/Google News RSS 5,602레코드(고유 URL 5,101개)에서 선정했다. 과거는 기존 WordPress와 96개 월별 RSS 체크포인트 8,429레코드(고유 URL 7,538개)를 보관했다. 선정은 2022년 189·2023년 213·2024년 256·2025년 302건이며 URL/내용/NY 날짜 중복이 없다. 과거 시점 이후 수정된 기사 등 1,610건을 제외했다. RSS 쿼리당 100건 한계와 의미상 중복 가능성은 남으며 모든 뉴스의 완전한 아카이브가 아니다.
+- 실행: `python -m coffee_service.news_backfill_sources`는 원자료 체크포인트를 재사용해 과거 선택을 고정한다. `python -m coffee_service.news_backfill`은 최근 목록부터 처리하고 이후 과거 목록으로 넘어간다. 단일 파일 lock, 불변 분석키 재사용, 원자적 캐시/상태 저장, JSON/CSV export를 사용하며 DB·서빙 모델을 바꾸지 않는다. Mac 외부 Python 3.12.14/requests 2.34.2/pandas 2.3.3을 그대로 사용했다.
+- 429/비용: 공급자 응답은 `rate_limit_exceeded`/upstream high demand였다. 사용자 지정대로 기본 요청 간격 300초이며 더 긴 Retry-After(초/HTTP 날짜)는 준수한다. 재시작도 다음 요청 시각을 보존한다. 401/402/403·무효 응답·비용 미확인/로컬 비용 상한에서는 멈추며, 서버의 사용자 설정 $1 budget은 변경하지 않는다. 연속 실패 288회(약 24시간)에서 중단한다. [공식 rate-limits](https://vercel.com/docs/ai-gateway/rate-limits)는 429와 예산 초과 402를 구분한다(2026-09-26 확인). 공식 Free 표시와 달리 실제 응답에는 비용이 있으므로 무료로 단정하지 않는다.
+- 실행 상태(2026-09-26T13:07 UTC 확인): 최근 188/549건 완료, 나머지는 백그라운드 진행 중이다. 과거 960건은 선정 완료·분류 대기이며 최근 완료 후 중복 분석을 재사용한다. 이번 작업 성공 응답 비용은 단건 확인 포함 $0.001543584(계정 전체 청구액 아님)이었다. 최신 상태는 `data/raw/jev/backfill-status.json`, 요청 이력은 `backfill-requests.jsonl`, 로그는 `backfill-worker.log`다. 결과와 원자료는 ignored `year-20250926-20260925/`, `validation-2022-2025/`에 있다.
+- 감시: 이 채팅의 `Jev 뉴스 백필 상태 확인` heartbeat(id `jev`)는 30분마다 파일만 확인한다. 정상 진행/429 대기에는 조용히 종료하고 완료·실패·사용자 조치가 필요할 때 알린다. API 요청과 대기는 Python이 처리하므로 매분 모델을 호출하지 않는다. 로컬 Mac이 실행 가능한 상태여야 하며 재부팅 후에는 checkpoint 재개가 필요하다.
+- 검증: 관련 fixture 테스트 28개 통과(재시작 요청 간격, Retry-After 1시간 초과, 402 중단, 작업 간 재사용, 출처·발행/수집 시각·publisher 보존, 일별 선정/숫자가 바뀐 후속 기사/수집 재개). 실제 단일 호출 성공·429 안전 기록·분리 프로세스 실행·과거 체크포인트 97개를 확인했다. 독립 리뷰의 재사용 출처/이용 가능 시각 문제와 publisher 잔존 문제를 수정했다. 전체 뉴스 분류는 아직 완료가 아니며 CI/Docker/DB/앙상블 학습은 실행하지 않았다.
+- 시계열 한계: 기존 `arabica-kc-futures-v2`의 커피 선물가격 강세/약세/중립/불확실과 관련성 확률이다. 현재 시점의 과거 기사 재분류이며 당시 실시간 예측 자료가 아니다. published/modified/collected/analyzed/available 및 NY 다음 자정 선정 시점을 보존한다. 향후 연구에서도 2022~2023 Validation과 이미 본 2024~2025 Test를 구분하고 날짜를 맞췄다는 이유만으로 미래 정보나 모델 사전학습 오염이 제거됐다고 주장하지 않는다.
+
+## 2026-09-26 — Persistence 제외 단순평균·뉴스 결합 실험
+
+- `03_3_single_model_comparison.ipynb` 아래 9~12절(10셀, 코드 6셀)을 추가했다. 기존 21셀의 소스·출력은 그대로 보존했다. 6개 모델의 15개 쌍과 전체 6개 조합의 **예측 가격 산술평균**을 계산하고 로그수익률로 되돌려 비교했다. Persistence는 비교 기준으로만 사용한다. 기존 2022~2023년 검증 설정을 재사용하고 같은 검증 RMSE로 조합을 고정한 뒤 이미 본 2024~2025년을 재평가했다.
+- 검증 선택: 5일 NLinear+TimesNet, 20일 NLinear+XGBoost, 60일 DLinear+XGBoost. 과거 재평가 로그수익률 RMSE는 각각 **0.057513 / 0.114463 / 0.162403**, Persistence 대비 **−5.64% / −1.29% / +12.57%**다. 전체 6개 평균은 **0.055734 / 0.111382 / 0.159296**으로 **−2.37% / +1.44% / +14.25%**다. 전체 평균의 가격 RMSE 개선은 **−3.07% / −0.09% / +9.83%**이므로 20일 가격 오차 개선으로 해석하지 않는다. 사후 최저 조합으로 검증 선택을 교체하지 않았다.
+- 안정성: 검증 오차 상관, 연도별, 지평별 모든 offset의 비중첩 평가, paired circular bootstrap(seed42/1,000회/블록 h·2h)을 추가했다. 60일 전체 평균의 MSE 개선 조건부 95% 구간은 h에서 **[0.001308, 0.015856]**, 2h에서 **[0.001269, 0.014891]**이다. 연도별로도 개선됐으나 비중첩 offset 중 악화도 있고, 이미 본 기간·단일 seed·후보 선택 불확실성과 다중 비교는 보정하지 않았으므로 전향적 우월성을 확정하지 않는다.
+- 뉴스: 과거 7,548건의 기존 `title-rules-v2`(방향 기사 32건)를 사용해 7달력일 신호로 전체 평균의 잔차를 보정하는 절편 없는 비음수 회귀를 추가했다. 2022년 적합→2023년 규제 선택→두 해 재적합→2024~2025년 고정 평가다. **2022년 방향 신호 0일** 때문에 보정 강도를 식별하지 못했고 최종 무보정으로 남았다. 0 개선·[0,0] 구간은 동일 예측의 기계적 결과이며 뉴스 효과 없음의 증거가 아니다. 수집 시점까지 지킨 과거 live 입력은 0건이다. 2026년에 재수집한 제목 규칙의 연구용 결과와 실제 Jev 감성분석을 구분했다.
+- Jev 88건은 2026-03-13~09-25 기사로 기존 모델 평가 기준일과 공통 기간이 0개다. 따라서 **6개 모델+Jev 감성분석 비교는 미검증**으로 표시했다. 새 API 호출이나 분류·가격 재수집은 없었다. 후속은 고정 절차로 새 날짜의 모델 예측·뉴스 분석 완료 시점·성숙한 정답을 함께 누적하는 평가다.
+- 검증: Mac 외부 Python 3.12.14에서 저장된 원본 예측을 복원하고 추가 코드 6셀을 최종 **14.6초**에 순차 실행했다. 전체 모델 재학습은 반복하지 않았다. 원본 21셀 객체 동일, nbformat/문법/오류 출력 없음, 한글 그림 2개, 가격 산술평균·Persistence/중복 혼입 거부·날짜 누락 차단·성숙 정답·미래 기사 불변·무신호/방향 제약·지표 대조 검사 통과. 결과 34,176행과 지표는 원본 run의 ignored `ensemble_news_v1/`에 보관했고 같은 결과의 재저장도 통과했다. 독립 리뷰에서 부분 실행 경로 추론을 지적해 제거하고 Run All의 `OUTPUT`만 사용하도록 정리했다. 커널의 기존 loopback TCP 안내는 남아 있으며 외부 공개 서버를 열지 않았다.
+- 근거 확인(2026-09-26): [단순평균](https://otexts.com/fpp3/combinations.html), [시간순 평가](https://otexts.com/fpp3/tscv.html), [블록 bootstrap](https://bashtage.github.io/arch/bootstrap/timeseries-bootstraps.html). 의존성·서비스 모델·배포 계약은 변경하지 않았으며 CI/Docker/전향적 검증은 이번 범위가 아니다.
+
+## 2026-09-26 — 가격·기후·거시 6개 단일 모델 지평별 비교
+
+- 범위: `data_code/03_3_single_model_comparison.ipynb`에서 DLinear·NLinear·XGBoost·LightGBM·PatchTST·TimesNet을 5/20/60거래일 누적 로그수익률로 비교했다. 앙상블 없이 가격 4·거시 3·기후/달력 20개, 공통 60일 창을 사용하며 트리도 같은 창을 펼쳐 입력한다. 신경망은 scalar 회귀 변형으로 명시했다. 기존 DLinear 구조와 변환 함수를 재사용하고 새 네트워크만 `data_code/single_model_networks.py`로 분리했다. 기존 노트북·서비스·artifact·의존성은 변경하지 않았다.
+- 평가: 2015년부터 expanding 학습, 2022/2023년 검증의 합산 RMSE로 각 모델의 10/30 epoch 또는 100/300 tree 설정을 선택했다. 월별 기후 기준값·scaler·target 통계는 fold별 학습 범위에서만 적합하고 정답 날짜 경계를 지켰다. 고정 설정으로 2015~2023년 재학습 후 이미 본 2024~2025년을 재평가했으며 미사용 Test라고 부르지 않는다. seed 42 한 개의 제한된 설정 비교다.
+- 결과: 검증 선택은 5/20일 Persistence, 60일 DLinear다. 과거 재평가에서 단일 모델 최저 RMSE는 5일 DLinear **0.055739**(Persistence 0.054442보다 나쁨), 20일 LightGBM **0.112507**(Persistence 대비 +0.44%), 60일 PatchTST **0.160502**(+13.60%)다. 검증 선택 60일 DLinear는 **0.163876**(+11.78%)이며 사후 최저 모델로 선택을 바꾸지 않았다. 단일 seed·작은 후보군·겹치는 target 때문에 안정적 우월성을 확정하지 않는다.
+- 실행/보관: Mac 외부 Python 3.12.14, CPU 1 thread에서 Notebook 전체 **535초** 실행 완료. 코드 셀 11개와 한글 그림 2개를 저장했다. 개별 예측 27,297행과 지표·연도별·비중첩 분석은 ignored `data/processed/single_model_comparison/20260926T115735770501Z/`에 보관했다. 후속 단순평균을 위한 개별 예측일·목표일·지평·seed·설정만 저장하며 평균 예측은 만들지 않았다.
+- 검증: 새 모델 단위검사 **8 passed**(forward/backward, NLinear 채널 복원, TimesNet 상수 입력·배치 독립성·그룹 계산 대조), 미래 원천 변경 시 과거 입력 불변·target 날짜/결측·공통 평가 행·지표 재계산 검사 통과. 독립 리뷰의 결과 저장 재시도 문제를 수정해 임시 디렉터리 전체 기록 후 rename하며 동일 결과는 재사용하고 충돌은 보존한다. 수정한 저장 셀을 실제 결과로 재실행하고 저장 실패/재시도/충돌 검사를 통과했다. nbformat·코드 compile·저장 PNG 한글/수치와 HTML 본문을 확인했다.
+- 근거 확인(2026-09-26): [DLinear/NLinear](https://github.com/cure-lab/LTSF-Linear), [PatchTST](https://github.com/yuqinie98/PatchTST), [TimesNet](https://github.com/thuml/Time-Series-Library/blob/main/models/TimesNet.py), [XGBoost](https://xgboost.readthedocs.io/en/stable/python/python_api.html), [LightGBM](https://lightgbm.readthedocs.io/en/stable/pythonapi/lightgbm.LGBMRegressor.html). 설치 Torch 2.14.0 / XGBoost 3.4.1 / LightGBM 4.7.0을 유지했다. 초기 font cache 권한 안내는 쓰기 가능한 cache 경로로 해결했다. Jupyter 실행에는 loopback TCP 비암호화 안내가 있었으며 외부 공개 서버나 secret 입력은 사용하지 않았다. CI·Docker·배포 및 다중 seed 검증은 이번 범위가 아니다.
+
+## 2026-09-26 — 작업 난도별 Codex 에이전트 배정
+
+- 메인 Astra medium과 Reviewer Sol medium을 유지하고 Implementer를 Luna xhigh → Sol medium으로 변경했다. 단순 보일러플레이트용 Worker Luna high를 `.codex/agents/worker.toml`에 추가했다. Implementer/Worker는 대안으로 선택하며 동시 실행 상한 2·위임 깊이 1, Reviewer 읽기 전용을 유지한다. AGENTS.md에 중복 호출·맥락 복사·실패 반복을 피하는 규칙을 추가했다.
+- 확인(2026-09-26): 설치 CLI 0.157.1, [공식 custom agents 문서](https://learn.chatgpt.com/docs/agent-configuration/subagents)의 프로젝트 TOML 형식과 대조했다. Python tomllib으로 메인·세 역할 TOML 및 모델/추론/권한 값을 검증했다. `codex --strict-config doctor --summary`는 config loaded를 확인했으나 전체 종료 코드는 1(CDN 연결 실패)이었으며 WebSocket·MCP 환경변수·스레드 인벤토리 등 경고가 있었다. `features list`는 strict-config 검증을 지원하지 않았다.
+- 한계: 실제 subagent 실행·선택 모델·토큰/쿼터 절감은 미검증이다. `.codex/`는 기존 Git ignore 대상이며 기존 사용자 문서 변경을 보존했다. 이번 변경은 커밋하지 않는다.
+
+## 2026-09-26 — 단색·Fade 대시보드와 목표일 기준 예측 비교
+
+- 변경: 기존 Vue/SVG 화면을 단색 배경·청록 강조색·선 중심으로 정리했다. 가격 비교를 뉴스 설명보다 먼저 배치하고 밝게/어둡게/시스템 테마, 진입 및 지평 변경 CSS Fade, `prefers-reduced-motion` 대응을 추가했다. 뉴스 상세·모델·실행·소스 정보와 기존 anchor를 유지하며 의존성·API·DB·모델은 변경하지 않았다.
+- 날짜 계약: 최근 180개 관측일의 종가에 현재 모델의 `target_date`를 연결한다. 예측 기준일은 목표일보다 앞서야 하며 미래 목표는 제외한다. 양쪽 선은 같은 달력 시간축을 사용하고 결측은 선을 끊는다. 최신 비교에는 정확히 같은 목표일의 예측만 쓰며 최신 종가가 없으면 비교·건수에서 제외한다. 과거 기준일 재생 예측과 당시 실시간 발표 기록을 구분하고, 이 차트에 Jev의 현재 보정값을 과거 시계열처럼 그리지 않는다.
+- 실측: native API에서 최근 180개 관측일 각각에 5/20/60거래일 예측 180개가 대응하며 목표일 중복이 없었다. 2026-09-25 실제 278.600006 ¢/lb에 대응하는 예측은 5일 294.549988(기준 09-18), 20일 341.899994(08-27), 60일 278.228516(07-01)이다. 화면의 반올림 수치와 부호 있는 오차를 API와 대조했다.
+- 구현 근거 확인(2026-09-26): [Vue 상태 변경 애니메이션](https://vuejs.org/guide/built-ins/transition.html), [MDN 모션 감소 설정](https://developer.mozilla.org/en-US/docs/Web/CSS/Reference/At-rules/@media/prefers-reduced-motion). 설치 Vue 3.5.43 / Vite 8.3.0 / plugin-vue 6.0.8을 유지했다. Mac Node 26.5.1에서 검증하며 CI의 Node 22 설정은 변경하지 않았다.
+- 검증: Vue **8 passed**, Vite production build 성공(JS gzip 36.03 kB / CSS gzip 3.58 kB), `git diff --check` 통과. 섞인·불규칙 날짜, 현재 모델 필터, 미래/무효 기준일 제외, 지평 전환, 예측·종가 결측과 뉴스 조회 실패/지연을 확인했다. 독립 리뷰에서 발견한 결측 비교·테마 범위·상태 문구를 수정하고 최종 재검토에서 추가 결함이 없었다.
+- 브라우저: 실제 로컬 API에 연결해 밝은/어두운 테마와 5/20/60거래일 전환, 최신 수치, 뉴스 보정 표를 확인했다. SVG의 grid 최소 크기로 축을 넘던 문제를 수정했으며 1280×720에서 차트/프레임 모두 250px, 최신 비교 하단은 약 698px였다. 320px 화면에서 페이지 가로 넘침이 없고 지평 버튼 높이는 44px다. 뉴스 표는 내부 가로 스크롤과 키보드 포커스를 제공하며 ArrowRight 이동을 확인했다. 390px 화면 캡처와 브라우저 오류/경고 없음도 확인했다. 주요 글자·강조색의 계산 대비는 밝은 테마 최소 4.70:1, 어두운 테마 최소 7.54:1이다.
+- 범위/한계: Mac 네이티브 API·Vite와 in-app browser 검증이다. 모션 감소 CSS는 코드로 확인했으며 OS 설정 변경에 따른 실동작, Lighthouse 성능 지표, 다른 브라우저, Docker/CI/GHCR/Azure는 이번에 검증하지 않았다. 기존 문서 변경과 사용자 추가 스킬 파일은 분리해 보존하며 push·외부 배포는 하지 않았다.
+
+## 2026-09-26 — 뉴스 확률·방향과 0~1 반영 강도 분리
+
+- 결정/완료 조건: 88개 기존 Jev 분류를 재사용하고 기본 Persistence/DLinear 산출물을 보존한다. 방향은 `(P_bullish−P_bearish)×relevance`, 적용량은 0~1 강도·과거 변동성·최근성·거래일 시차로 결정한다. 강한 확신의 같은 방향 뉴스는 더 크게 반영하되 음의 회귀계수로 뉴스 방향을 뒤집지 않는다. 실험적 가격 변화와 성능 개선 근거는 별도 표시한다.
+- 원인/변경: v1의 0은 기본값이 아니라 지평을 함께 학습한 비음수 Ridge의 경계 해였다. v2는 지평별 비중첩 수익률 구간으로 강도를 추정하고, 효과 없음 50% + Uniform(0,1) 50% 사전의 사후평균·95% 사후구간을 제공한다. `confidence`는 확률분포로부터 계산된 요약이므로 중복 곱을 제거했다. 최근 20일 로그수익률 표준편차×√5를 가격 규모로 사용하고 반감기 3일·시차 0/1/3/5·지평 τ10은 고정 가정으로 표시한다. 임의의 양수 하한이나 향상을 보장하는 기본 가중치는 넣지 않았다.
+- 실제 실행: native PostgreSQL 17, Python 3.12.14에서 cache-only 실행 성공. 최종 run `a4948176-6d26-4663-acca-cbb02f67ed70`, 모델 `news-residual-v2-eeea07bd411f`, 발행 `2026-09-26T10:33:27.067045+00:00`. 분석 88건, 신규 Jev 요청 0회. 기존 가격 3,076행·기본 예측 2,061행은 API 전체 JSON 대조로 동일했다. v1 artifact는 ignored `data/raw/jev/articles.model.v1-backup.json`에 보존했다.
+- 보정 실측: 5일 강도 **0.116431**, 95% 사후구간 **[0, 0.799194]**, 비중첩 학습 25구간. 기본 278.600006→**277.652812 ¢/lb**(약 −0.34%). 20일 강도 **0.251128**, 구간 **[0, 0.950379]**, 학습 6구간. **278.143751 ¢/lb**(약 −0.16%). 20일은 사전평균 0.25와 비슷해 사전 가정의 영향이 크다. 60일은 2구간으로 최소 6구간 미달이며 보정가 null이다. 현재 뉴스 입력은 시차 전체에서 22개 기사이며, 일별 대표 선정 규칙은 바뀌지 않았다.
+- 평가: 연구 재평가 5일 origin 2026-07-10~09-18의 50개 동일 날짜에서 baseline→뉴스 RMSE **0.0561664→0.0565635**, MAE **0.0496921→0.0501057**(로그수익률). 평균 MSE 개선 −0.000044767, 5거래일 circular blocks/seed42/1,000회 95% 구간 **[−0.000213217, +0.000103672]**로 개선 미확인이다. 방향 일치 0%→40%는 Persistence가 보합만 예측하는 특성 때문에 단독 개선 근거로 사용하지 않는다. 20일은 walk-forward 각 시점의 최소 학습 표본을 충족하지 못해 평가 0개다. 과거 기사의 현재 분류·이미 확인한 기간이므로 미사용 Test나 실제 live 성과가 아니다.
+- 검증: Python 뉴스·DB/API 관련 **37 passed, 2 warnings**, Vue **7 passed**, Vite build 성공. 시간 경계/일별 선정 완료/수정/미래 분석 차단, 강한·약한 확률과 부호, confidence 중복 미사용, target maturity·비중첩 학습·walk-forward purge, 결측 변동성·artifact 왕복을 확인했다. 별도 SciPy 적분으로 실측 5/20일 사후평균·null probability를 대조해 NumPy 격자 결과와 1e-6 이내 일치했다(런타임 의존성 추가 없음). 브라우저에서 보정가·가중치·사후구간·계산 설명·성능 비교·기사별 네 확률을 확인했다. 독립 리뷰 지적의 상단 성능 단정 문구를 수정했고 재검토에서 추가 결함이 없었다.
+- 근거 확인(2026-09-26): [TypeSafe Choice](https://docs.typesafe.ai/primitives/choice)·[confidence](https://docs.typesafe.ai/confidence), [시간순 rolling-origin](https://otexts.com/fpp3/tscv.html), [시간 블록 bootstrap](https://bashtage.github.io/arch/bootstrap/timeseries-bootstraps.html). [Financial News Intelligence Platform](https://github.com/abhiminav/financial-news-intelligence-platform)과 [StockIntel](https://github.com/zhaymn/StockIntel)의 README에서 확률 차이·과거 수익률 통제·시간순 평가·부정적 결과 공개를 참고했으며 그 결과를 재현하거나 커피 가중치로 전용하지 않았다. 선택한 사전분포·감쇠 수치는 이 출처로부터 추정된 값이 아니다.
+- 한계/다음: 통계적으로 유의미한 가격 예측 개선이나 인과 효과를 확인하지 못했다. 200일 중 88개 대표 기사라는 제한, 사람이 확인한 분류 정답 및 실제 확률 calibration 부재, 작은 비중첩 표본과 Bayesian 오차 가정을 유지해서 해석한다. 다음은 전향적 뉴스·실현 가격 누적과 분류 품질 검증이다. 기존 Starlette httpx/AnyIO deprecation 2건은 숨기지 않았으며 별도 호환성 작업이다. 의존성 변경·새 API 호출·Docker/CI/GHCR/Azure 검증·push는 하지 않았다.
+
+## 2026-09-26 — 기본 예측의 빈 신호와 Jev 보정 표시 구분
+
+- 원인: `/api/v1/predictions`의 기존 방향 분류·뉴스 항목은 null이고, Jev 결과는 별도 `/api/v1/news/jev`에 저장된다. 기본 표의 반복된 “이용 불가”가 정상 Jev 분석까지 실패한 것으로 보이게 했다.
+- 수정: 기본 모델 예측과 Jev 실험적 가격 보정의 표제를 구분하고, 별도 분류가 없으면 이유와 Jev 결과 링크를 표시한다. 실제 저장 모델의 반감기·시차·지평 감쇠·계수를 펼쳐 볼 수 있다. 유효한 모델과 보정값이 모두 0인 경우에만 가격 변화 없음의 이유를 명시한다.
+- 계산 확인: 기사 압력은 `(P_bullish-P_bearish)×relevance×confidence`, 발행 후 달력일 나이로 `2^(-age/3)` 감쇠 후 합계의 tanh를 사용한다. 0/1/3/5거래일 시차 계수는 현재 모두 0이다. 지평 배수 `exp(-(h-5)/10)`는 5일 1, 20일 0.22313, 60일 0.004087이나 60일은 학습·평가 자료 부족으로 적용하지 않는다.
+- 실측: 저장 run `7d1f7ea6-668f-48e3-a890-6a58e808ff53`의 실제 이용 가능 시점으로 다시 계산한 최신 시차 입력은 `[-0.6711112202, 0, 0, 0]`이다. 과거 기사도 이번에 처음 분류했으므로 이전 거래일의 live 입력은 0이다. 최종 계수 0으로 5/20일 가격 보정은 0이며, 이 사실이 뉴스의 경제적 효과가 없다는 결론은 아니다. 모델·학습·DB·API 계약과 가격 수치는 변경하지 않았다.
+- 검증: Vue 회귀 6 passed, Vite build 성공, 독립 리뷰의 JSON boolean/문자열 0 오인 조건을 수정했다. 실제 로컬 API와 브라우저에서 기본 예측의 빈 분류 설명, Jev 88건 완료·5/20일 0 보정·60일 자료 부족을 확인했다. 추가 Jev 호출·재학습·DB 쓰기·의존성 변경은 없었다.
+
+## 2026-09-26 — 최근 200일 뉴스의 일별 1건 선정·Jev 실분류 완료
+
+- 범위/원자료: 2026-03-11~09-26(200달력일). Yahoo KC=F 메타데이터 200건과 기존 WordPress 수집기의 Daily Coffee News 제목 343건, 합계 543건을 확보했다. Yahoo 표본은 5월 이후이며 전체 기간의 모든 뉴스를 보장하지 않는다. `data/raw/jev/combined-200d.json`에 후보, `wordpress-200d.parquet`에 제목 메타데이터, `daily-200d-results.csv`에 최종 88건을 저장했다(모두 ignored).
+- 일별 선정: 완료된 America/New_York 날짜별 최대 1건. 현재 199개 완료일 중 88일 선정, 111일 미확보, 진행 중인 9월 26일 제외. 중요도는 커피 가격·공급·작황·기상·수출·재고 등 제목/요약 단어 점수다. 카페·장비·개별 주가 기사는 제외한다. 현재 표본의 정규화 URL/내용/동의어 유사 중복 검출은 0건이었다. 재게시 제거는 fixture로 검증했으며, 같은 주제라도 수치·방향이 바뀐 후속 기사와 표현이 크게 다른 의미상 중복을 완벽하게 구별하지는 못한다.
+- 재현/시점: `.selection.json`에 선택 날짜·점수·정책·다음 NY 자정의 이용 가능 시각을 기록하고 완료 날짜를 고정한다. 다른 기간 재실행에서 과거 선택은 보관하되 요청 기간만 분류/조회한다. 수치·반대 방향 업데이트는 보존하며, 연구 feature도 기사 수정 시각과 일별 선정 완료보다 앞서 쓰지 않는다. 현재 분류는 당시 실시간 수집을 재현한 자료가 아니다.
+- 실제 Jev: 단건 방식으로 신규 1건 성공 후 429가 발생해 질문별 기사 입력을 분리한 `arabica-kc-futures-v2`로 변경했다. 공통 state는 시장뿐이며 질문마다 해당 기사만 제공한다. 최종 88건은 **bullish 39 / bearish 40 / neutral 4 / uncertain 5**다. v2는 9회 요청(200 3회, 429 6회) 후 모두 완료했다. 제공자 오류는 upstream high demand였고 Retry-After는 없었다. 제한된 수동 재시도 간격을 60/120/240초로 늘렸다. 성공 배치는 20/20/48건: 마지막 48건은 앞선 사용량을 확인한 일회성 backfill 요청(84,939 JSON UTF-8 bytes, 실제 input 21,915 tokens)이었고 기존 응답 검증기로 모두 검사한 뒤 저장했다. 일반 CLI는 보수적인 최대 20건/60KB 상한을 유지한다.
+- 비용/보존: v2 성공 응답 input 39,837 / output 6,593 tokens, 기록 비용 합계 **$0.001673154**(계정 전체 청구액 아님). 배치 usage/cost는 첫 레코드에만 기록해 중복 합산하지 않는다. 이전 v1 분석 2건은 파일에 보존하되 현재 API/학습에서는 v2 일별 선정 88건만 사용한다. `200d-request-audit.json`에 v2 HTTP 시도 이력을 보존했다.
+- 실제 E2E: native PostgreSQL 17 / loopback 15439에서 뉴스 run `7d1f7ea6-668f-48e3-a890-6a58e808ff53` success, 분석 88건·예측 snapshot 3행. 기존 가격 3,076행과 2,061개 가격 예측 계약을 유지했으며 예측 checksum `462e019814a004984ed461c2d502c930`이 동일했다. 실제 캐시/후보 재실행은 네트워크를 금지한 상태에서 신규 API 요청 0회/88건 재사용이었다. 실제 API 200, 기사 88건/고유 NY 날짜 88개를 확인했고 브라우저에 선정 88·완료 88·최근 기사 목록이 표시됐다.
+- 예측 결과: 연구용 Ridge는 반감기 3일, alpha 1, 지평 tau 10을 선택했으나 **계수 4개 모두 0**이었다. 5/20일 보정값은 0, 가격은 각각 기존 278.6000061 ¢/lb와 같았다. 60일은 mature tune/holdout 부족으로 null이다. 5일 holdout 25행 RMSE 0.0677684, 20일 10행 0.2312489로 뉴스 보정과 baseline이 동일했다. 입력 기사 18건이라는 표시는 실제 가격 변화나 정확도 향상을 뜻하지 않는다. 분류 정확도와 예측력 개선을 확인하지 않았다.
+- 검증: Python 전체 서비스 회귀 **111 passed, 기존 경고 3개**, 77.98초. 마지막 중복 정규화/응답 type 검증/최신 기사 우선 처리 후 관련 회귀 **47 passed**. Vue **5 passed**, Vite build 성공. 독립 리뷰에서 발견한 NY 경계·반대 방향 유실·미선정 API 노출·범위 밖 고정 기사·동의어 재게시를 수정했다. 의존성/설치 변경 없음. 새 Docker/CI/GHCR/Azure 실행은 하지 않았다.
+- 공식 확인(2026-09-26): [TypeSafe 질문 독립성](https://docs.typesafe.ai/primitives), [구조화된 instructions/API](https://docs.typesafe.ai/api), [모델 context limits](https://docs.typesafe.ai/models), [Vercel rate limits](https://vercel.com/docs/ai-gateway/rate-limits), [WordPress posts](https://developer.wordpress.org/rest-api/reference/posts/), [yfinance get_news](https://ranaroussi.github.io/yfinance/reference/api/yfinance.Ticker.get_news.html). 다음은 분류 품질 표본 검토와 뉴스 계수 0의 원인 확인이며, 성능을 좋아 보이게 하려고 가격을 임의 조정하지 않는다.
+
+## 2026-09-26 — Jev 뉴스 수집·분류와 실험적 가격 보정
+
+- 추가: `jev.py`의 Yahoo KC 뉴스 수집과 TypeSafe choice/noul 요청, 불변 분석 캐시·원자 저장·요청 상한; `news_residual.py`의 최근성 감쇠·거래일 시차·단기 가중 잔차 Ridge; news CLI·별도 DB snapshot·`/api/v1/news/jev`·Vue 비교/기사 패널. 기존 가격 서빙 계약·가격 테이블을 유지했다. 설치/의존성 변경 없음. 예제 Gateway 키는 빈 placeholder로 정리했다.
+- 실제 수집: 2026-09-26 Yahoo `KC=F` 메타데이터 199건 조회 중 2026-06-29~09-25의 122건을 확보했다. 최신 표본이므로 90일 전체 커버리지로 간주하지 않는다. 원자료는 ignored `data/raw/jev/yahoo-probe.json`, 성공 분석은 `articles.json`, 초기 실행 상태는 `articles.json.status.json`에 보존했다. GDELT는 timeout/429로 실수집 실패해 기본 소스를 Yahoo로 결정했다.
+- 실제 Jev: 합성 smoke 1회와 실제 기사 1회가 HTTP 200이었다. 실제 기사 “Short Covering Boosts Coffee Prices”는 bullish 0.48/bearish 0.01, confidence 0.30, relevance 0.93을 반환했다. 이는 분류 품질 평가나 수익률 확률 검증이 아니다. 이후 HTTP 429가 반복되어 최초 요청 예산(합성 1+실배치 199)을 소진했다. 성공 응답에 기록된 비용만 합계 $0.000045906이며 계정 전체 청구액은 확인하지 않았다. 이 실패를 반영해 429 즉시 중단/연속 transient 3회 중단으로 수정했고 추가 Gateway 요청은 하지 않았다.
+- 실제 가격·DB: 원본을 별도 `data/processed/jev_live`로 복사한 뒤 Yahoo/FRED incremental을 실행해 2026-09-25까지 가격 3,076행·예측 2,061행을 적재했다(run `a5d4f044-70f5-43e4-bee5-d2495bce6767`). 별도 native PostgreSQL 17, loopback 15439/coffee_jev를 사용했다. 실제 뉴스 cache-only 실행 2회(`1f4eedec-b6de-4c85-b104-7b631bc54cb3`, `2a23a0ef-198c-454e-9695-cf65edf7470f`)는 partial이며 신규 API 요청 0회, 분석 1건·지평별 snapshot 3행을 남겼다. 기존 2,061개 예측 전체 checksum `462e019814a004984ed461c2d502c930`을 유지했다.
+- 결과: 세 지평 모두 `insufficient_data`, 보정 가격 null이다. 기존 5/20일 278.6000061, 60일 361.8698120 ¢/lb를 보존했다. API와 브라우저에서 부분 처리·기사 1건·자료 부족을 확인했다. 실제 자료로 잔차 학습·성능 개선을 검증하지 못했으며, 수치 보정·최근성·시차·시간순 평가 동작은 fixture로 검증했다.
+- 검증: 외부 Python 3.12.14, requests 2.34.2/pandas 2.3.3/scikit-learn 1.7.2/yfinance 1.7.0/python-dotenv 1.2.3. 실제 PostgreSQL을 지정한 `python -m pytest tests --ignore=tests/test_core4_environment.py -q`: **102 passed, 3 warnings**, 72.71초. 기존 sklearn 단일 클래스 경고와 Starlette httpx/AnyIO deprecation은 남는다. Vue **5 passed**, Vite 8.3.0 build 성공, placeholder DB password로 Compose 설정 검증 성공. 새 Linux container/CI/GHCR/Azure 실행은 검증하지 않았다.
+- 독립 리뷰: target 결측 정답 유입, 성숙 경계·tune purge·지평 자격, 미래 기사 노출, 실패 snapshot/cache 상태, 뉴스 요청 지연, 예제 키를 수정했다. 실코드/설정 리뷰와 관련 회귀 검증을 마쳤다. 원래 사용자 문서·AGENTS 변경과 원본 자료/.env는 보존했다.
+- 공식 확인(2026-09-26): [Vercel TypeSafe endpoint/schema](https://vercel.com/docs/ai-gateway/sdks-and-apis/typesafe), [TypeSafe primitives](https://docs.typesafe.ai/primitives), [choice](https://docs.typesafe.ai/primitives/choice), [Jev 한계](https://docs.typesafe.ai/model-jaggedness/jev-1.13), [yfinance get_news](https://ranaroussi.github.io/yfinance/reference/api/yfinance.Ticker.get_news.html), [GDELT DOC 2](https://blog.gdeltproject.org/gdelt-doc-2-0-api-debuts/).
+- 다음: Gateway 429 제한 해소 후 작은 batch로 분류를 누적하고 실제 이용 가능 시점 이후의 정답이 성숙하면 재평가한다. 강세/약세 정답을 사람이 검토한 표본과 시간순 baseline 비교 전에는 예측력 개선을 주장하지 않는다.
+
+## 2026-09-20 — B. 게시 이미지 복원 배포 검증과 신규 수집 경계
+
+- 게시 증거: [run 35455393542](https://github.com/sjinie/Coffee_Price_Prediction/actions/runs/35455393542) success, source와 조회 당시 원격 main 모두 `fab81c0cb2f72a58eab9244976a333940bae99d2`. 로그의 API/pipeline/web digest가 GHCR manifest 및 실제 pull과 일치했다. 모두 linux/amd64이며 전체 digest는 README·compose.deploy.yaml에 기록했다. 실제 이미지 안 API 3개·pipeline/config/entrypoint 17개 파일의 SHA-256도 게시 소스와 일치했다.
+- 구성: 기존 Compose·Dockerfile을 보존하고 build 없는 compose.deploy.yaml, placeholder env, stdlib 배포 CLI를 추가했다. PostgreSQL 17.11-bookworm digest를 유지하며 web loopback만 열고 API/DB는 내부 통신한다. DB·pipeline은 project별 named volume, seed/model은 읽기 전용이다.
+- 입력: 기존 2014-07-01~2025-12-31 Parquet 15개를 별도 seed에 복사했다. 추적된 DLinear artifact의 SHA-256은 `29ad00b20a0f71846d6a81c1f2edddd1d3960639b1819372b0fd2c0cdccc3b82`, ID dlinear-price-macro-h60-v1, 학습 2,011행이다. 원본 자료·artifact는 변경하지 않았다. 신규 수집·재학습·뉴스 적재는 실행하지 않았다.
+- 실제 실행: Mac Docker Engine 29.8.0/Compose 5.5.1, ARM host에서 amd64 이미지를 실행한 별도 project `coffee-ghcr-20260920`. 같은 deploy.py up/restore/verify로 schema 초기화·DB health·정적 web·Nginx /api·가격 2,892행·예측 1,509행·모델 2개·소스 15개를 확인했다. 복원 run `b908aea4-9c6f-4a7e-a6a4-2d1c262ac1d4`, 사전 입력 검사 후 반복 run `51813c23-729c-4f99-961f-a399e5a615ce`가 성공했다.
+- 재실행·영속성: 동일 기준일 재처리 전후 API 가격·예측 응답이 정확히 일치했고 예측 자연키 1,509개/중복 0개였다. postgres/api/web을 force-recreate한 뒤에도 동일 응답과 예측값·created_at의 정렬 checksum `5e1876332a04fd731950924e25691bb8`을 유지했다. volume 삭제는 하지 않았다. 이전 native snapshot과도 허용오차 내 일치했다(전체 수치 최대 차이 0.00006103515625, CPU 환경 차이의 원인은 별도 확정하지 않음).
+- 브라우저: 게시 web image의 localhost 대시보드에서 2025-12-31 종가 348.75, 세 지평 예측, 15개 소스, 한국어 차트·5/20일 전환을 직접 확인했다. 60일 예측가 표시는 377.2였다. 뉴스·분류 artifact를 적재하지 않아 관련 항목의 이용 불가 표시는 예상 동작이다. Azure 브라우저 검증은 아니다.
+- 리뷰에서 발견한 HIGH: 기존 pipeline은 짧은 feature 이력에서 h60 없이 success를 기록할 수 있었다. 수정 소스는 최신 가격일의 h5/h20/h60을 UPSERT 전에 검사하고 rollback/failed로 기록한다. 기존 이미지의 코드가 바뀐 것은 아니다. 배포 CLI는 기존 이미지 함수로 restore를 사전 검사하며 collect는 즉시 차단한다. 수정 소스의 push·새 GHCR 게시·digest 재검증과 차단 해제 후 신규 수집을 검증해야 한다.
+- 최종 검증: 외부 Python 3.12.14 + 별도 PostgreSQL에서 `python -m pytest tests --ignore=tests/test_core4_environment.py -q`가 **79 passed, 3 warnings**(79.57초)였다. 데이터 기반 test_postgres_e2e도 포함하며 skip은 없었다. 기존 단일 클래스 sklearn 경고와 Starlette의 httpx/AnyIO deprecation 2건은 숨기지 않았고, 별도 라이브러리 호환성 작업으로 남긴다. macOS 환경 전용 검사는 이번 범위에서 제외했다. 새 배포 CLI 테스트 6개와 actionlint도 통과했다.
+- 실패 경로: 별도 short project에 각 10행의 필수 자료를 제공하자 기존 이미지의 latest_predictions가 불완전 60거래일 창을 거부했고 CLI exit 1이었다. 실제 DB 컨테이너·적재 전에 실패했으며 collect 역시 legacy 이미지 단계에서 실행 전 차단한다.
+- 독립 리뷰: A와 B의 실제 diff·공식 근거·image/source·초기화·secret·포트·재실행 경계를 검토했고 HIGH 수정 후 추가 조치할 결함이 없었다. 검증한 source guard는 아직 새 게시 이미지에서 실행한 것이 아니다.
+- 공식 근거(2026-09-20): [Compose readiness](https://docs.docker.com/compose/how-tos/startup-order/), [up/volume 보존](https://docs.docker.com/reference/cli/docker/compose/up/), [GHCR digest·인증](https://docs.github.com/en/packages/working-with-a-github-packages-registry/working-with-the-container-registry), [PostgreSQL 공식 image](https://hub.docker.com/_/postgres). 새 의존성 설치·lockfile 변경 없음.
+- 자원 실측(사용자 요청): 10 vCPU/7.748GiB Docker VM의 ARM host에서 amd64 게시 이미지를 실행했다. 대기 web 26.10/API 63.76/PostgreSQL 39.27MiB(합계 129.13MiB). 26.8초 복원 실행의 약 2초 간격 13회 샘플에서 pipeline 최대 331.2MiB·CPU 100.28%, API 84.54/web 27.18/DB 45.07MiB, 같은 시점 컨테이너 합계 관측 최대 477.5MiB였다. 짧은 컨테이너 종료 때 EOF로 비어 있는 샘플도 있어 절대 피크가 아닌 관측값이다. Docker stats는 cache 일부를 제외하며 OS·Docker 메모리는 별도다. 이미지 4개 실제 저장 합계 3.441GB, DB 논리 크기 9,142kB, 테스트 volume 전체 67.61MB였다. 신규 외부 수집·다중 사용자 부하·Azure 성능은 측정하지 않았다.
+- 사양 제안(추정): 현재 4개 서비스·단일 batch·소수 사용자에 2 vCPU/4GiB RAM, OS/이미지/새 릴리스·로그 여유를 포함한 32~64GiB SSD. 컨테이너 0.5GiB 관측값에 OS/Docker 0.5~1GiB와 batch/cache 여유 0.5~1GiB를 예산으로 잡으면 4GiB 안에서 약 1.5~2.5GiB가 남는 계산이다(실측 OS 사용량 아님). [Azure Bsv2 공식 사양](https://learn.microsoft.com/en-us/azure/virtual-machines/sizes/general-purpose/bsv2-series)의 B2ls_v2는 2vCPU/4GiB, B2s_v2는 2vCPU/8GiB이며 CPU credit 소진 시 기준 성능으로 제한된다. 현 이미지는 amd64이므로 x86-64 VM을 선택한다. 지역 가용성·학생 구독 quota·가격은 미확인이다.
+- Azure: 사용자가 VM을 아직 만들지 않았다고 확인했다. 이번 환경에는 Azure CLI도 없다. VM 생성·리소스 변경·시작·입력 업로드·배포·외부 공개는 수행하지 않았다. 실측 자원과 여유를 바탕으로 VM 사양·지역·비용을 정하고, 생성/배포 전 별도 승인받아야 한다.
+
+## 2026-09-20 — A. Actions 내부 Node.js 24 전환
+
+- 변경: checkout v4→[v5.1.0](https://github.com/actions/checkout/releases/tag/v5.1.0), setup-python v5→[v6.3.0](https://github.com/actions/setup-python/releases/tag/v6.3.0), setup-node v4→[v5.0.0](https://github.com/actions/setup-node/releases/tag/v5.0.0), login-action v3→[v4.6.0](https://github.com/docker/login-action/releases/tag/v4.6.0), build-push-action v6→[v7.4.0](https://github.com/docker/build-push-action/releases/tag/v7.4.0). 공식 release와 각 SHA의 `action.yml`에서 `node24`를 확인하고 full commit SHA+버전 주석으로 고정했다(확인일 2026-09-20 KST).
+- 계약: 프로젝트 Node.js 22·Python 3.12, publish=false 검증, 동일 커밋 reusable CI 성공 후 publish=true+main 게시, 게시 job에만 packages:write를 유지했다. 의존성·lockfile·Dockerfile 변경은 없다.
+- 호환성: Node.js 24 Action의 runner 최소 v2.327.1과 기존 게시 run의 v2.337.0을 대조했다. checkout v5.1.0의 pull_request_target 기본 동작 변경은 현재 event에 해당하지 않는다.
+- 검증: 기존 run 35455393542의 Node.js 20 경고 대상과 수정 대상을 대조했고 YAML·SHA/게시 조건 정적 검사, 로컬 actionlint v1.7.7과 독립 리뷰를 통과했다. 실제 새 GitHub CI와 경고 소멸은 사용자 push/PR 반영 후 재검증해야 한다.
+
+기록 양식은 다음과 같다.
+
+```markdown
+## YYYY-MM-DD — <작업 목적>
+
+- 변경: <실제 수정한 코드·설정·문서와 이유>
+- 검증: <환경, 실행 명령 또는 Actions 실행, 실제 결과와 제외 항목>
+- 버전: <변경했다면 전후 버전, 공식 근거와 확인일>
+- 제한·다음: <미검증 사항과 다음 작업>
+```
+
+## 2026-09-19 — GitHub Actions CI·GHCR 게시 workflow 추가
+
+- `.github/workflows/ci.yml`은 PR·main push에서 PostgreSQL 기반 fixture Python 테스트, Vue 테스트·build, API·pipeline·web Docker build를 실행한다. 저장소에 없는 처리 데이터·artifact가 필요한 `test_postgres_e2e.py`와 macOS 전용 환경 검사는 제외한다.
+- `.github/workflows/publish-ghcr.yml`은 수동 실행만 가능하며 `publish=false`가 기본이다. 값과 관계없이 같은 커밋의 reusable CI를 실행하고, 성공 후 `publish=true`이면서 `refs/heads/main`일 때만 API·pipeline·web 이미지를 GHCR에 commit SHA tag로 게시한다. `packages: write`는 게시 job에만 부여한다.
+- 로컬 actionlint·게시 조건 검사 통과. [새 PR #3의 Actions](https://github.com/sjinie/Coffee_Price_Prediction/actions/runs/35449683380)에서 Python 68개 통과·데이터 기반 재현 1개 skip, frontend 테스트 3개·build, API·pipeline·web Linux Docker build가 모두 성공했다. `test_postgres_e2e.py`와 macOS 전용 환경 검사 파일은 위와 같이 제외한다. 이미지 게시·Azure 배포는 수행하지 않았다.
+
+## 2026-09-19 — 의존성 파일 확인·보완
+
+- 기존 `frontend/package.json` 기준으로 `package-lock.json`을 offline 재생성했고 기존 버전은 유지했다. 직접 사용하는 `joblib==1.5.3`을 `requirements.txt`와 `requirements-pipeline.txt`에 명시했다. API 전용 목록은 유지했다.
+- 외부 CPython 3.12.14에서 활성 Python·Notebook·테스트의 정적 import 대조상 누락 없음, `uv pip check` 통과, 세 requirements의 offline strict dry-run은 설치 변경 없음이었다. sandbox의 환경 lock 생성 경고가 있었으며 새 환경 설치 검증은 수행하지 않았다.
+- 프런트엔드 테스트 3개와 production build 통과. 기존 staged 변경을 보존했으며 commit/push는 수행하지 않았다.
+
+<a id="news-intelligence-v1"></a>
+
+## 2026-09-19 — News Intelligence 진단·실험·서빙
+
+**가격 모델은 5·20일 Persistence, 60일 DLinear를 유지했다. 뉴스 입력과 가격 결합 후보는 채택하지 않았으며, 이번 변경의 기존 서빙 대비 가격 RMSE 개선은 0%다.** 별도로 표시하는 상승 확률은 5일 수치 피처 CatBoost만 Validation 기준을 통과했고, 20일 CatBoost·60일 Logistic Regression은 실험적 확률로 남겼다. 기존 노트북·데이터·artifact와 아래 이전 실행 기록은 보존한다.
+
+### 기존 예측 진단
+
+외부 CPython 3.12.14에서 [baseline_diagnostics.parquet](../data/processed/news_intelligence_2026-09-19/diagnostics/baseline_diagnostics.parquet)와 [notebook_ses_diagnostics.parquet](../data/processed/news_intelligence_2026-09-19/diagnostics/notebook_ses_diagnostics.parquet)를 확인했다. 기간은 이미 본 2024~2025년이며, 아래 오차·표준편차는 로그수익률 단위다. 진단용 보합은 `abs(return) < 0.001`(10bp)이고 exact sign 평가와 구분한다.
+
+| 지평·서빙 모델 | 사례 수 | RMSE / MAE | 예측 평균 / 표준편차 | 실제 표준편차 | 예측 10bp 미만 | exact / 10bp 방향 정확도 |
+|---|---:|---:|---:|---:|---:|---:|
+| 5일 Persistence | 498 | 0.054442 / 0.042810 | 0 / 0 | 0.054068 | 100% | 0.40% / 1.20% |
+| 20일 Persistence | 483 | 0.113005 / 0.085380 | 0 / 0 | 0.109302 | 100% | 0% / 1.04% |
+| 60일 DLinear | 443 | 0.167943 / 0.140408 | 0.015150 / 0.045342 | 0.157659 | 2.48% | 60.05% / 58.92% |
+
+노트북의 5·20일 지수평활은 exact 방향 정확도가 51.0040%·50.9317%여도 예측 수익률 전부가 1bp 미만이었다. 10bp 보합을 적용하면 1.2048%·1.0352%로, 서빙의 가격 유지와 같은 값이다. 이 진단은 원 노트북 지표를 수정하거나 약 51%를 유효한 방향 예측력으로 인정한 것이 아니다. 전체 분포·분위수·예측별 값은 기존 diagnostics Parquet에 남겼다.
+
+### 뉴스 범위와 시점
+
+- Daily Coffee News WordPress 메타데이터 7,548건, 공개일 2014-07-01~2025-12-31. 실제 수집일은 2026-09-19이며 유료 API·LLM 호출은 0회다. [이용약관](https://dailycoffeenews.com/terms-of-service/)의 개인·비상업적 이용 제한을 확인했고, 본문 저장·기사 API 공개·원문 재배포는 하지 않는다. `summary`는 모두 빈 문자열이다.
+- 저장 위치는 [news/articles.parquet](../data/processed/2014-07-01_2025-12-31/news/articles.parquet). `title-rules-v2`로 관련 4,554건, 강세 18건·약세 14건·중립 7,516건이다. 제목의 주제·수급 영향 규칙이며 일반 감성 분석이나 가격 인과효과로 해석하지 않는다.
+- UTC 23시 기준 `published_at`과 `modified_at`을 모두 제한한다. 229건은 2025년 이후 수정되어 이번 과거 평가에서 제외됐다. `historical`은 수집 시각 제한을 풀어 과거 공개·수정 시각으로 재생하므로 당시 최초 공개본을 복원한 백테스트가 아니다. `live`는 `collected_at <= as_of`도 요구한다.
+- 실제 뉴스 증분 수집은 7일 겹침으로 18건을 받아 최초 수집 버전과 7,548행을 그대로 보존했다. 연속 수집 범위를 Parquet 속성에 기록하며, 범위 부족·수집 실패와 정상 조회의 기사 0건을 구분한다.
+
+### 실험 설계와 클래스 불균형
+
+Train은 2015년부터 2020·2021·2022년 말까지 확장하고, 정답 날짜가 각 cutoff를 넘는 행은 제거했다. Validation은 각각 2021·2022·2023년이며 정답도 해당 연도 안에서 끝나야 한다. 수치 입력은 가격 4개+거시 3개, 뉴스 입력은 여기에 지평별 집계 창을 하나씩 더한다. 5일은 1/3/7일, 20일은 7/14/30일, 60일은 14/30/60일 창이다. 기사 0건 때문에 평가일을 제거하지 않으며 모든 후보와 현재 가격 기준을 같은 날짜로 비교했다.
+
+Logistic Regression/Ridge, CatBoost, LightGBM의 고정 설정(seed 42)으로 수치/뉴스 회귀 A/B와 수치/뉴스 분류를 비교했다. 회귀 결합은 C1=회귀 원값, C2=회귀 절댓값×분류 방향, C3=`0.5*r + 0.5*σ_train*(2*p-1) + 0.1*σ_train*news_impact`다. 수치 전용의 뉴스 영향은 0이다. 학습된 meta-model은 없고 OOF·Test에 별도 모델이나 가중치를 fit하지 않았다. 60일 DLinear 기준도 fold별 cutoff까지 다시 학습했다. 선택을 고정한 뒤 2015~2023년으로 재학습하고 이미 본 2024~2025년을 기술 평가했다.
+
+| 지평 | Train 행 수: 2020 / 2021 / 2022년 말 | Validation 2021 상승/하락/보합 | 2022 상승/하락/보합 | 2023 상승/하락/보합 | 이미 본 2024~2025 상승/하락/보합 |
+|---|---|---|---|---|---|
+| 5일 | 1,314 / 1,566 / 1,817 | 144 / 103 / 0 | 108 / 137 / 1 | 119 / 126 / 0 | 273 / 223 / 2 |
+| 20일 | 1,299 / 1,551 / 1,802 | 169 / 63 / 0 | 95 / 136 / 0 | 120 / 110 / 0 | 289 / 194 / 0 |
+| 60일 | 1,258 / 1,510 / 1,761 | 189 / 3 / 0 | 53 / 138 / 0 | 88 / 102 / 0 | 350 / 93 / 0 |
+
+실제 수익률 0인 사례는 회귀에는 남기고 분류 학습·평가에서 제외한다. 따라서 `P(up)`은 보합 제외 조건부 확률이다. 분류 기준은 항상 상승·항상 하락·Train 다수 클래스·Train 상승 비율이며, 두 클래스가 있는 경우 상수 방향의 BA는 0.5다. 특히 60일 2021년에는 하락이 3건뿐이어서 BA·AUC도 변동에 민감하다.
+
+### 선택 결과와 fold 변동
+
+선택 규칙은 [설계의 채택 기준](architecture.md#news-intelligence-selection)에 고정했다. 분류는 평균 BA ≥0.52, 3개 중 2개 이상 fold에서 다수 클래스 BA 초과, 평균 Brier ≤Train 상승 비율 기준을 모두 요구한다. 가격 회귀는 평균 상대 RMSE 개선 ≥1%, 2개 이상 fold 개선, 최악 fold ≥−5%이며 5·20일에는 방향 BA 조건도 추가된다. 뉴스 후보는 동일 모델·동일 C번호의 수치 후보보다 평균과 2개 이상 fold에서 더 좋아야 한다.
+
+수치 피처만 사용한 세 분류기의 Validation BA를 먼저 비교했다. 아래 값은 평균 ± fold 표준편차이며, 최고 BA라는 이유만으로 Brier 기준을 생략하지 않는다.
+
+| 지평 | Logistic Regression | CatBoost | LightGBM |
+|---|---:|---:|---:|
+| 5일 | 0.517598 ± 0.038577 | 0.530362 ± 0.058599 | 0.522303 ± 0.025804 |
+| 20일 | 0.546539 ± 0.054105 | 0.557942 ± 0.023629 | 0.488299 ± 0.080309 |
+| 60일 | 0.642001 ± 0.038274 | 0.585839 ± 0.075208 | 0.577898 ± 0.134543 |
+
+| 별도 분류기 | BA 2021 / 2022 / 2023 | BA 평균 ± fold 표준편차 | 평균 Accuracy / F1 / AUC | 평균 Brier / Train 비율 Brier | 결과 |
+|---|---|---:|---|---|---|
+| 5일 수치 CatBoost | 0.595267 / 0.481346 / 0.514472 | 0.530362 ± 0.058599 | 0.520929 / 0.454274 / 0.550295 | 0.250869 / 0.250897 | Validation 기준 통과 |
+| 20일 수치 CatBoost | 0.570583 / 0.572562 / 0.530682 | 0.557942 ± 0.023629 | 0.513840 / 0.496519 / 0.544473 | 0.262426 / 0.256095 | Brier 미달, 실험적 확률 |
+| 60일 수치 Logistic Regression | 0.600529 / 0.675964 / 0.649510 | 0.642001 ± 0.038274 | 0.487659 / 0.511560 / 0.697227 | 0.307916 / 0.275151 | Brier 미달, 실험적 확률 |
+
+평균 BA가 가장 높았던 뉴스 분류 후보도 채택 조건을 만족하지 못했다. 아래는 지평별 뉴스 후보의 최고 BA이며, 결과를 본 뒤 기준을 낮추지 않았다.
+
+| 지평·뉴스 후보 | BA 평균 ± fold 표준편차 | 평균 Brier / Train 비율 Brier | 채택하지 않은 근거 |
+|---|---:|---|---|
+| 5일 LightGBM·7일 창 | 0.546384 ± 0.033368 | 0.260460 / 0.250897 | Brier 기준 미달 |
+| 20일 CatBoost·7일 창 | 0.563224 ± 0.027942 | 0.256613 / 0.256095 | Brier 기준 미달 |
+| 60일 Logistic Regression·14일 창 | 0.625720 ± 0.021051 | 0.332559 / 0.275151 | Brier 미달, 수치 전용 평균 BA보다 낮음 |
+
+같은 CatBoost 회귀(C1)에서도 수치 전용 A와 뉴스 추가 B를 비교했다. 뉴스 창은 각 지평의 **C1 Validation 평균 RMSE가 가장 낮은 창**이며, Test로 고르지 않았다. 모든 오차는 같은 평가 날짜의 로그수익률 기준이다.
+
+| 지평 | 비교 뉴스 창 | Validation 수치 RMSE | Validation 뉴스 RMSE | 이미 본 2024~2025 수치 RMSE | 이미 본 2024~2025 뉴스 RMSE |
+|---|---|---:|---:|---:|---:|
+| 5일 | 1일 | 0.049840 | 0.049835 | 0.054934 | 0.054579 |
+| 20일 | 14일 | 0.097173 | 0.094388 | 0.106710 | 0.102986 |
+| 60일 | 30일 | 0.175376 | 0.178650 | 0.179451 | 0.170841 |
+
+이는 뉴스 유무만 바꾼 동일 모델 비교이며 자동 채택 결과가 아니다. Validation 평균 RMSE가 조금 줄어도 기존 가격 기준 대비 fold별 상대 개선·최악 fold·방향 조건을 모두 만족해야 한다. 평균 RMSE의 비율과 fold별 상대 개선율의 평균도 서로 다른 집계다.
+
+가격 기준을 제외한 후보 중 평균 상대 RMSE 개선이 가장 컸던 결과는 다음과 같다. 양수는 기존 가격 기준보다 오차가 작다는 뜻이며, **fold별 상대 개선율의 산술평균**이다.
+
+| 지평·최상위 가격 후보 | 2021 / 2022 / 2023 개선 | 평균 ± fold 표준편차 | 가격 기준 유지 이유 |
+|---|---|---|---|
+| 5일 수치 Logistic/Ridge C2 | +0.7982% / −0.1638% / −0.7577% | −0.0411% ± 0.7852%p | 평균 1% 미달, 개선 fold 1개 |
+| 20일 뉴스 14일 CatBoost C3 | +0.2500% / −6.3757% / +2.3404% | −1.2618% ± 4.5504%p | 평균 1%·최악 fold 기준 미달 |
+| 60일 수치 Logistic/Ridge C3 | +3.4211% / −5.0365% / +11.8523% | +3.4123% ± 8.4444%p | 2022년이 −5% 미만 |
+
+선택된 분류기의 **이미 본 2024~2025년 기술 평가**는 아래와 같다. 분류 평가는 5일 496건, 20일 483건, 60일 443건이다. Test를 보고 모델·threshold·가중치를 바꾸지 않았다.
+
+| 지평 | Accuracy | BA | F1 | AUC | Brier / Train 비율 Brier | 항상 상승 Accuracy |
+|---|---:|---:|---:|---:|---|---:|
+| 5일 | 0.477823 | 0.475542 | 0.512241 | 0.464659 | 0.256612 / 0.251074 | 0.550403 |
+| 20일 | 0.633540 | 0.597189 | 0.718601 | 0.627065 | 0.227808 / 0.250144 | 0.598344 |
+| 60일 | 0.534989 | 0.512273 | 0.652027 | 0.555054 | 0.258575 / 0.244463 | 0.790068 |
+
+5일의 `validated`는 위 Validation 기준 통과만 뜻한다. Brier 통과 폭도 약 0.000028로 작고, 기술 평가 BA는 0.5 아래로 내려갔다. 20일의 기술 평가가 좋아도 Validation 미달 상태를 승격하지 않는다. 3개 fold·단일 seed·중첩 수익률이고 같은 Validation에서 후보를 선택했으므로 독립 outer 검증이 아니다. 표의 표준편차는 연도별 산포이지 신뢰구간이 아니며, 이번 실험은 의존성을 고려한 신뢰구간이나 통계적 우월성을 제시하지 않는다.
+
+전체 지표는 [fold_metrics](../data/processed/news_intelligence_2026-09-19/experiment_v1/fold_metrics.parquet)(477행), [validation_summary](../data/processed/news_intelligence_2026-09-19/experiment_v1/validation_summary.parquet)(159행), [seen_test_metrics](../data/processed/news_intelligence_2026-09-19/experiment_v1/seen_test_metrics.parquet)(159행)에 있다. Precision·Recall·confusion matrix도 fold 지표에 포함된다. [OOF 예측](../data/processed/news_intelligence_2026-09-19/experiment_v1/oof_predictions.parquet) 74,148행과 [기술 평가 예측](../data/processed/news_intelligence_2026-09-19/experiment_v1/seen_test_predictions.parquet) 52,688행을 대조해 후보 간 동일 날짜, 중복 키 0건, 학습 정답일 < 평가 시작일, 예측일 < 정답일을 확인했다. 새 보고서는 만들지 않았다.
+
+### 서빙·검증 범위
+
+- 선택 run ID는 `20260919T084409Z-467e2dc1`. 원본 [news_intelligence_v1.joblib](../model_artifacts/news_intelligence_v1.joblib)의 36개 모델 쌍은 보존하고 [news_intelligence_v1_serving.joblib](../model_artifacts/news_intelligence_v1_serving.joblib)에 선택된 3쌍만 담았다. 두 artifact의 선택과 Parquet에서 재계산한 선택이 일치한다. 기존 `production_dlinear_60.pt`는 그대로 사용한다.
+- Mac의 Torch·LightGBM 동시 로드 segfault를 재현한 뒤 공통 `coffee_service/__init__.py`에서 `os.environ.setdefault("OMP_NUM_THREADS", "1")`을 적용했다. 사용자 override는 유지하며, 새 실험은 import 전에 셸에서 `export OMP_NUM_THREADS=1`을 권장한다. Reviewer는 두 import 순서와 전체 원본 artifact 로드를 검증했다.
+- Coordinator 확인: 독립 Reviewer 두 명 모두 BLOCKER 0·HIGH 0. 실제 PostgreSQL을 포함한 최종 Python 테스트 **89개 통과, 67.54초, third-party 경고 3개**, Node 테스트 3개와 production build 통과. `uv pip check`는 165개 패키지 호환이다. Documenter는 이 테스트를 재실행하지 않고 저장 결과·코드·명령 인자를 대조했다.
+- Coordinator 확인: native·Docker backfill 성공, 가격 2,892행·예측 1,509행·현재 intelligence 모델 3개·소스 상태 16개. 실제 API 신호와 Vue 표시를 확인했으며, 현재 60일 모델 metadata에는 기존 노트북 Test RMSE `0.16794`가 유지된다. 이 수치는 뉴스 모델의 새 성과가 아니다.
+- Coordinator 추가 확인: Docker `live` incremental(종료일 2025-12-31)은 1,509건 모두 상승 확률이 있고 뉴스 영향·건수·수집 시각은 NULL이다. 2026년 실제 수집 시각을 과거에 사용할 수 없기 때문이다. 이어 `historical` incremental도 성공해 현재 3개 지평·1,509개 예측을 유지했고, historical 예측 전체 행 fingerprint는 재실행 전후 동일했다.
+- 위 모드 전환 후 DB 합계는 가격 2,892행, 예측 3,018행(현재 historical 1,509 + 비활성 live 1,509), 기사 7,548행, 뉴스 일별 집계 34,752행(2,896일×6개 창×2개 모드)이다. 모드별 기록을 중복 오류로 해석하지 않는다.
+- Coordinator 최종 확인: Docker `incremental --skip-ingestion --ingest-news`가 실제 18건을 수집한 뒤 가격 2,892행·예측 1,509행 적재에 성공했다. 뉴스 소스 상태는 `success`, 2025년 말 공개·수정 시각에 보이는 7,319행(7,548−229)이다. 전체 기사 7,548행과 historical 예측 snapshot은 다시 동일했고, 두 모드 예측 총 3,018행의 자연키도 모두 고유했다. native 실제 뉴스 incremental에서도 기사 7,548행이 유지됐다.
+- Coordinator 최종 브라우저 확인: 실제 DB의 5·20·60일 예측 가격·단순수익률·별도 상승 확률·가격 방향·뉴스·검증 상태·모드 표시, 차트 지평 버튼, 최신 예측 표의 모델 버전 상세를 확인했다. 기존 60일 Test RMSE `0.16794`도 표시된다. 320px에서 `document.scrollWidth=320`, 표 오른쪽 좌표 295로 가로 넘침이 없고 콘솔 오류·경고는 모두 0건이다.
+- Coordinator 최종 재시작 확인: 최종 API image가 healthy이며, 뉴스 작업 후 API·Nginx를 명시적으로 재시작해도 전체 가격 2,892행·현재 예측 1,509행·현재 모델 3개·뉴스 summary 응답 JSON이 재시작 전후 정확히 같고 health도 정상이다. 이번 로컬 runtime 점검은 완료했다. 미사용 미래 구간 검증, CI·클라우드 배포·정기 실행은 완료 범위에 포함하지 않는다.
+
+재현 명령은 [README](../README.md#news-intelligence)를 따른다. 진단·실험은 기존 출력 디렉터리와 artifact를 덮어쓰지 않고 새 이름으로 실행한다. 기존 Notebook 전체 재실행이나 원본 데이터·학습 artifact 교체는 이번 문서 작업에 포함하지 않았다.
+
+## 2026-09-19 — Docker Compose 로컬 재현
+
+- 실행 환경: Colima의 Linux ARM64, Docker Engine 29.5.2·Compose 5.5.1, Python 3.12.14, PostgreSQL 17.11. 기존 native venv나 호스트 PostgreSQL 없이 컨테이너 서비스를 실행했다.
+- 저장된 Parquet와 기존 60일 DLinear artifact를 입력으로 Compose의 PostgreSQL·API·Nginx 웹·파이프라인 작업을 재현했다. 새 프로젝트 volume에서 backfill과 같은 플래그의 incremental 두 번이 성공했고, 가격 2,892행·예측 1,509행·현재 모델 2건·소스 상태 15건이 저장됐다. 중복 가격·예측은 없었다. 외부 API 재수집과 모델 학습은 실행하지 않았다.
+- API·웹에서 365개 가격, 3개 예측, 15개 소스와 5·20·60일 지평을 확인했다. API·웹 재시작, 같은 Docker 응답의 반복 조회, `docker compose down` 뒤 `up`(volume 유지)에서도 결과는 동일했다. native 기준과 전체 가격·예측 응답을 비교했을 때 예측 가격의 최대 차이는 `6.103515625e-05`였고, 상대 `1e-6`·절대 `1e-5` 허용 범위에서 일치했다. 브라우저 fetch override로 주입한 503 상태 뒤 실제 API 복구도 확인했다.
+- 검증: native 전체 테스트 44개 통과(55.28초, deprecation 경고 2개), 컨테이너 seed 코드의 native 회귀 2개 통과, 프런트엔드 Node 테스트 2개는 native에서 통과했고 Vite production build는 native와 컨테이너에서 각각 통과했다. Reviewer 최종 pass는 0개 지적이었다. seed는 누락 파일만 임시 파일로 원자 복사하고 기존 작업 파일을 보존하도록 수정한 뒤 재검증했다. 원본 15개 Parquet와 artifact의 해시는 실행 전후 동일했다.
+- 제한: 저장 응답 기반 수집 검증만 했고 라이브 외부 API는 다시 호출하지 않았다. Linux amd64, 병렬 파이프라인 작업, base image tag와 전이 의존성의 완전한 고정은 검증하지 않았다. API image에는 pandas·torch·yfinance·scikit-learn을 넣지 않았고, pipeline image에는 notebook·EDA 의존성을 넣지 않았지만 컨테이너 이미지를 공개 배포한 것은 아니다.
+- 다음: CI/CD는 별도 작업으로 GitHub Actions 테스트·이미지 빌드, GHCR, Azure 배포의 범위를 설계한다. 구현은 아직 시작하지 않았다.
+
+## 2026-09-19 — 예측 방향과 가격 오차 시각화
+
+- 실제·예측 비교 아래에 기준일 종가 대비 등락률, 방향 일치율, 가격 MAE와 부호 있는 오차 막대를 추가했다. 방향 불일치는 빨간 막대로 구분하며 목표일 선택으로 기준가·등락률·예측/실제 가격을 확인한다.
+- 현재 표시된 최대 180개 평가점으로 계산한다. 상승·하락·보합을 별도로 비교하며 실제값이 없는 예측은 제외한다. 조회된 365개 가격에 기준일이 없으면 방향 평가에서 제외하고 제외 건수를 표시한다. 가격 오차는 예측−실제이며 MAE와 기존 로그수익률 Test RMSE는 다른 지표다.
+- 테스트 2개·빌드 통과. 독립 코드 검토에서 조치할 버그 없음. 저장 자료를 UTF-8 임시 PostgreSQL에 재적재해 5/20/60일 전환, 날짜 선택, 320px 가로 넘침·콘솔 오류 없음을 확인했다. 60일 최근 180건 방향 일치는 122건(67.78%), 가격 MAE는 43.83¢/lb였으며 전체 Test 성과로 해석하지 않는다. API·학습·원본 자료 변경은 없다.
+
+## 2026-09-19 — 모노톤 데이터 콘솔로 정리
+
+- 로고·브랜드 바·아이콘을 제거하고 종목명과 기준일 중심의 헤더로 줄였다. 패널·탭·상태는 흑백으로 통일하고 차트·가격 등락·실패 강조에만 색을 남겼다.
+- 프런트엔드 테스트와 빌드 통과. 브라우저에서 일반 요소의 계산된 색상이 무채색임을 확인했고, 1440px 화면·320/390px 가로 넘침 없음·지평 전환·콘솔 오류 없음을 검증했다. 320px 고가/저가 숫자 간격도 조정했다. API·모델·데이터 변경은 없다.
+
+## 2026-09-19 — 대시보드 정보 밀도 개선
+
+- 큰 소개 영역을 줄이고 지표 띠, 가격·예측 차트와 요약의 2열 배치, 소스 상태 3열 목록으로 재구성했다. 차트 수치 눈금·정답 날짜·예측 기준일을 표시하고 모바일에서는 단일 열로 전환한다. 기존 API와 모델·데이터는 변경하지 않았다.
+- 조회·오류 재시도·로딩·빈 데이터 상태, 키보드 포커스·본문 바로가기·동작 줄이기를 반영했다. 신규 의존성 없이 Vue와 CSS를 사용했다.
+- `npm test`와 `npm run build` 통과. 브라우저에서 1440px 화면, 390·320px 모바일 가로 넘침 없음, 지평 전환과 15개 소스·3개 예측, 오류/빈 응답/로딩 후 실제 API 복구를 확인했다. 독립 검토에서 BLOCKER/HIGH/MEDIUM은 없었고, 재시도 후 포커스 복구 지적도 수정했다.
+
+## 2026-09-19 — Local E2E 구현 및 검증
+
+- 저장된 `data/processed/2014-07-01_2025-12-31/` 소스를 사용해 `coffee_service.pipeline backfill --skip-ingestion --end 2025-12-31`을 완료했다. PostgreSQL에는 가격 2,892행, 예측 1,509행, 소스 상태 15건, 현재 모델 2건이 저장됐다. 외부 API 재수집은 하지 않았다.
+- API는 가격·예측·현재 모델·파이프라인·소스 상태를 조회하며, Vue 대시보드는 5·20·60일 전환과 세 카드·유한한 차트를 표시한다. 브라우저에서 500px 너비의 가로 넘침과 콘솔 오류 없이 확인했다.
+- 5·20일은 Persistence, 60일은 DLinear artifact를 사용한다. 별도 `/tmp` 재학습에서 2,011 학습행과 weight·scaler가 artifact와 정확히 일치했다. 기존 443개 Test 사례의 DLinear RMSE는 `0.16794263786669386`, MAE는 `0.14040843700016423`이었다. 이 결과만으로 60일 우위를 확정하지 않는다.
+- 검증: PostgreSQL 17.11 전용 DB를 연결한 `tests/test_local_e2e.py`·`tests/test_postgres_e2e.py` 13개(26.30초), 모델·추론 8개, 환경 19개를 통과했다. 최종 HIGH 수정 전 전체 36개, 수정 후 해당 회귀 13개를 각각 실행했으며 최종 40개를 한 번에 실행한 기록은 아니다. `uv pip check`는 165개 패키지 호환, `npm install`, `npm run build`도 성공했다. Reviewer 결과는 BLOCKER 0, HIGH 0이다.
+- 수집은 7일 겹침 구간을 원자적으로 병합한다. 가격과 필수 ALFRED 3개가 실패하면 중단하고, NASA·COT 등 보조 소스 실패는 상태에 기록한다. 커피 최신일 기준 거시 자료 14일 초과는 서빙을 막는다. NYSE와 두 예외를 합친 거래일 달력, Yahoo·NASA 과거 자료 수정 한계는 유지한다.
+- 다음: 다른 시점의 검증으로 DLinear 후보를 재평가한다. CI·클라우드 배포와 정기 수집은 아직 구현·검증하지 않았다.
+
+## 2026-09-14 README에 분석 흐름과 결과 정리
+
+- 03-1의 EDA·피처 그룹 비교부터 03-2의 개별 모델·두 앙상블 실험까지 README에 정리했다. 수집 기간과 노트북 링크를 갱신하고, 기상 버퍼·발표 시점·방향 기저율·가격 단위 오차에서 배운 점을 humanizer 스킬로 다듬었다.
+- 저장된 노트북 출력에서 STL·피처 상관·미래 가격 비교·50:50 앙상블 차트 4장을 `docs/images/`로 추출했다. 개별 모델과 가중평균 요약표를 원 출력에 대조하고, 로컬 링크 15개·Markdown 표 6개·이미지 4개의 렌더 구조와 한글 표시를 확인했다. 이미지 바이트는 원 출력과 같고 노트북·데이터·환경은 변경하지 않았다. 모델 재학습은 하지 않았다.
+- 다음: 시간 순서 검증에서 후보의 개선이 유지되는지 확인한 뒤 서빙 모델을 정한다.
+
+## 2026-09-14 — RMSE·방향 정확도 1위의 가중평균 비교
+
+03-2의 기존 33셀·출력은 보존하고 하단에 6셀을 추가했다. 50% 필터 없이 Validation RMSE 최저와 방향 정확도 최고 모델을 고른 뒤, RMSE 모델 비중 1/0.75/0.5/0.25/0을 같은 Validation·Test 날짜에서 비교했다. 방향 정확도는 결합한 예측의 부호로 재계산했다. 모델·그룹·설정 식별자와 지표 30행을 출력했으며, 두 역할이 같은 경우에는 단독 결과만 한 번 표시한다.
+
+아래는 Validation RMSE가 가장 낮았던 비중과 그 비중의 Test 결과다. 가중치를 자동 채택하거나 기존 모델 선택을 바꾸지는 않았다.
+
+| 지평 | RMSE 최저 / 방향 정확도 최고 모델 | RMSE 모델 비중 | 검증 RMSE | Test RMSE | Test 방향 정확도 |
+|---|---|---:|---:|---:|---:|
+| 5일 | 지수평활 / 전체 피처 CatBoost(150) | 1.00 | 0.04707 | 0.05444 | 51.00% |
+| 20일 | 지수평활 / 전체 피처 CatBoost(150) | 0.50 | 0.09033 | 0.11209 | 53.00% |
+| 60일 | 가격+거시 DLinear(50 epoch) / 가격+거시 LSTM(100 epoch) | 0.75 | 0.14611 | 0.17572 | 55.76% |
+
+5일은 Validation에서 단독 모델이 가장 좋았다. 20일은 수익률 크기를 줄여 RMSE가 소폭 개선됐고 방향 정확도는 CatBoost 단독과 같았다. 60일의 75:25는 Test에서 DLinear 단독(RMSE 0.16794·방향 60.05%)보다 두 지표 모두 나빠졌다.
+
+검증: 외부 Python 3.12 새 커널에서 필요한 기존 모델 예측을 재현하고 추가 코드 3셀을 실행했다(약 169초). 원 단독 지표가 저장 표의 소수점 5자리와 일치했고, 근소한 지수평활·Naive 순위는 반올림 전 값으로 확인했다. 공통 날짜·단독 가중치·방향 재계산·동일 후보·동률 처리·기존 선택 보존을 검사했다. 기존 33셀·출력 불변, notebook 구조·문법·오류 없음과 표의 수치를 확인했다. 앞부분 전체 재실행이나 패키지·데이터 변경은 하지 않았다.
+
+다음: 이번 가중치별 표를 탐색 결과로 남기고, 시간을 옮긴 검증에서 단독 모델 대비 개선이 유지되는지 확인한다. Test로 가중치를 다시 고르지 않는다.
+
+## 2026-09-14 — 앙상블 평가의 시행착오 기록
+
+- `troubleshooting.md`에 60일 방향 기저율 변화(상승 41.04%→79.01%), 오차 상관 증가(0.74947→0.90429)와 단독 모델 대비 악화, 20일 가격 단위 개선폭을 기록했다. 50% 필터의 통계적 의미, 상관계수와 공분산, 로그수익률과 가격 RMSE를 구분하고 시장 원인·서빙 비용을 확정하는 표현은 제외했다.
+- 검증: 03-2의 저장 표와 계산 코드를 대조했다. 20일 가격 RMSE 차이 0.0718센트/파운드·개선율 0.20%, 가격 MAE 개선율 1.93%를 표에서 재계산하고 공식 자료의 지표 정의·시장 배경을 확인했다. 이번에는 문서만 변경했으며 모델 재학습·노트북 재실행·서빙 비용 측정은 하지 않았다.
+- 다음: 시간 순서 검증에서 앙상블과 단독 모델을 함께 비교하고, 방향별 재현율과 개선의 지속성을 확인한 뒤 서빙 복잡도를 늘릴지 결정한다. 기존 모델·가중치 선택은 유지한다.
+
+## 2026-09-14 — 방향 조건을 적용한 50:50 앙상블 추가
+
+03-2의 기존 26셀과 저장된 출력을 그대로 두고, 하단에 설명·코드·해석 7셀을 추가했다. Validation 방향 정확도 50% 이상인 모델·피처 조합 중 RMSE가 낮은 두 개를 골라 로그수익률을 반씩 평균했다. 개별 설정과 기존 선택은 유지했고 Test로 재선택하지 않았다.
+
+| 지평 | 앙상블 구성 | 검증 RMSE | Test RMSE | Test 방향 정확도 | Test Naive 대비 RMSE 개선 |
+|---|---|---:|---:|---:|---:|
+| 5일 | CatBoost 가격+거시 / CatBoost 전체 | 0.04750 | 0.05473 | 51.41% | -0.53% |
+| 20일 | ARIMA / CatBoost 전체 | 0.09034 | 0.11209 | 53.00% | +0.81% |
+| 60일 | DLinear 가격+거시 / LightGBM 전체 | 0.13872 | 0.17236 | 62.30% | +7.21% |
+
+5일은 구성원보다 조금 좋아도 Naive를 넘지 못했다. 20일은 두 구간에서 소폭 개선됐지만 연도별 Test 개선율은 +3.33%/-0.85%로 달랐다. 60일은 Validation에서 구성원 최저보다 5.76% 좋아졌으나 Test에서는 DLinear 단독보다 RMSE가 2.63% 높았다. 방향 정확도는 DLinear의 60.05%에서 62.30%로 올라갔다.
+
+Test의 항상 상승 정확도는 5/20/60일 순서로 54.82%/59.83%/79.01%로 앙상블보다 높았다. 50% 통과만으로 방향 예측력을 확정하지 않는다. 60일 비중첩 시작점별 Naive 대비 개선도 -14.51%/+18.17%/+4.04%로 달랐다(8/8/7행). 현재 수정 자료·이미 확인한 Test·단일 seed라는 조건을 유지한다.
+
+검증: 외부 Python 3.12 새 커널에서 필요한 기존 모델과 예측 배열을 재현하고 추가 코드 5셀을 실행했다. 이번에는 앞부분 전체를 재실행해 덮어쓰지 않았다. 필요한 단독 지표가 기존 저장 표의 소수점 5자리 정밀도에서 일치하고, 표시 반올림이 선택 경계·순위를 바꾸지 않는 것도 확인했다. 50% 경계·후보 부족·공통 날짜·50:50 평균·가격 환산·지표 재계산·선택과 원 예측 보존 검사를 통과했다. 기존 26셀 내용·출력 불변, notebook 구조·문법·오류 없음, 추가 한글 차트 2개를 확인했다.
+
+다음 검토: 단독 모델을 자동 교체하지 않고 앙상블을 별도 후보로 남긴다. 가중치나 결합 방식을 확대하려면 시간 순서의 내부 검증 규칙부터 정한다.
+
+## 2026-09-13 — 03-2 신경망 epoch를 50/100으로 확대
+
+- DLinear·LSTM·Attention-LSTM의 epoch 후보를 30/60에서 50/100으로 바꿨다. Validation RMSE로 선택한 epoch를 Test 재학습에 적용했다. 데이터·분할·seed·모델 구조와 트리 150/300 설정은 유지했다.
+- 5·20일의 선택은 지수평활로 그대로다. 60일은 가격+거시 DLinear의 50 epoch가 선택됐다. 학습량 증가가 일관된 성능 개선으로 이어지지는 않았다.
+
+| 지평 | 선택 모델 / 그룹 | epoch | 검증 RMSE | Test RMSE | Test Naive 대비 개선 |
+|---|---|---:|---:|---:|---:|
+| 5일 | 지수평활 / 가격 단변량 | — | 0.04707 | 0.05444 | -0.00008% |
+| 20일 | 지수평활 / 가격 단변량 | — | 0.09102 | 0.11300 | +0.00006% |
+| 60일 | DLinear / 가격+거시 | 50 | 0.14719 | 0.16794 | +9.59% |
+
+60일 DLinear의 Validation 개선율은 7.88%다. 이전 30 epoch 결과(검증 7.76%, Test 9.63%)와 거의 같다. Test 연도별 개선율은 2024년 2.94%, 2025년 20.71%, 비중첩 시작점 0/20/40은 -6.02%/+19.56%/+8.43%였다(8/8/7행). 서빙 검토 후보는 유지하되 안정적인 우위를 확정하지 않는다.
+
+60일 Attention-LSTM은 세 그룹 모두 일반 LSTM보다 Validation RMSE가 낮았다. Test에서는 가격+거시·가격+기후가 11.06%·0.49% 개선됐고 전체 피처는 22.11% 악화됐다. 세 Attention 모델 모두 Test에서 Naive를 넘지 못했다. 전체 피처 LSTM(100 epoch)의 Test RMSE가 0.16648로 가장 낮았지만 Validation에서 Naive보다 4.17% 나빴으므로 선택을 바꾸지 않았다. 이미 본 Test·단일 seed·현재 수정 자료라는 조건을 유지한다.
+
+검증: 외부 Python 3.12.14 새 커널에서 코드 16셀을 전체 실행했다(약 22분). 거래일·시퀀스·미래 변경 불변성·공통 평가 행·표 지표·통계 모델 상태 갱신·선택 고정 검사를 통과했다. 저장된 출력과 해석을 갱신하고 notebook 구조·문법·오류 없음 및 한글 차트 4개를 확인했다. 패키지 설치나 데이터 재수집은 하지 않았다.
+
+## 2026-09-13 — 03-2 최초 비교 (30/60 epoch)
+
+- `03_2_horizon_model_validation.ipynb`를 독립 실행 노트북으로 추가했다. 31개 후보와 지평별 Naive 3개를 비교하고, 외생변수 후보 27개는 설정 두 개씩 Validation에서 선택했다. 기존 03·04·학부 원본과 데이터는 유지했다.
+- Train 2015~2021, Validation 2022~2023, Test 2024~2025를 유지했다. 신경망 입력은 60거래일이며 같은 유효 날짜를 모든 후보에 적용했다. 첫 학습일은 2015-01-13, Train은 5/20/60일 순서로 1,566/1,551/1,510행이다. Validation 496/481/441행, Test 498/483/443행은 그대로다.
+- 일반 LSTM과 Attention-LSTM은 은닉 64·2층·동일 출력층으로 맞췄다. 학부 코드의 Entmax·gate를 유지하고 정적 피처 분기·복합 손실·Test 기반 학습률 조정은 제거했다. 두 모델의 본체·출력층 초기 가중치가 일치하는 것도 확인했다. Entmax 1.3만 추가 설치했다.
+
+선택은 Validation RMSE로 고정했다. Test를 보고 다른 모델로 교체하지 않았다.
+
+| 지평 | 선택 모델 / 그룹 | 검증 RMSE | Test RMSE | 검증 Naive 대비 개선 | Test Naive 대비 개선 |
+|---|---|---:|---:|---:|---:|
+| 5일 | 지수평활 / 가격 단변량 | 0.04707 | 0.05444 | +0.00025% | -0.00008% |
+| 20일 | 지수평활 / 가격 단변량 | 0.09102 | 0.11300 | +0.00003% | +0.00006% |
+| 60일 | DLinear / 가격+거시 | 0.14739 | 0.16787 | +7.76% | +9.63% |
+
+5·20일 지수평활은 가격 유지와 사실상 같다. 20일 가격+거시 LightGBM은 Test에서 7.22% 개선됐지만 Validation에서는 Naive보다 11.97% 나빠 선택하지 않았다. 60일 전체 피처 LSTM도 Test 개선율 10.25%만 보고 선택하지 않았다(Validation 5.21% 악화).
+
+20일 기후 추가는 CatBoost·LightGBM의 Validation RMSE를 각각 6.60%·6.20% 줄였지만 Test에서는 6.11%·4.36% 늘렸다. 60일 DLinear에 기후를 추가하면 Validation·Test 모두 악화됐다. 기후 그룹의 추가 효과가 일관되게 유지되지는 않았다.
+
+60일 전체 피처에서 Attention은 일반 LSTM보다 Validation RMSE가 6.15% 낮았지만 Test에서는 21.12% 높았다. 가격+거시에서는 Test가 13.29% 개선됐으나 두 모델 모두 Naive를 넘지 못했다. 이번 설정에서 Attention의 안정적인 우위를 확인하지 못했다.
+
+60일 DLinear의 예측 기준일 연도별 Test 개선율은 2024년 2.94%, 2025년 20.84%였다. 비중첩 시작점 0/20/40에서는 -7.94%/+20.01%/+8.24%로 달랐고 표본은 각각 8/8/7개였다. 서빙 검토 후보는 가격+거시 DLinear로 남기되 안정적인 우위를 확정하지 않는다. 이미 본 Test·단일 seed·현재 Yahoo/NASA 수정 자료라는 조건도 유지한다.
+
+검증: 외부 Python 3.12.14의 새 커널에서 코드 16셀을 순차 실행해 저장했다(해석 Markdown 포함 총 26셀). 날짜·타깃·60일 시퀀스·미래 변경 불변성·공통 평가 행·표 지표 일치·통계 모델 상태 갱신·선택 고정 검사와 한글 차트 4개 확인을 마쳤다. 기존 03의 데이터·통계 모델 정의 8개도 일치했다. 환경 테스트 19개, 154개 패키지 호환성, requirements 오프라인 설치 dry-run을 통과했다.
+
+첫 실행의 마지막 차트 검사에서 float32 가중치 합의 약 1.25e-6 차이가 있었다. 값을 보정하지 않고 60개 float32 값의 합산 정밀도에 맞춰 허용오차를 수정한 뒤 전체 재실행을 완료했다. 모델 설정과 지표는 유지됐다. 기존 03·04·학부 원본은 변경하지 않았으며 데이터 재수집·모델 파일 배포·FastAPI 구현은 하지 않았다.
+
+## 2026-09-13 — requirements 의존성 복원
+
+- `requirements.txt`를 실제 외부 CPython 3.12 환경의 33개 패키지 버전으로 다시 작성했다. Apple 내부 wheel 경로를 제거하고 수집·Parquet·EDA·모델·notebook·테스트 의존성을 복원했다. PyCaret `timeseries` extra와 04의 Torch·XGBoost도 포함한다.
+- 검증: 활성 코드·테스트의 직접 import와 고정 버전 대조, extra를 포함한 전이 의존성 호환성 검사 통과. 현재 환경의 `uv pip check`는 153개 패키지 호환, `uv pip install --dry-run --offline --strict`는 변경 없음이었다. 기존 환경 테스트 17개 통과, 로컬 HTTP 테스트 2개 제외. 새 환경 설치나 패키지 변경·모델 재학습은 하지 않았다.
+
+## 2026-09-13 — 버퍼 백필과 03 전면 재작성
+
+03을 백업 없이 덮어쓰고 목표·정렬·Train EDA·그룹 선택·모델 비교의 다섯 장으로 정리했다. 기존 04와 데이터·학부 원본·`.env`는 유지했다. 현재 Yahoo·NASA 자료를 쓰는 연구용 비교는 사용자 확인을 받고 진행했다.
+
+- 수집 기본값을 `2014-07-01~2025-12-31`로 바꾸고 `02_backfill_10y.py`를 실행했다. 새 폴더에 Core-4 12개와 ALFRED 최초 공개값 3개 Parquet를 저장했다. 기존 파일의 스키마는 유지하고 ALFRED 파일에 관측일·공개 날짜·값·계열 ID를 저장했다. DFF의 공개본 개수 제한은 연도별 요청으로 해결했다.
+- 커피 원응답은 2,899행이며 OHLC 범위 이탈 455행은 원값을 유지했다. 거래일 달력의 가격 누락은 버퍼 1일·Train 3일이다. 기상 6곳은 2014-06-01~2026-01-30을 포함하며 원자료 결측 0개, 2015년 첫 학습일·Train 파생변수 결측도 0개였다. 기상 평균·중앙값 대치는 하지 않았다.
+- Train은 2015~2021, Validation은 2022~2023, Test는 2024~2025로 고정했다. 5/20/60일 순서로 Train 1,633/1,618/1,577행, Validation 496/481/441행, Test 498/483/443행이다. 각 지평 안에서는 모든 모델·그룹이 같은 평가 행을 사용하며 정답 날짜가 구간 끝을 넘는 사례는 제외한다.
+- 거시 입력은 ALFRED 최초 공개 BRL 환율·금리·WTI의 20거래일 변화다. 공개 날짜 다음 날부터 붙인다. 신 달러지수의 과거 소급 값과 실제 공개 일정이 미완성인 COT는 수집만 하고 이번 입력에서 제외했다. NASA 관측일+4일은 연구용 가정이며 과거 수정 전 공개본을 복원한 것은 아니다.
+- 기상 편차·강수 결손을 만든 뒤 최대 변수 상관은 약 0.886이었다. 기준 0.90을 넘는 쌍이 없어 축소 후보는 생략했다. 브라질 격자 서리·가뭄×서리 6개는 Train에서 상수라 제외했고, 서리 효과를 검증했다고 해석하지 않았다.
+
+같은 CatBoost 150개 트리·깊이 4로 비교한 결과다. **선택은 Validation에서 끝냈으며 Test 최저 그룹으로 다시 바꾸지 않았다.**
+
+| 지평 | Validation 선택 그룹 | 검증 RMSE | 선택 그룹의 Test RMSE | Test에서 관찰한 최저 그룹 / RMSE |
+|---|---|---:|---:|---|
+| 5일 | 가격+거시 | 0.04770 | 0.05489 | 가격+거시 / 0.05489 |
+| 20일 | 가격+거시+기후 | 0.09146 | 0.11227 | 가격+거시 / 0.10682 |
+| 60일 | 가격+거시+기후 | 0.15255 | 0.18320 | 가격+거시 / 0.17979 |
+
+20일 전체 그룹은 가격만 쓴 CatBoost보다 Validation에서 11.15% 개선됐지만 Test에서는 0.83% 악화됐다. 60일 전체 그룹은 같은 비교에서 각각 13.85%·2.25% 개선됐다. 다만 두 지평 모두 Test에서는 기후를 뺀 가격+거시가 더 나았다. 기상 편차의 추가 효과가 안정적으로 유지됐다고 결론 내리지 않는다.
+
+모델은 Naive·지수평활·ARIMA·Ridge·CatBoost·LightGBM·DLinear 변형·LSTM을 비교했다. 머신러닝은 위에서 선택한 그룹을 공통으로 쓰고 모델별 설정 두 개를 Validation에서 비교했다. Test 전에는 2015~2023년으로 재학습했다.
+
+| 지평 | Validation에서 고른 모델 | Test RMSE | Naive 대비 Test 개선율 |
+|---|---|---:|---:|
+| 5일 | 지수평활 | 0.05444 | -0.00008% |
+| 20일 | 지수평활 | 0.11300 | +0.00006% |
+| 60일 | LightGBM | 0.18258 | +1.71% |
+
+5·20일 지수평활은 가격 유지와 사실상 같다. 60일 LightGBM은 2024년에는 4.40% 악화, 2025년에는 11.77% 개선됐고 비중첩 시작점별 개선율도 -29.15~+10.25%였다(7~8행). DLinear는 60일 Test RMSE 0.17493으로 가장 낮았지만 Validation에서는 Naive보다 17.21% 나빠 사전 선택되지 않았다. Test 순위로 모델을 교체하지 않는다.
+
+정상성 진단은 가장 긴 연속 구간에서 5·20일 수익률의 ADF/KPSS가 정상성을 뒷받침하는 쪽이었지만, 60일은 ADF p=0.00817·KPSS p≤0.01로 엇갈렸다. CCF는 Train의 0~60거래일 시차 탐색으로 남겼다. 최고 상관 시차를 자동 채택하거나 인과적 전달 시간으로 설명하지 않았다.
+
+검증: 외부 Python 3.12.14 새 커널에서 26셀(코드 17셀) 전체 실행, notebook 구조·문법·오류 출력·한글 차트 확인. 미래 값 변경 불변성, 기상 기준값 범위, 정답 경계, 공통 행, 거래일 시차·가격 결측, 고정 모수 상태 갱신, 표 지표 일치를 검사했다. 기존 테스트 19개와 설치된 153개 패키지의 `uv pip check`도 통과했다. LightGBM 4.7.0만 추가 설치하고 학습·예측을 확인했다. ARIMA는 수렴 문제를 해결한 동일 Powell 설정을 두 구간에 적용했다. 기존 requirements의 다른 미커밋 변경은 유지했다.
+
+다음 단계: 설정 후보나 seed를 늘리기 전에 20·60일의 그룹 효과가 시간 구간을 바꿔도 유지되는지 확인한다. 신경망과 표 모델의 입력 표현 차이, 격자 서리의 한계, 과거 수정 자료·이미 본 Test·중첩 수익률을 유지해서 해석한다. 이번 결과만으로 특정 기후 피처나 모델의 안정적인 우월성을 확정하지 않는다. 04 재설계와 서비스 구현은 이번 작업에 포함하지 않았다.

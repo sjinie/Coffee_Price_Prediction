@@ -1,0 +1,94 @@
+{
+  "version": "2026-10-04",
+  "train_end": "2025-12-31",
+  "data_end": "2026-10-02 00:00:00",
+  "code_commit": "31df685",
+  "train_rows": {
+    "방향_5": 4844,
+    "수익률(LightGBM)_5": 4844,
+    "변동성_5": 4860,
+    "방향_20": 4829,
+    "수익률(LightGBM)_20": 4829,
+    "변동성_20": 4845,
+    "방향_60": 4789,
+    "수익률(Ridge)_60": 4789,
+    "변동성_60": 4728
+  },
+  "kind": "return",
+  "horizons": {
+    "5": {
+      "features": [
+        "ret_1",
+        "ret_5",
+        "ret_20",
+        "ret_60",
+        "vol_5",
+        "vol_20",
+        "vol_60",
+        "ma_gap_60"
+      ],
+      "model": "LightGBM",
+      "algorithm": "LightGBM 회귀 (변동성 정규화)",
+      "dev": {
+        "rmse_vs_naive_pct": 0.9389897628773625,
+        "balanced_acc": 0.5097914190438457
+      },
+      "holdout": {
+        "rmse_vs_naive_pct": 0.7065765751846032,
+        "direction_acc": 0.4966960352422907,
+        "balanced_acc": 0.4968463747865238
+      }
+    },
+    "20": {
+      "features": [
+        "ret_1",
+        "ret_5",
+        "ret_20",
+        "ret_60",
+        "vol_5",
+        "vol_20",
+        "vol_60",
+        "ma_gap_60"
+      ],
+      "model": "LightGBM",
+      "algorithm": "LightGBM 회귀 (변동성 정규화)",
+      "dev": {
+        "rmse_vs_naive_pct": 3.8146800394658786,
+        "balanced_acc": 0.5027610144068092
+      },
+      "holdout": {
+        "rmse_vs_naive_pct": 1.7378698126278458,
+        "direction_acc": 0.5301339285714286,
+        "balanced_acc": 0.5303456110978235
+      }
+    },
+    "60": {
+      "features": [
+        "ret_1",
+        "ret_5",
+        "ret_20",
+        "ret_60",
+        "vol_5",
+        "vol_20",
+        "vol_60",
+        "ma_gap_60"
+      ],
+      "model": "Ridge",
+      "algorithm": "Ridge 회귀 (변동성 정규화)",
+      "dev": {
+        "rmse_vs_naive_pct": 4.928975553137938,
+        "balanced_acc": 0.44030971731500396
+      },
+      "holdout": {
+        "rmse_vs_naive_pct": 3.8163018774534097,
+        "direction_acc": 0.37616822429906543,
+        "balanced_acc": 0.37278278569351553
+      }
+    }
+  },
+  "files": {
+    "h5.joblib": "c9558abdc385bbfe69d496c398b86105c6e436b0c7b158d3ef11688deaa4fc3e",
+    "h20.joblib": "65ccaa38e04cad7703ee121da0997a0ba006617069219c07866227c34415fc30",
+    "h60.joblib": "b23ca45bbdad91fb8b35821ec0537ea3b2ceb331aa49cd014d2fdbcec959b4e9"
+  }
+}
