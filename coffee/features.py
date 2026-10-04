@@ -13,7 +13,7 @@ import numpy as np
 import pandas as pd
 import pandas_market_calendars as mcal
 
-from .config import HORIZONS, REGIONS, SETTINGS, VOL_HORIZONS
+from .config import HORIZONS, REGIONS, SETTINGS
 
 WEATHER_LAG = pd.Timedelta(days=SETTINGS["weather"]["availability_lag_days"])
 HEAT_C = SETTINGS["weather"]["heat_threshold_c"]
@@ -198,7 +198,6 @@ def targets(close: pd.Series) -> pd.DataFrame:
     for h in HORIZONS:
         frame[f"y_{h}"] = np.log(close.shift(-h) / close)
         frame[f"target_date_{h}"] = sessions.shift(-h)
-    for h in VOL_HORIZONS:
         frame[f"v_{h}"] = np.log(daily.rolling(h, min_periods=h - 2).std().shift(-h))
     return frame
 

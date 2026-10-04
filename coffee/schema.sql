@@ -26,10 +26,12 @@ CREATE TABLE IF NOT EXISTS forecasts (
     origin_date    date NOT NULL,
     horizon        smallint NOT NULL CHECK (horizon IN (5, 20, 60)),
     target_date    date NOT NULL,
-    origin_close   double precision NOT NULL,      -- 중심 전망(현재가 유지)
+    origin_close   double precision NOT NULL,      -- 기준일 종가
+    predicted_return double precision,             -- 예측 로그수익률 (피처가 빠지면 NULL)
+    predicted_price  double precision,             -- origin_close · exp(predicted_return)
     prob_up        double precision NOT NULL CHECK (prob_up BETWEEN 0 AND 1),
     signal         text NOT NULL CHECK (signal IN ('buy', 'wait', 'hold')),
-    price_low      double precision,               -- 80% 범위 (20·60일만)
+    price_low      double precision,               -- 80% 범위 (예측 가격이 가운데)
     price_high     double precision,
     predicted_vol  double precision,               -- 예측 변동성(연율)
     vol_percentile double precision CHECK (vol_percentile BETWEEN 0 AND 1),  -- 최근 3년 예측 중 위치

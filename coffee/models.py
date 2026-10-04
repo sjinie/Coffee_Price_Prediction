@@ -149,6 +149,23 @@ class ScaledReturn:
         return self.model.predict(data, rows) * self._scale(data, rows)
 
 
+RETURN_ALGORITHMS = {  # 대시보드에 보여 줄 이름
+    "Ridge": "Ridge 회귀 (변동성 정규화)",
+    "LightGBM": "LightGBM 회귀 (변동성 정규화)",
+    "DLinear": "DLinear (변동성 정규화)",
+}
+
+
+def return_model(name: str, features, horizon: int) -> ScaledReturn:
+    """03에서 비교한 수익률 회귀 모델. 04·06·파이프라인이 같은 설정을 쓰도록 한곳에 둔다."""
+    make = {
+        "Ridge": lambda: RidgeModel(features, alpha=100),
+        "LightGBM": lambda: LightGBMModel(features, n_estimators=150, num_leaves=7, min_child_samples=100),
+        "DLinear": lambda: DLinearModel(features, alpha=1000),
+    }[name]
+    return ScaledReturn(make(), horizon)
+
+
 class LogisticModel:
     """상승 확률을 내는 로지스틱 회귀. predict()는 P(상승)을 돌려준다."""
     name = "Logistic"
@@ -223,11 +240,15 @@ def buy_signal(prob_up, threshold: float) -> np.ndarray:
 Z80 = 1.2815515655446004  # 표준정규 90% 분위수. 양쪽 10%씩 뺀 80% 범위
 
 
-def price_range(close, log_vol, horizon: int, multiplier: float):
-    """h거래일 뒤 가격의 80% 범위: close · exp(±1.28 · k · σ · √h). σ는 예측한 일간 변동성(exp(log_vol))."""
+def price_range(close, log_vol, horizon: int, multiplier: float, center=0.0):
+    """h거래일 뒤 가격의 80% 범위: close · exp(r̂ ± 1.28 · k · σ · √h).
+
+    σ는 예측한 일간 변동성(exp(log_vol)), r̂(center)은 예측 로그수익률이다. 범위는 예측 가격을 가운데에 둔다.
+    """
     half = Z80 * multiplier * np.exp(np.asarray(log_vol, float)) * np.sqrt(horizon)
+    center = np.asarray(center, float)
     close = np.asarray(close, float)
-    return close * np.exp(-half), close * np.exp(half)
+    return close * np.exp(center - half), close * np.exp(center + half)
 
 
 def _sha256(path: Path) -> str:

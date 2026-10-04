@@ -77,3 +77,5 @@ def test_buy_signal_and_price_range():
     low, high = price_range(100.0, np.log(0.02), 20, 1.0)
     half = 1.2815515655446004 * 0.02 * np.sqrt(20)  # 80% 범위의 로그 반폭
     assert np.isclose(low, 100 * np.exp(-half)) and np.isclose(high, 100 * np.exp(half))
+    low, high = price_range(100.0, np.log(0.02), 20, 1.0, center=0.05)  # 예측 가격 100·e^0.05를 가운데에 둔다
+    assert np.isclose(np.sqrt(low * high), 100 * np.exp(0.05)) and np.isclose(high / low, np.exp(2 * half))

@@ -5,10 +5,10 @@ import pandas as pd
 import pytest
 
 from coffee import db, jev, pipeline
-from coffee.config import HORIZONS, VOL_HORIZONS
+from coffee.config import HORIZONS
 from coffee.evaluate import usable_rows
 from coffee.features import FEATURE_GROUPS, build_dataset
-from coffee.models import LightGBMClassifier, RidgeModel, ShrunkProbability
+from coffee.models import LightGBMClassifier, RidgeModel, ScaledReturn, ShrunkProbability
 from coffee.pipeline import (EXIT_OK, EXIT_WARNING, RISK_WINDOW, _rolling_percentile, closed_prices, make_forecasts,
                              update_news)
 
@@ -19,19 +19,20 @@ HAR = ["log_vol_5", "log_vol_20", "log_vol_60"]
 def small_models(sources):
     data = build_dataset(sources)
     price = FEATURE_GROUPS["price"]
-    direction, volatility = {}, {}
+    direction, returns, volatility = {}, {}, {}
     for h in HORIZONS:
         fit = usable_rows(data, price, h, "2015-01-01", "2015-12-31", fit_end="2015-12-31")
-        direction[h] = ShrunkProbability(LightGBMClassifier(price, n_estimators=10), 0.25).fit(
-            data, fit, data[f"y_{h}"].to_numpy()[fit])
-    for h in VOL_HORIZONS:
+        y = data[f"y_{h}"].to_numpy()[fit]
+        direction[h] = ShrunkProbability(LightGBMClassifier(price, n_estimators=10), 0.25).fit(data, fit, y)
+        returns[h] = ScaledReturn(RidgeModel(price, alpha=100), h).fit(data, fit, y)
         fit = usable_rows(data, price, h, "2015-01-01", "2015-12-31", fit_end="2015-12-31", target=f"v_{h}")
         volatility[h] = RidgeModel(HAR, alpha=1).fit(data, fit, data[f"v_{h}"].to_numpy()[fit])
-    models = {"version": "test", "direction": direction, "volatility": volatility,
+    models = {"version": "test", "direction": direction, "return": returns, "volatility": volatility,
               "direction_meta": {"train_end": "2015-12-31",
                                  "horizons": {str(h): {"features": price, "threshold": 0.52} for h in HORIZONS}},
+              "return_meta": {"horizons": {str(h): {"features": price} for h in HORIZONS}},
               "volatility_meta": {"horizons": {str(h): {"features": HAR, "interval_multiplier": 1.0}
-                                               for h in VOL_HORIZONS}}}
+                                               for h in HORIZONS}}}
     return data, models
 
 
@@ -42,10 +43,11 @@ def test_forecast_rows_follow_the_serving_contract(small_models):
     assert len(rows) == len(origins) * len(HORIZONS)
     assert rows["prob_up"].between(0, 1).all() and rows["signal"].isin(["buy", "wait", "hold"]).all()
     assert (rows["target_date"] > rows["origin_date"]).all()
-    five, ranged = rows[rows["horizon"] == 5], rows[rows["horizon"] != 5]
-    assert five[["price_low", "price_high", "predicted_vol", "vol_percentile"]].isna().all().all()
-    assert ((ranged["price_low"] < ranged["origin_close"]) & (ranged["origin_close"] < ranged["price_high"])).all()
-    assert ranged["vol_percentile"].between(0, 1).all()
+    assert np.allclose(rows["predicted_price"], rows["origin_close"] * np.exp(rows["predicted_return"]))
+    # 세 지평 모두 범위가 있고, 범위는 예측 가격을 가운데(로그 척도)에 둔다
+    assert ((rows["price_low"] < rows["predicted_price"]) & (rows["predicted_price"] < rows["price_high"])).all()
+    assert np.allclose(np.sqrt(rows["price_low"] * rows["price_high"]), rows["predicted_price"])
+    assert rows["vol_percentile"].between(0, 1).all()
     last = rows[(rows["horizon"] == 60) & (rows["origin_date"] == data.index[-1].date())]
     assert last["target_date"].iloc[0] > data.index[-1].date()
 

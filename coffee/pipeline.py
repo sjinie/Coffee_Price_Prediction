@@ -25,13 +25,14 @@ from .sources import load_sources, update_all
 RISK_WINDOW = 756            # 위험 수준을 매기는 최근 3년(거래일)
 NEWS_LOOKBACK_DAYS = 7       # 매일 다시 훑는 뉴스 기간. 하루 이틀 실패해도 메운다
 EXIT_OK, EXIT_WARNING, EXIT_FAILED = 0, 3, 1
+MODEL_KINDS = ("direction", "return", "volatility")  # 상승 확률, 로그수익률, 변동성(예상 범위)
 
 
 def load_models(version: str = SETTINGS["model_version"]) -> dict:
-    direction, direction_meta = load_bundle(ARTIFACTS_DIR / version / "direction")
-    volatility, volatility_meta = load_bundle(ARTIFACTS_DIR / version / "volatility")
-    return {"version": version, "direction": direction, "volatility": volatility,
-            "direction_meta": direction_meta, "volatility_meta": volatility_meta}
+    models = {"version": version}
+    for kind in MODEL_KINDS:
+        models[kind], models[f"{kind}_meta"] = load_bundle(ARTIFACTS_DIR / version / kind)
+    return models
 
 
 def _rolling_percentile(values: pd.Series) -> pd.Series:
@@ -64,31 +65,35 @@ def make_forecasts(data: pd.DataFrame, origins, models: dict, kind: str) -> list
     for h in HORIZONS:
         prob = models["direction"][h].predict(data, origins)
         signal = buy_signal(prob, models["direction_meta"]["horizons"][str(h)]["threshold"])
-        low = high = vol = percentile = np.full(len(origins), np.nan)
-        if h in models["volatility"]:
-            model = models["volatility"][h]
-            valid = np.flatnonzero(data[model.features].notna().all(axis=1).to_numpy())
-            log_vol = pd.Series(model.predict(data, valid), index=valid).reindex(range(len(data)))
-            multiplier = models["volatility_meta"]["horizons"][str(h)]["interval_multiplier"]
-            low, high = price_range(close[origins], log_vol.to_numpy()[origins], h, multiplier)
-            vol = np.exp(log_vol.to_numpy()[origins]) * np.sqrt(252)
-            percentile = _rolling_percentile(log_vol).to_numpy()[origins]
+        ret = _predict_valid(models["return"][h], data)[origins]
+        log_vol = _predict_valid(models["volatility"][h], data)
+        multiplier = models["volatility_meta"]["horizons"][str(h)]["interval_multiplier"]
+        low, high = price_range(close[origins], log_vol[origins], h, multiplier, center=ret)
+        vol = np.exp(log_vol[origins]) * np.sqrt(252)
+        percentile = _rolling_percentile(pd.Series(log_vol)).to_numpy()[origins]
         for i, origin in enumerate(origins):
             rows.append({"model_version": models["version"], "origin_date": data.index[origin].date(), "horizon": h,
                          "target_date": axis[origin + h].date(), "origin_close": close[origin],
+                         "predicted_return": ret[i], "predicted_price": close[origin] * np.exp(ret[i]),
                          "prob_up": float(prob[i]), "signal": str(signal[i]), "price_low": low[i],
                          "price_high": high[i], "predicted_vol": vol[i], "vol_percentile": percentile[i],
                          "kind": kind})
     return rows
 
 
+def _predict_valid(model, data: pd.DataFrame) -> np.ndarray:
+    """피처가 모두 있는 행만 예측하고 나머지는 결측으로 둔다(Ridge는 결측 피처를 받지 못한다)."""
+    valid = np.flatnonzero(data[model.features].notna().all(axis=1).to_numpy())
+    return pd.Series(model.predict(data, valid), index=valid).reindex(range(len(data))).to_numpy()
+
+
 def _model_features(models: dict) -> list[str]:
-    names = {name for item in models["direction_meta"]["horizons"].values() for name in item["features"]}
-    return sorted(names | {name for item in models["volatility_meta"]["horizons"].values() for name in item["features"]})
+    return sorted({name for kind in MODEL_KINDS
+                   for item in models[f"{kind}_meta"]["horizons"].values() for name in item["features"]})
 
 
 def _activate(conn, models: dict) -> None:
-    metadata = {"direction": models["direction_meta"], "volatility": models["volatility_meta"]}
+    metadata = {kind: models[f"{kind}_meta"] for kind in MODEL_KINDS}
     db.activate_model(conn, models["version"], models["direction_meta"]["train_end"], metadata)
 
 

@@ -23,9 +23,11 @@ def conn():
 
 
 def forecast(origin, horizon, kind="backfill", version="v1", prob=0.6):
-    ranged = horizon != 5
+    ranged = horizon != 5  # 5일 행은 피처가 빠져 예측값이 결측인 경우(NaN → NULL)로 쓴다
     return {"model_version": version, "origin_date": origin, "horizon": horizon,
             "target_date": origin + timedelta(days=1), "origin_close": 300.0,
+            "predicted_return": np.float64(0.01) if ranged else np.nan,
+            "predicted_price": 303.0 if ranged else np.nan,
             "prob_up": np.float64(prob), "signal": "buy", "price_low": 280.0 if ranged else np.nan,
             "price_high": 320.0 if ranged else np.nan, "predicted_vol": 0.3 if ranged else np.nan,
             "vol_percentile": 0.5 if ranged else np.nan, "kind": kind}

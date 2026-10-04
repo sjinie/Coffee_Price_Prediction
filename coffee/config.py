@@ -12,7 +12,6 @@ SOURCES_DIR = DATA_DIR / "sources"   # 수집한 가격·거시·기상 Parquet
 ARTIFACTS_DIR = ROOT / "model_artifacts"
 
 HORIZONS = tuple(SETTINGS["horizons"])
-VOL_HORIZONS = (20, 60)              # 변동성은 한 달·석 달 지평만 예측한다
 REGIONS = SETTINGS["weather"]["regions"]
 REGION_IDS = tuple(region["id"] for region in REGIONS)
 MACRO_SERIES = SETTINGS["macro"]

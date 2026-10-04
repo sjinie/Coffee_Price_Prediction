@@ -11,8 +11,9 @@ from psycopg.rows import dict_row
 from psycopg.types.json import Jsonb
 
 SCHEMA = Path(__file__).with_name("schema.sql")
-FORECAST_COLUMNS = ["model_version", "origin_date", "horizon", "target_date", "origin_close", "prob_up", "signal",
-                    "price_low", "price_high", "predicted_vol", "vol_percentile", "kind"]
+FORECAST_COLUMNS = ["model_version", "origin_date", "horizon", "target_date", "origin_close", "predicted_return",
+                    "predicted_price", "prob_up", "signal", "price_low", "price_high", "predicted_vol",
+                    "vol_percentile", "kind"]
 NEWS_COLUMNS = ["content_hash", "url", "title", "source", "event_at", "analyzed_at", "available_at", "label",
                 "p_bullish", "p_bearish", "p_neutral", "p_uncertain", "relevance", "confidence", "model",
                 "prompt_version", "cost_usd"]
