@@ -29,7 +29,7 @@
 | `news.py` | 보관한 Jev 분석 읽기, 거래일별 뉴스 점수(live·research 두 시점) |
 | `jev.py` | Google News RSS 수집, 하루 2건 선정, Jev 배치 분류 |
 | `db.py`, `schema.sql` | SQL은 이 두 파일에만 있다. `db.py`는 API 이미지용으로 pandas 없이 동작한다 |
-| `pipeline.py` | `migrate`, `backfill`, `daily` 명령과 종료 코드 |
+| `pipeline.py` | `migrate`, `backfill`, `daily`, `weather` 명령과 종료 코드 |
 | `api.py` | 읽기 전용 FastAPI |
 
 대시보드(`frontend/src/`)는 `App.vue`가 API를 불러 컴포넌트 5개(전망 카드, 가격 차트, 적중 기록, 뉴스, 상태)에 나눠 준다. 차트 눈금·경로, 적중률, 위험 등급 같은 계산은 `lib.js`에 모아 `node --test`로 검사한다. 차트 라이브러리 없이 SVG로 그린다.
@@ -94,6 +94,7 @@
 | 테이블 | 내용과 규칙 |
 |---|---|
 | `prices` | 날짜별 OHLCV. Yahoo가 최근 값을 고칠 수 있어 같은 날짜는 덮어쓴다 |
+| `weather` | (산지, UTC 관측일)별 강수·평균/최저/최고기온. 같은 키는 수정값으로 갱신하고 NaN은 NULL로 저장한다. 화면 전용이며 모델 피처의 Parquet·관측일 + 4일 규칙과는 별개다 |
 | `models` | 모델 버전과 metadata. 활성 모델은 부분 유일 인덱스로 하나만 허용 |
 | `forecasts` | (버전, 기준일, 지평)마다 한 행. 기준일 종가, 예측 로그수익률·예측 가격, 상승 확률·신호, 80% 범위, 예측 변동성·백분위를 담는다. 한 번 쓰면 고치지 않는다(`ON CONFLICT DO NOTHING`). 같은 기준일의 backfill이 있으면 live는 저장되지 않는다. 실제 가격은 `prices`를 목표일로 조인해 본다 |
 | `news_articles` | 기사별 Jev 분석과 요청 비용. 모델 입력이 아닌 참고 정보 |
@@ -103,10 +104,25 @@
 
 ## 파이프라인
 
-- `backfill`: 모델 등록, 가격 전체, 2026-01-01부터 최신 기준일까지 예측(`kind='backfill'`), 보관 뉴스 1,446건.
-- `daily`: 소스 갱신 → 최신 기준일 예측(`kind='live'`) → 최근 7일 기사 중 새 기사를 Jev로 분류(한 번에 20건). 비용은 응답을 받아야 알 수 있어 실행마다 0.01 USD를 미리 잡고, 누적 상한 1 USD까지 남은 예산이 그보다 작으면 분류하지 않는다.
-- 두 명령 모두 23:00 UTC 마감이 지난 거래일의 가격만 쓴다. 장중에 실행해도 끝나지 않은 오늘 봉으로 예측을 저장하지 않는다.
+- `backfill`: 모델 등록, 가격·기상 전체, 2026-01-01부터 최신 기준일까지 예측(`kind='backfill'`), 보관 뉴스 1,446건.
+- `daily`: 소스 갱신 → 기상 최근 30일 적재 → 최신 기준일 예측(`kind='live'`) → 최근 7일 기사 중 새 기사를 Jev로 분류(한 번에 20건). 비용은 응답을 받아야 알 수 있어 실행마다 0.01 USD를 미리 잡고, 누적 상한 1 USD까지 남은 예산이 그보다 작으면 분류하지 않는다.
+- `weather`: 이미 모은 `data/sources/`를 읽어 기상만 전체 upsert한다. 수집·모델 실행·가격 적재·뉴스 분류는 하지 않는다. 별도 적재는 `python -m coffee.pipeline weather`로 실행한다.
+- 기상 적재 시작일은 `settings.yaml`의 `collect_start`(2005-01-01)다. `daily`의 30일은 실행일(UTC)을 포함한 달력 날짜이며 누락된 날을 채우지 않는다. 수집이 실패한 산지는 기존 `sources` 경고를 유지하고 보관 Parquet에서 해당 기간만 적재한다. 필수 Parquet가 없으면 `load_sources`에서 실패한다.
+- 기상 적재는 `pipeline_runs.steps`에 `{"step": "weather", "upserted": n}`을 남긴다. 건수는 새 행과 같은 키의 갱신 행을 모두 포함한다.
+- `backfill`·`daily` 모두 23:00 UTC 마감이 지난 거래일의 가격만 쓴다. 장중에 실행해도 끝나지 않은 오늘 봉으로 예측을 저장하지 않는다.
 - 종료 코드: `0` 성공, `3` 경고(예측은 저장, 일부 소스 실패·가격 지연·기준일 피처 결측·뉴스 실패), `1` 실패.
+
+## 기상 API
+
+`GET /api/weather?region=br_sul_minas`는 2005-01-01부터 최신 관측일까지 고정 조회한다. 기본 산지는 `br_sul_minas`이며 `br_cerrado`, `br_alta_mogiana`, `co_huila`, `co_caldas`, `co_antioquia`도 허용한다. 그 밖의 값은 422다. API 이미지에는 pandas가 없으므로 산지 id를 상수로 두고 설정 파일과의 일치를 테스트한다.
+
+- 응답은 `region`, `years`, `days`, `precip`, `t_mean`, `t_min`, `t_max`다. `years`는 관측 행이 있는 연도를 오름차순으로 담으며 각 지표의 바깥 배열은 이 순서, 안쪽 배열은 0–51주 52칸이다. 자료가 없으면 모든 배열은 빈 배열이다.
+- 주 번호는 `min((연중 일자 - 1) // 7, 51)`이다. 1월 1일을 기준으로 하며 ISO 주를 쓰지 않는다. 마지막 주는 평년 8일·윤년 9일이다.
+- SQL로 강수 합계(mm), 평균기온 평균(℃), 최저기온 최솟값, 최고기온 최댓값을 구한 뒤 소수 한 자리로 반올림한다. NULL은 각 지표 집계에서 제외하며 전부 NULL이면 결과도 NULL이다.
+- `days`는 그 주의 관측 행 수다(지표가 NULL인 행도 포함). 관측 행이 없는 주는 `days=0`, 나머지 지표는 `null`이다. 7일 미만인 주의 값도 그대로 보낸다. 프론트는 강수를 `precip / days * 7`로 환산하고 `days < 7`이면 강수를 그리지 않는다.
+- 일별 원자료·평년값·기간 매개변수·응답 압축은 제공하지 않는다. 연도별 52칸 배열로 응답 크기를 줄인다.
+
+기존 서비스에 적용할 때는 사용자 승인 후 소유자 계정으로 `python -m coffee.pipeline migrate`를 실행하고 API 이미지를 다시 빌드한다. `deploy/setup-db.sh`의 default privileges가 설정되어 있으면 새 표의 SELECT 권한도 API 계정에 주어진다. 최신 보관 소스를 준비한 다음 `weather` 명령으로 처음 한 번 적재하고 이후 `daily`로 갱신한다. 기상만 채울 때 `backfill`을 쓰면 로컬 가격도 DB에 덮어쓰므로 `weather` 명령을 사용한다.
 
 ## 배포
 

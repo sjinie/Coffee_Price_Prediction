@@ -13,6 +13,8 @@ from . import db
 
 HORIZONS = (5, 20, 60)  # schema.sql의 CHECK와 같다 (API 이미지에는 config가 쓰는 pandas가 없다)
 
+REGIONS = ("br_sul_minas", "br_cerrado", "br_alta_mogiana", "co_huila", "co_caldas", "co_antioquia")
+
 app = FastAPI(title="커피 선물 예측 API")
 cors_origins = [origin for origin in os.getenv("CORS_ORIGINS", "").split(",") if origin]
 if cors_origins:
@@ -41,6 +43,13 @@ def health():
 @app.get("/api/prices")
 def prices(days: int = Query(730, ge=1, le=8000)):
     return _read(db.read_prices, _since(days))
+
+
+@app.get("/api/weather")
+def weather(region: str = "br_sul_minas"):
+    if region not in REGIONS:
+        raise HTTPException(422, f"region은 {REGIONS} 중 하나")
+    return _read(db.read_weather, region, date(2005, 1, 1))
 
 
 @app.get("/api/forecasts/latest")

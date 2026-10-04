@@ -17,6 +17,7 @@ FORECAST_COLUMNS = ["model_version", "origin_date", "horizon", "target_date", "o
 NEWS_COLUMNS = ["content_hash", "url", "title", "source", "event_at", "analyzed_at", "available_at", "label",
                 "p_bullish", "p_bearish", "p_neutral", "p_uncertain", "relevance", "confidence", "model",
                 "prompt_version", "cost_usd"]
+WEATHER_COLUMNS = ["region", "date", "precip", "t_mean", "t_min", "t_max"]
 PRICE_COLUMNS = ["date", "open", "high", "low", "close", "volume"]
 
 
@@ -58,6 +59,22 @@ def upsert_prices(conn, prices) -> int:
     rows = prices.dropna(subset=["close"]).assign(date=lambda frame: frame["date"].dt.date).to_dict("records")
     update = ", ".join(f"{column} = EXCLUDED.{column}" for column in PRICE_COLUMNS[1:])
     return _insert(conn, "prices", PRICE_COLUMNS, rows, f"(date) DO UPDATE SET {update}")
+
+
+def upsert_weather(conn, region: str, frame) -> int:
+    """NASA의 수정 관측값도 반영한다. NaN은 NULL로 두고 executemany로 왕복을 줄인다."""
+    dates = frame["date"]
+    if dates.dt.tz is not None:
+        dates = dates.dt.tz_convert("UTC")
+    rows = frame.rename(columns={"PRECTOTCORR": "precip", "T2M": "t_mean", "T2M_MIN": "t_min", "T2M_MAX": "t_max"})
+    rows = rows.assign(region=region, date=dates.dt.date)[WEATHER_COLUMNS].itertuples(index=False, name=None)
+    update = ", ".join(f"{column} = EXCLUDED.{column}" for column in WEATHER_COLUMNS[2:])
+    with conn.cursor() as cursor:
+        cursor.executemany(
+            "INSERT INTO weather (region, date, precip, t_mean, t_min, t_max) VALUES (%s, %s, %s, %s, %s, %s) "
+            f"ON CONFLICT (region, date) DO UPDATE SET {update}",
+            (tuple(_clean(value) for value in row) for row in rows))
+        return cursor.rowcount  # psycopg 3.3.6: returning=False이면 영향받은 행 수의 합계
 
 
 def activate_model(conn, version: str, train_end: str, metadata: dict) -> None:
@@ -102,6 +119,27 @@ def finish_run(conn, run_id: int, status: str, steps: list, message: str | None 
 
 def read_prices(conn, start: date) -> list[dict]:
     return conn.execute("SELECT date, close FROM prices WHERE date >= %s ORDER BY date", (start,)).fetchall()
+
+
+def read_weather(conn, region: str, start: date) -> dict:
+    """UTC 관측일을 1월 1일 기준 52주로 집계한다. days는 NULL 여부와 무관한 관측 행 수다."""
+    rows = conn.execute(
+        "SELECT extract(year FROM date)::int AS year, "
+        "least((extract(doy FROM date)::int - 1) / 7, 51) AS week, count(*) AS days, "
+        "sum(precip) AS precip, avg(t_mean) AS t_mean, min(t_min) AS t_min, max(t_max) AS t_max "
+        "FROM weather WHERE region = %s AND date >= %s GROUP BY year, week ORDER BY year, week",
+        (region, start)).fetchall()
+    years = sorted({row["year"] for row in rows})
+    metrics = WEATHER_COLUMNS[2:]
+    result = {"region": region, "years": years, "days": [[0] * 52 for _ in years],
+              **{key: [[None] * 52 for _ in years] for key in metrics}}
+    year_index = {year: index for index, year in enumerate(years)}
+    for row in rows:
+        index, week = year_index[row["year"]], row["week"]
+        result["days"][index][week] = row["days"]
+        for key in metrics:
+            result[key][index][week] = round(row[key], 1) if row[key] is not None else None
+    return result
 
 
 def read_latest_forecasts(conn) -> list[dict]:

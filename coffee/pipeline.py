@@ -1,7 +1,8 @@
 """수집 → 예측 → DB 적재 파이프라인.
 
     python -m coffee.pipeline migrate     스키마 적용
-    python -m coffee.pipeline backfill    가격 전체, 보관 뉴스, 2026년부터 최신까지 예측(kind=backfill)
+    python -m coffee.pipeline backfill    가격·기상 전체, 보관 뉴스, 2026년부터 최신까지 예측(kind=backfill)
+    python -m coffee.pipeline weather     보관 기상 전체 적재(가격·모델·뉴스는 건드리지 않음)
     python -m coffee.pipeline daily       자료 갱신 → 최신 기준일 예측(kind=live) → 뉴스 분류
 
 종료 코드: 0 성공, 3 경고(예측은 저장했지만 일부 소스 실패·자료 지연·피처 결측·뉴스 실패), 1 실패.
@@ -16,7 +17,7 @@ import pandas as pd
 from dotenv import load_dotenv
 
 from . import db, jev
-from .config import ARTIFACTS_DIR, FORWARD_START, HORIZONS, ROOT, SETTINGS
+from .config import ARTIFACTS_DIR, FORWARD_START, HORIZONS, REGION_IDS, ROOT, SETTINGS
 from .features import build_dataset, trading_sessions
 from .models import buy_signal, load_bundle, price_range
 from .news import load_jev_archive
@@ -126,6 +127,29 @@ def update_news(conn, now: datetime) -> dict:
     return step
 
 
+def store_weather(conn, sources: dict, recent_days: int | None = None, now: datetime | None = None) -> dict:
+    """collect_start 이후를 적재한다. daily는 실행일(UTC) 포함 최근 30일만 다시 쓴다."""
+    start = pd.Timestamp(SETTINGS["collect_start"], tz="UTC")
+    today = pd.Timestamp(now or datetime.now(timezone.utc)).tz_convert("UTC").normalize()
+    if recent_days is not None:
+        start = max(start, today - pd.Timedelta(days=recent_days - 1))
+    upserted = 0
+    for region in REGION_IDS:
+        frame = sources[f"weather_{region}"]
+        dates = pd.to_datetime(frame["date"], utc=True).dt.normalize()
+        selected = dates >= start
+        if recent_days is not None:
+            selected &= dates <= today
+        upserted += db.upsert_weather(conn, region, frame.loc[selected])
+    return {"step": "weather", "upserted": upserted}
+
+
+def weather(conn) -> tuple[int, list]:
+    step = store_weather(conn, load_sources())
+    conn.commit()
+    return EXIT_OK, [step]
+
+
 def daily(conn, now: datetime | None = None) -> tuple[int, list]:
     now = now or datetime.now(timezone.utc)
     steps, warnings = [], []
@@ -139,6 +163,7 @@ def daily(conn, now: datetime | None = None) -> tuple[int, list]:
     sources["prices"] = closed_prices(sources["prices"], now)
     data = build_dataset(sources)
     db.upsert_prices(conn, sources["prices"].tail(30))
+    steps.append(store_weather(conn, sources, recent_days=30, now=now))
     models = load_models()
     _activate(conn, models)
     origin = len(data) - 1
@@ -173,7 +198,8 @@ def backfill(conn, now: datetime | None = None) -> tuple[int, list]:
     data = build_dataset(sources)
     models = load_models()
     _activate(conn, models)
-    steps = [{"step": "prices", "upserted": db.upsert_prices(conn, sources["prices"])}]
+    steps = [{"step": "prices", "upserted": db.upsert_prices(conn, sources["prices"])},
+             store_weather(conn, sources)]
     origins = np.flatnonzero((data.index >= FORWARD_START) & data["close"].notna().to_numpy())
     inserted = db.insert_forecasts(conn, make_forecasts(data, origins, models, "backfill"))
     steps.append({"step": "forecast", "origins": len(origins), "inserted": inserted})
@@ -194,7 +220,7 @@ def backfill(conn, now: datetime | None = None) -> tuple[int, list]:
 
 def main(argv=None) -> int:
     parser = argparse.ArgumentParser(description="커피 예측 파이프라인")
-    parser.add_argument("command", choices=["migrate", "daily", "backfill"])
+    parser.add_argument("command", choices=["migrate", "daily", "backfill", "weather"])
     command = parser.parse_args(argv).command
     load_dotenv(ROOT / ".env")
     try:
@@ -209,7 +235,7 @@ def main(argv=None) -> int:
             return EXIT_OK
         run_id = db.start_run(conn, command)
         try:
-            code, steps = (daily if command == "daily" else backfill)(conn)
+            code, steps = {"daily": daily, "backfill": backfill, "weather": weather}[command](conn)
         except Exception as exc:
             conn.rollback()
             # 실행 기록은 공개 API로 보이므로 첫 줄만 짧게 남기고, 전체 메시지는 실행 로그에만 출력한다.

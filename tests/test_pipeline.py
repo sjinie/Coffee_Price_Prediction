@@ -144,6 +144,7 @@ def test_daily_stores_the_forecast_even_when_news_fails(monkeypatch, sources, sm
     monkeypatch.setattr(pipeline, "load_sources", lambda: {name: frame.copy() for name, frame in sources.items()})
     monkeypatch.setattr(pipeline, "load_models", lambda: models)
     monkeypatch.setattr(db, "upsert_prices", lambda conn, prices: len(prices))
+    monkeypatch.setattr(db, "upsert_weather", lambda conn, region, frame: len(frame))
     monkeypatch.setattr(db, "activate_model", lambda *args: None)
     monkeypatch.setattr(db, "insert_forecasts", lambda conn, rows: saved.extend(rows) or len(rows))
 
