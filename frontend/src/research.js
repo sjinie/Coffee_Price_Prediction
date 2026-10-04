@@ -1,0 +1,82 @@
+// 연구 결과를 화면 문장으로 옮긴 곳. 예측 방법을 바꾸면 이 파일과 research-data.json을 함께 고친다
+// (AGENTS.md '예측 방법을 바꿀 때'). API와 모델 metadata로 읽을 수 있는 값(예측, 기준값, 수익률 검증 성적,
+// 모델별 피처 목록)은 여기 두지 않는다. 숫자 출처: README '결과', 노트북 03·04·05·06.
+import data from './research-data.json'
+
+export const RESEARCH = data
+
+// 이 파일의 문장이 설명하는 동결 모델. tests/test_portfolio.py가 configs/settings.yaml과 대조한다.
+export const MODEL_VERSION = '2026-10-04'
+
+export const FEATURE_GROUP_LABELS = { price: '가격', macro: '거시', climate: '기후', cycle: '주기' }
+
+// 노트북 04: HAR 변동성 모델의 직전 변동성 대비 RMSE 감소율(%). 60일은 보류 구간 값만 README에 있다.
+export const VOLATILITY = [
+  { horizon: 5, dev: 25, holdout: 27, forward: 21 },
+  { horizon: 20, dev: 14, holdout: 20, forward: 18 },
+  { horizon: 60, dev: null, holdout: -2, forward: null },
+]
+
+// 노트북 03·06: 방향과 구매 신호
+export const DIRECTION_STATS = [
+  { value: '0.54 / 0.60 / 0.60', text: '보류 구간 AUC (5 / 20 / 60일). 0.5가 동전 던지기다.' },
+  { value: '+0.10%', text: '신호대로 샀을 때의 비용, 정기 구매 대비 (보류 구간). 더 싸게 사지 못했다.' },
+  { value: '53% vs 52%', text: "60일 신호 적중률과, 같은 날 늘 '구매'라고 했을 때의 적중률." },
+  { value: '0.39', text: '2026년 20일 AUC. 사후 확인 구간에서 무너졌다.' },
+]
+
+// 노트북 03: 학부 캡스톤 방식의 단순 LSTM(20일, 개발 구간)
+export const LSTM_RMSE_VS_NAIVE = 17.1
+
+export const FINDINGS = {
+  problem: '카페는 원두를 몇 주에서 몇 달 앞서 계약한다. 그사이 커피 가격은 크게 움직인다.',
+  seasons: '산지의 비는 해마다 같은 박자로 왔다. 가격의 방향은 그렇지 않았다.',
+  features: '피처는 46개를 만들었고, 모델마다 쓰는 것이 달랐다.',
+  evaluation: '모든 예측은 같은 날, 같은 기간의 단순한 기준선과 겨뤘다.',
+  returns: "수익률의 크기는 '현재가 유지'를 넘지 못했다.",
+  volatility: '변동 폭은 맞혔다. 5·20거래일에서는 분명히.',
+  direction: '방향에는 약한 신호가 있었지만, 돈이 되지는 않았다.',
+  fixes: '중간에 틀린 것을 세 번 바로잡았다.',
+  news: '뉴스 점수는 앞으로의 가격보다 이미 일어난 움직임을 설명했다.',
+  decision: '그래서 예측과 그 예측의 성적을 한 화면에 함께 둔다.',
+}
+
+export const VOLATILITY_NOTE = '60일은 보류 구간에서 2% 나빠 기준선보다 낫다고 말할 수 없다. 80% 범위의 실제 적중률은 보류 구간 70-78%로 목표보다 낮았다.'
+
+export const FIXES = [
+  { title: '기준선부터 정하지 않았다', text: '학부 캡스톤에서는 Attention-LSTM의 RMSE만 봤다. 같은 조건으로 단순 LSTM을 비교하니 현재가 유지보다 17% 나빴다. 이번에는 모델보다 기준선을 먼저 정했다.' },
+  { title: '평가 코드가 연말을 빼먹고 있었다', text: '연도별 평가가 해마다 연말 기준일을 빼고 있었다. 외부 리뷰에서 찾았고, 고치자 60일 결론이 바뀌었다.' },
+  { title: "'언제 알 수 있었나'를 놓치면 결과가 부풀려진다", text: '기상 공개 지연, 경제지표 수정치, 뉴스 소급 분류가 모두 그런 함정이었다. 값마다 실제로 쓸 수 있게 된 날을 정해 붙였다.' },
+]
+
+export const NEWS_FACTS = [
+  { term: '점수와의 상관', text: '지난 5일 수익률 0.18, 다음 5일 수익률 0.03' },
+  { term: '사전 등록 실험', text: '5일 예측에 뉴스 계수를 더하니 RMSE가 오히려 늘었다.' },
+  { term: '실시간 분석 기사', text: '아직 4건. 2022-2025년 기사는 2026년에 소급 분류했다.' },
+]
+export const NEWS_DECISION = '그래서 가격 모델의 입력에서는 뺐다. 화면에는 뉴스 예측을 따로 보여 주고, 실시간 점수가 6개월쯤 쌓이면 같은 규칙으로 다시 검증한다.'
+
+// 의사결정 카드의 항목별 이유. 모델 이름과 매수 기준은 metadata에서 채우므로 여기에 적지 않는다.
+export const DECISION_REASONS = {
+  signal: '상승 확률이 지평별 매수 기준 이상일 때만 매수 추천을 낸다. 신호대로 사도 정기 구매보다 싸지지 않았다는 사실을 함께 적는다.',
+  price: '수익률 모델의 예측이다. 현재가 유지보다 오차가 커서 지평별 검증 성적을 같이 표시한다.',
+  range: '변동성 모델로 폭을 정한다. 이 프로젝트에서 기준선을 넘은 예측이 여기에 쓰인다.',
+  prob: '분류 확률을 학습 구간 상승 비율 쪽으로 줄였다. 과신을 막기 위해서다.',
+  risk: '최근 756거래일의 예측 변동성 가운데 오늘 값의 백분위다.',
+  news: '가격 모델의 입력이 아니다. 따로 보여 주고 따로 검증한다.',
+}
+
+// 마무리의 결론. yes는 기준선을 넘은 항목이다.
+export const VERDICTS = [
+  { subject: '수익률의 크기', verdict: '현재가 유지를 넘지 못했다', yes: false },
+  { subject: '5·20거래일 변동성', verdict: '기준선을 넘었다', yes: true },
+  { subject: '방향과 매수 신호', verdict: '약한 신호, 비용 절감 근거는 없다', yes: false },
+  { subject: '뉴스 점수', verdict: '이미 일어난 일을 설명했다', yes: false },
+]
+
+export const LIMITS = [
+  'KC=F는 근월물 연결 가격이라 만기 교체 때의 가격 점프가 타깃에 섞여 있다.',
+  '2022년 이후는 개발 중에 이미 본 기간이다.',
+  '뉴스는 실시간 분석이 아직 거의 없다.',
+  '투자 조언이 아니다.',
+]
