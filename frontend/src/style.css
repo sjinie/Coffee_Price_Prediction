@@ -92,6 +92,16 @@ footer { margin-top: 32px; font-size: 0.8rem; }
 .price { fill: none; stroke: var(--ink); stroke-width: 2; stroke-linejoin: round; }
 .band { fill: var(--band); }
 .fan { fill: var(--fan); }
+.pred { fill: none; stroke: var(--blue); stroke-width: 1.5; stroke-dasharray: 5 3; }
+.pred-dot { fill: var(--blue); stroke: var(--surface); stroke-width: 2; }
+.prob { fill: none; stroke: var(--ink-2); stroke-width: 2; stroke-linejoin: round; }
+.prob-dot { fill: var(--ink-2); stroke: var(--surface); stroke-width: 2; }
+.threshold { stroke: var(--muted); stroke-width: 1; stroke-dasharray: 4 3; }
+.threshold-label text { fill: var(--muted); font-size: 11px; font-variant-numeric: tabular-nums; }
+.model-mark { fill: var(--ink-2); opacity: 0.5; font-size: 12px; pointer-events: none; }
+.key.pred { height: 0; border-top: 2px dashed var(--blue); border-radius: 0; }
+.key.prob { height: 2px; background: var(--ink-2); }
+.key.threshold { height: 0; border-top: 2px dashed var(--muted); border-radius: 0; }
 .crosshair { stroke: var(--ink-2); stroke-width: 1; stroke-dasharray: 3 3; }
 .bar.up { fill: var(--red); }
 .bar.down { fill: var(--blue); }

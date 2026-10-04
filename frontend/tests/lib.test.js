@@ -2,8 +2,21 @@ import assert from 'node:assert/strict'
 import { test } from 'node:test'
 
 import {
-  bandPath, barPath, extent, linePath, linearScale, nearestIndex, riskLevel, safeUrl, ticks, trackRecord, trackRecordByKind,
+  bandPath, barPath, extent, formatReturn, linePath, linearScale, modelFor, nearestIndex, riskLevel, safeUrl, ticks,
+  trackRecord, trackRecordByKind,
 } from '../src/lib.js'
+
+test('지평별 모델 이름은 지평 항목이 묶음보다 우선하고, 그 지평의 모델이 없으면 null이다', () => {
+  const metadata = {
+    direction: { algorithm: 'LightGBM', horizons: { 5: {}, 20: { algorithm: 'Logistic' } } },
+    volatility: { algorithm: 'HAR', horizons: { 20: {} } },
+  }
+  assert.equal(modelFor(metadata, 'direction', 5), 'LightGBM')
+  assert.equal(modelFor(metadata, 'direction', 20), 'Logistic')
+  assert.equal(modelFor(metadata, 'volatility', 20), 'HAR')
+  assert.equal(modelFor(metadata, 'volatility', 5), null)  // 5일 변동성 모델은 없다
+  assert.equal(modelFor(null, 'direction', 5), null)
+})
 
 test('선은 결측에서 끊기고 범위 띠는 닫힌 영역이 된다', () => {
   assert.equal(linePath([[0, 1], [1, 2], null, [3, 4]]), 'M0.0,1.0 L1.0,2.0 M3.0,4.0')
@@ -35,15 +48,20 @@ test('외부 링크는 http(s)만 허용한다', () => {
 
 test('적중 기록은 목표일 가격이 확인된 예측만 센다', () => {
   const rows = [
-    { signal: 'buy', origin_close: 100, actual_close: 110, price_low: 90, price_high: 105, kind: 'backfill' },
-    { signal: 'wait', origin_close: 100, actual_close: 105, price_low: 95, price_high: 110, kind: 'live' },
-    { signal: 'hold', origin_close: 100, actual_close: 95, price_low: null, price_high: null, kind: 'live' },
-    { signal: 'buy', origin_close: 100, actual_close: null, price_low: 90, price_high: 110, kind: 'live' },
+    { signal: 'buy', origin_close: 100, actual_close: 110, predicted_price: 104, price_low: 90, price_high: 105, kind: 'backfill' },
+    { signal: 'wait', origin_close: 100, actual_close: 105, predicted_price: 98, price_low: 95, price_high: 110, kind: 'live' },
+    { signal: 'hold', origin_close: 100, actual_close: 95, predicted_price: null, price_low: null, price_high: null, kind: 'live' },
+    { signal: 'buy', origin_close: 100, actual_close: null, predicted_price: 101, price_low: 90, price_high: 110, kind: 'live' },
   ]
   assert.deepEqual(trackRecord(rows), {
     evaluated: 3, pending: 1, upRate: 2 / 3, signalRate: 2 / 3, signalHit: 0.5, rangeHit: 0.5,
+    returnHit: 0.5, maeModel: 6.5, maeNaive: 7.5,  // 예측 가격 104·98 대 실제 110·105, 현재가 유지는 100
   })
   assert.equal(trackRecord([]).signalHit, null)
+  assert.equal(trackRecord([]).maeModel, null)
+  assert.equal(formatReturn(Math.log(1.021)), '+2.1%')
+  assert.equal(formatReturn(Math.log(0.996)), '−0.4%')
+  assert.equal(formatReturn(null), '-')
   assert.equal(riskLevel(0.2), '낮음')
   assert.equal(riskLevel(0.5), '보통')
   assert.equal(riskLevel(0.9), '높음')

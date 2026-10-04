@@ -13,6 +13,13 @@ export function formatNumber(value, digits = 1) {
 
 export const formatPercent = (value, digits = 0) => (isNumber(value) ? `${(value * 100).toFixed(digits)}%` : '-')
 
+export const formatSigned = (value, digits = 1) =>
+  (isNumber(value) ? `${value < 0 ? '−' : '+'}${Math.abs(value).toFixed(digits)}` : '-')
+
+// 로그수익률을 '+2.1%' 같은 가격 변화율로 바꾼다.
+export const formatReturn = (logReturn, digits = 1) =>
+  (isNumber(logReturn) ? `${formatSigned(Math.expm1(logReturn) * 100, digits)}%` : '-')
+
 export function formatTime(value) {
   if (!value) return '-'
   return new Date(value).toLocaleString('ko-KR', { timeZone: 'Asia/Seoul', dateStyle: 'short', timeStyle: 'short' })
@@ -94,6 +101,14 @@ export function nearestIndex(values, target) {
 // 기사 링크는 외부 자료다. http(s)가 아니면(javascript: 등) 링크로 만들지 않는다.
 export const safeUrl = url => (/^https?:\/\//i.test(url || '') ? url : null)
 
+// 지평마다 다른 모델을 쓸 수 있다. 지평 항목의 algorithm이 묶음(direction·volatility)의 것보다 우선한다.
+// 그 지평의 모델이 없으면(5일 변동성처럼) null.
+export function modelFor(metadata, kind, horizon) {
+  const bundle = metadata?.[kind]
+  const item = bundle?.horizons?.[horizon]
+  return item ? item.algorithm ?? bundle.algorithm ?? null : null
+}
+
 export function riskLevel(percentile) {
   if (!isNumber(percentile)) return '-'
   return percentile < 1 / 3 ? '낮음' : percentile > 2 / 3 ? '높음' : '보통'
@@ -107,7 +122,12 @@ export function trackRecord(rows) {
     row.signal === 'buy' ? row.actual_close > row.origin_close : row.actual_close < row.origin_close)
   const ranged = done.filter(row => isNumber(row.price_low))
   const inside = ranged.filter(row => row.price_low <= row.actual_close && row.actual_close <= row.price_high)
+  // 수익률 예측: 예측 가격이 기준 종가보다 실제와 같은 쪽에 있었는지, 그리고 현재가 유지보다 가격 오차가 작았는지
+  const priced = done.filter(row => isNumber(row.predicted_price))
+  const moved = priced.filter(row => row.actual_close !== row.origin_close)
+  const sameSide = moved.filter(row => (row.predicted_price > row.origin_close) === (row.actual_close > row.origin_close))
   const share = (part, whole) => (whole.length ? part.length / whole.length : null)
+  const mean = values => (values.length ? values.reduce((sum, value) => sum + value, 0) / values.length : null)
   return {
     evaluated: done.length,
     pending: rows.length - done.length,
@@ -115,6 +135,9 @@ export function trackRecord(rows) {
     signalRate: share(signals, done),
     signalHit: share(correct, signals),
     rangeHit: share(inside, ranged),
+    returnHit: share(sameSide, moved),
+    maeModel: mean(priced.map(row => Math.abs(row.predicted_price - row.actual_close))),
+    maeNaive: mean(priced.map(row => Math.abs(row.origin_close - row.actual_close))),
   }
 }
 

@@ -1,6 +1,6 @@
 <script setup>
 import { computed } from 'vue'
-import { HORIZONS, formatPercent, trackRecordByKind } from '../lib.js'
+import { HORIZONS, formatNumber, formatPercent, trackRecordByKind } from '../lib.js'
 
 const props = defineProps({ history: { type: Object, required: true } })
 const byHorizon = computed(() => HORIZONS.map(h => ({ horizon: h, ...trackRecordByKind(props.history[h] || []) })))
@@ -22,18 +22,24 @@ const hasLive = computed(() => byHorizon.value.some(row => row.live.evaluated > 
         <table>
           <thead>
             <tr>
-              <th>지평</th><th class="num">채점한 예측</th><th class="num">신호 빈도</th><th class="num">신호 적중률</th>
-              <th class="num">실제 상승 비율<small>(늘 '구매'일 때의 적중률)</small></th><th class="num">80% 범위 적중률</th>
+              <th>지평</th><th class="num">채점한 예측</th>
+              <th class="num">수익률 방향 적중률</th>
+              <th class="num">가격 오차<small>(모델 / 현재가 유지, ¢/lb)</small></th>
+              <th class="num">80% 범위 적중률</th>
+              <th class="num">신호 빈도</th><th class="num">신호 적중률</th>
+              <th class="num">실제 상승 비율<small>(늘 '구매'일 때의 적중률)</small></th>
             </tr>
           </thead>
           <tbody>
             <tr v-for="row in byHorizon" :key="row.horizon">
               <td>{{ row.horizon }}거래일</td>
               <td class="num">{{ row[section.kind].evaluated }}</td>
+              <td class="num">{{ formatPercent(row[section.kind].returnHit) }}</td>
+              <td class="num">{{ formatNumber(row[section.kind].maeModel) }} / {{ formatNumber(row[section.kind].maeNaive) }}</td>
+              <td class="num">{{ formatPercent(row[section.kind].rangeHit) }}</td>
               <td class="num">{{ formatPercent(row[section.kind].signalRate) }}</td>
               <td class="num">{{ formatPercent(row[section.kind].signalHit) }}</td>
               <td class="num">{{ formatPercent(row[section.kind].upRate) }}</td>
-              <td class="num">{{ row.horizon === 5 ? '-' : formatPercent(row[section.kind].rangeHit) }}</td>
             </tr>
           </tbody>
         </table>

@@ -1,5 +1,5 @@
 <script setup>
-import { computed, onMounted, ref } from 'vue'
+import { onMounted, ref } from 'vue'
 import ForecastCards from './components/ForecastCards.vue'
 import NewsPanel from './components/NewsPanel.vue'
 import PriceChart from './components/PriceChart.vue'
@@ -38,10 +38,6 @@ async function load() {
   }
 }
 
-// 지평별 신호 기준은 화면에 적어 두지 않고 활성 모델의 metadata에서 읽는다.
-const thresholds = computed(() => Object.fromEntries(
-  Object.entries(data.value?.model?.metadata?.direction?.horizons ?? {}).map(([h, item]) => [h, item.threshold])))
-
 onMounted(load)
 </script>
 
@@ -50,7 +46,7 @@ onMounted(load)
     <header class="page-head">
       <p class="eyebrow">아라비카 커피 선물 · KC=F</p>
       <h1>커피 선물 가격 전망</h1>
-      <p class="lead">원두를 미리 살지 판단할 수 있도록 5·20·60거래일 뒤 가격의 예상 범위와 상승 확률을 매일 계산합니다.</p>
+      <p class="lead">원두를 미리 살지 판단할 수 있도록 5·20·60거래일 뒤 가격의 예측값과 예상 범위, 상승 확률을 매일 계산합니다.</p>
       <p v-if="data?.latest.length" class="muted">기준일 {{ data.latest[0].origin_date }} 종가 · 모델 {{ data.model?.model_version }}</p>
     </header>
 
@@ -62,8 +58,8 @@ onMounted(load)
     <template v-else-if="data">
       <p v-if="!data.latest.length" class="muted">저장된 예측이 없습니다. 파이프라인(backfill, daily)을 먼저 실행하세요.</p>
       <template v-else>
-        <ForecastCards :forecasts="data.latest" :thresholds="thresholds" />
-        <PriceChart :prices="data.prices" :history="data.history" :latest="data.latest" />
+        <ForecastCards :forecasts="data.latest" :metadata="data.model?.metadata" />
+        <PriceChart :prices="data.prices" :history="data.history" :latest="data.latest" :metadata="data.model?.metadata" />
         <TrackRecord :history="data.history" />
       </template>
       <NewsPanel v-if="data.news" :news="data.news" />
