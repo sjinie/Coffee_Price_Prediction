@@ -66,6 +66,8 @@ def direction_metrics(y_true, prob_up, base_rate: float, threshold: float = 0.6)
     - auc: 상승한 날에 더 높은 확률을 줬는지(0.5면 구분 못 함).
     - 신호: 확률이 threshold 이상이면 '지금 구매', 1-threshold 이하면 '미루기', 사이는 보류.
       precision은 신호를 낸 날 중 맞힌 비율, coverage는 신호를 낸 날의 비율이다.
+    - signal_up_rate: 신호를 낸 그날들의 실제 상승 비율. 같은 날 늘 '구매'라고 했을 때의 적중률이라
+      precision과 비교하는 기준선이다(전체 기간 상승 비율과 비교하면 모집단이 달라진다).
     """
     y_true, prob_up = np.asarray(y_true, float), np.asarray(prob_up, float)
     moved = y_true != 0
@@ -79,6 +81,7 @@ def direction_metrics(y_true, prob_up, base_rate: float, threshold: float = 0.6)
         "auc": float(roc_auc_score(up, prob)) if 0 < up.mean() < 1 else np.nan,
         "coverage": float(signals.mean()),
         "precision": float(correct[signals].mean()) if signals.any() else np.nan,
+        "signal_up_rate": float(up[signals].mean()) if signals.any() else np.nan,
         "buy_precision": float(up[buy].mean()) if buy.any() else np.nan,
     }
 

@@ -23,6 +23,8 @@ def test_direction_metrics_count_only_confident_signals():
     result = direction_metrics(y, prob, base_rate=0.5, threshold=0.6)
     # 실제 0인 날 제외 5일 중 신호: 0.8(구매, 맞음), 0.3(미루기, 맞음), 0.65(구매, 틀림) → 3/5
     assert result["coverage"] == 0.6 and np.isclose(result["precision"], 2 / 3)
+    # 기준선은 같은 신호일에 늘 '구매'라고 했을 때: 세 날 중 오른 날은 첫째 날뿐 → 1/3
+    assert np.isclose(result["signal_up_rate"], 1 / 3)
     assert np.isclose(result["base_brier"], 0.25)
 
 
