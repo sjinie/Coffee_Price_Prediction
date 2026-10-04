@@ -190,6 +190,7 @@ export function weeklyReturnGrid(prices, years) {
 }
 
 // /api/weather의 주간 강수 합계를 7일 기준으로 바꾼다. 마지막 주는 8~9일이라 그대로 두면 많아 보인다.
+// 관측일이 7일보다 적은 주(결측이 있는 주)는 늘려 그리지 않는다(docs/architecture.md 기상 API).
 export function weeklyRainGrid(weather, years) {
   const rowOf = new Map((weather?.years ?? []).map((year, i) => [year, i]))
   return years.map(year => {
@@ -197,7 +198,7 @@ export function weeklyRainGrid(weather, years) {
     if (i === undefined) return Array(52).fill(null)
     return weather.precip[i].map((value, week) => {
       const days = weather.days[i][week]
-      return isNumber(value) && days > 0 ? (value / days) * 7 : null
+      return isNumber(value) && days >= 7 ? (value / days) * 7 : null
     })
   })
 }

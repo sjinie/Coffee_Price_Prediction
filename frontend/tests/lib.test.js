@@ -134,3 +134,10 @@ test('계절 일관성: 해마다 같은 모양이면 1, 모양이 뒤집히면 
 test('고리 조각은 12시 방향에서 시작한다', () => {
   assert.equal(lib.arcPath(10, 20, 0, Math.PI / 2), 'M0.00,-20.00 A20,20 0 0 1 20.00,-0.00 L10.00,-0.00 A10,10 0 0 0 0.00,-10.00 Z')
 })
+
+test('강수: 관측일이 7일보다 적은 주는 늘려 그리지 않는다(기상 API 계약)', () => {
+  const weather = { years: [2024], days: [[3, 7, ...Array(50).fill(0)]], precip: [[30, 21, ...Array(50).fill(null)]] }
+  const rain = lib.weeklyRainGrid(weather, [2024])
+  assert.equal(rain[0][0], null)   // 3일 30mm를 70mm로 부풀리지 않는다
+  assert.equal(rain[0][1], 21)
+})
