@@ -1,7 +1,7 @@
 // 화면 계산 함수. 컴포넌트에서 분리해 node --test로 검사한다.
 
 export const HORIZONS = [5, 20, 60]
-export const SIGNAL_LABELS = { buy: '지금 구매', wait: '미루기', hold: '보류' }
+export const SIGNAL_LABELS = { buy: '매수 추천', wait: '미루기', hold: '보류' }
 export const NEWS_LABELS = { bullish: '상승 압력', bearish: '하락 압력', neutral: '중립', uncertain: '불확실' }
 
 export const isNumber = value => typeof value === 'number' && Number.isFinite(value)
@@ -171,6 +171,67 @@ export function trackRecord(rows) {
     maeModel: mean(priced.map(row => Math.abs(row.predicted_price - row.actual_close))),
     maeNaive: mean(priced.map(row => Math.abs(row.origin_close - row.actual_close))),
   }
+}
+
+// ---------- 연간 시계 (1월 1일 기준 52주, 기후 API와 같은 주) ----------
+
+// 연도 × 52주 칸마다 일간 로그수익률의 합. 앞 거래일 종가가 없으면 그날 수익률은 계산하지 않는다(결측을 채우지 않는다).
+export function weeklyReturnGrid(prices, years) {
+  const grid = years.map(() => Array(52).fill(null))
+  const rowOf = new Map(years.map((year, i) => [year, i]))
+  const sorted = prices.filter(row => isNumber(row.close)).sort((a, b) => a.date.localeCompare(b.date))
+  for (let i = 1; i < sorted.length; i += 1) {
+    const row = rowOf.get(Number(sorted[i].date.slice(0, 4)))
+    if (row === undefined) continue
+    const week = weekIndex(sorted[i].date)
+    grid[row][week] = (grid[row][week] ?? 0) + Math.log(sorted[i].close / sorted[i - 1].close)
+  }
+  return grid
+}
+
+// /api/weather의 주간 강수 합계를 7일 기준으로 바꾼다. 마지막 주는 8~9일이라 그대로 두면 많아 보인다.
+export function weeklyRainGrid(weather, years) {
+  const rowOf = new Map((weather?.years ?? []).map((year, i) => [year, i]))
+  return years.map(year => {
+    const i = rowOf.get(year)
+    if (i === undefined) return Array(52).fill(null)
+    return weather.precip[i].map((value, week) => {
+      const days = weather.days[i][week]
+      return isNumber(value) && days > 0 ? (value / days) * 7 : null
+    })
+  })
+}
+
+function correlation(a, b) {
+  const pairs = a.map((value, i) => [value, b[i]]).filter(([u, v]) => isNumber(u) && isNumber(v))
+  if (pairs.length < 3) return null
+  const mean = values => values.reduce((sum, value) => sum + value, 0) / values.length
+  const mu = mean(pairs.map(p => p[0]))
+  const mv = mean(pairs.map(p => p[1]))
+  let cov = 0, su = 0, sv = 0
+  for (const [u, v] of pairs) { cov += (u - mu) * (v - mv); su += (u - mu) ** 2; sv += (v - mv) ** 2 }
+  return su && sv ? cov / Math.sqrt(su * sv) : null
+}
+
+// 해마다의 52주 모양이 나머지 해들의 평균과 얼마나 닮았는지(상관의 중앙값). 계절이 뚜렷할수록 1에 가깝다.
+export function seasonality(grid) {
+  const values = grid.map((row, y) => {
+    const others = Array.from({ length: 52 }, (_, w) => {
+      const column = grid.filter((_, i) => i !== y).map(r => r[w]).filter(isNumber)
+      return column.length ? column.reduce((sum, v) => sum + v, 0) / column.length : null
+    })
+    return correlation(row, others)
+  }).filter(isNumber).sort((a, b) => a - b)
+  if (!values.length) return null
+  const mid = Math.floor(values.length / 2)
+  return values.length % 2 ? values[mid] : (values[mid - 1] + values[mid]) / 2
+}
+
+// 12시 방향에서 시계 방향으로 a0→a1(라디안)만큼의 고리 조각. 중심은 (0, 0)이다.
+export function arcPath(r0, r1, a0, a1) {
+  const point = (r, a) => `${(r * Math.sin(a)).toFixed(2)},${(-r * Math.cos(a)).toFixed(2)}`
+  const large = a1 - a0 > Math.PI ? 1 : 0
+  return `M${point(r1, a0)} A${r1},${r1} 0 ${large} 1 ${point(r1, a1)} L${point(r0, a1)} A${r0},${r0} 0 ${large} 0 ${point(r0, a0)} Z`
 }
 
 // 동결 이후 매일 저장한 예측(live)과 나중에 소급 계산한 예측(backfill)은 섞지 않고 따로 채점한다.

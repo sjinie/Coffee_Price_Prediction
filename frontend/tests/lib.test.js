@@ -105,3 +105,32 @@ test('주간 종가는 마지막 관측을 선택하고 결측과 원본 값을 
   assert.deepEqual(rows, before)
   assert.deepEqual(lib.weeklyLast([]), [])
 })
+
+test('연간 시계: 주간 수익률은 앞 종가가 있을 때만 더하고, 강수는 7일 기준으로 바꾼다', () => {
+  const prices = [
+    { date: '2024-01-01', close: 100 }, { date: '2024-01-02', close: 110 },
+    { date: '2024-01-03', close: null }, { date: '2024-01-09', close: 121 },
+  ]
+  const grid = lib.weeklyReturnGrid(prices, [2024])
+  assert.ok(Math.abs(grid[0][0] - Math.log(1.1)) < 1e-12)   // 1월 1~7일
+  assert.ok(Math.abs(grid[0][1] - Math.log(1.1)) < 1e-12)   // 결측을 건너뛴 다음 종가와 비교
+  assert.equal(grid[0][2], null)
+
+  const weather = { years: [2024], days: [[7, ...Array(50).fill(7), 9]], precip: [[14, ...Array(50).fill(null), 18]] }
+  const rain = lib.weeklyRainGrid(weather, [2023, 2024])
+  assert.deepEqual(rain[0], Array(52).fill(null))           // API에 없는 해는 비워 둔다
+  assert.equal(rain[1][0], 14)
+  assert.equal(rain[1][1], null)
+  assert.equal(rain[1][51], 14)                             // 9일 18mm → 7일 14mm
+})
+
+test('계절 일관성: 해마다 같은 모양이면 1, 모양이 뒤집히면 낮다', () => {
+  const wave = Array.from({ length: 52 }, (_, w) => Math.sin(w / 52 * 2 * Math.PI))
+  assert.ok(lib.seasonality([wave, wave, wave]) > 0.999)
+  assert.ok(lib.seasonality([wave, wave.map(v => -v), wave, wave.map(v => -v)]) < 0)
+  assert.equal(lib.seasonality([Array(52).fill(null)]), null)
+})
+
+test('고리 조각은 12시 방향에서 시작한다', () => {
+  assert.equal(lib.arcPath(10, 20, 0, Math.PI / 2), 'M0.00,-20.00 A20,20 0 0 1 20.00,-0.00 L10.00,-0.00 A10,10 0 0 0 0.00,-10.00 Z')
+})
