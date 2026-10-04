@@ -110,7 +110,7 @@ docker compose run --rm pipeline backfill
 docker compose run --rm pipeline weather
 ```
 
-대시보드는 http://localhost:8080 입니다. 프론트엔드만 개발할 때는 `uvicorn coffee.api:app`을 띄우고 `frontend/`에서 `npm install && npm run dev`를 실행합니다.
+대시보드는 http://localhost:8080 입니다. 프론트엔드만 개발할 때는 `uvicorn coffee.api:app`을 띄우고 `frontend/`에서 `npm install && npm run dev`를 실행합니다. 로컬 DB가 없으면 `frontend/`에서 `API_TARGET=https://coffee-price-sjinie.koreacentral.cloudapp.azure.com npm run dev`로 운영 API를 읽기 전용으로 붙여 화면을 확인합니다.
 
 ## 배운 점과 한계
 

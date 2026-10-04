@@ -12,15 +12,15 @@ const hasLive = computed(() => byHorizon.value.some(row => row.live.evaluated > 
 </script>
 
 <template>
-  <section aria-labelledby="record-title">
-    <p class="eyebrow">적중 기록</p>
-    <h2 id="record-title">예측은 얼마나 맞았을까</h2>
+  <div class="record-block" aria-labelledby="record-title">
+    <h3 id="record-title" class="h3">진짜 평가는 이제부터다.</h3>
+    <p class="prose">모델은 동결한 날 이후 매일 쌓이는 실시간 예측으로 처음 평가받습니다. 소급 계산은 같은 모델을 지난 기간에 적용한 참고 성적입니다.</p>
     <div v-for="section in sections" :key="section.kind" class="record">
-      <h3>{{ section.title }}</h3>
-      <p class="note">{{ section.note }}</p>
-      <p v-if="section.kind === 'live' && !hasLive && !failedHorizons.length" class="muted small">아직 목표일이 지난 실시간 예측이 없습니다.</p>
+      <h4>{{ section.title }}</h4>
+      <p class="cap">{{ section.note }}</p>
+      <p v-if="section.kind === 'live' && !hasLive && !failedHorizons.length" class="cap">아직 목표일이 지난 실시간 예측이 없습니다.</p>
       <div v-else class="table-wrap">
-        <table>
+        <table class="score">
           <thead>
             <tr>
               <th>지평</th><th class="num">채점한 예측</th>
@@ -49,5 +49,5 @@ const hasLive = computed(() => byHorizon.value.some(row => row.live.evaluated > 
         </table>
       </div>
     </div>
-  </section>
+  </div>
 </template>
