@@ -60,9 +60,10 @@ const yProb = computed(() => linearScale(probDomain.value, [PROB.bottom, PROB.to
 
 const point = (date, value) => [x.value(toTime(date)), y.value(value)]
 const pricePath = computed(() => linePath(prices.value.map(row => point(row.date, row.close))))
+// 범위가 없는 날은 null로 남겨 띠를 끊는다
 const pastBand = computed(() => bandPath(
-  band.value.map(row => point(row.target_date, row.price_high)),
-  band.value.map(row => point(row.target_date, row.price_low))))
+  past.value.map(row => (isNumber(row.price_low) ? point(row.target_date, row.price_high) : null)),
+  past.value.map(row => (isNumber(row.price_low) ? point(row.target_date, row.price_low) : null))))
 const fan = computed(() => {
   const row = current.value
   if (!row || !isNumber(row.price_low)) return ''
@@ -182,7 +183,7 @@ function onMove(event) {
           <span>종가 {{ formatNumber(hover.close) }}</span>
           <template v-if="hover.past">
             <span>{{ horizon }}거래일 전 예측 {{ formatNumber(hover.past.predicted_price) }}
-              <small>(오차 {{ formatSigned(hover.past.predicted_price - hover.close) }})</small></span>
+              <small v-if="isNumber(hover.past.predicted_price)">(오차 {{ formatSigned(hover.past.predicted_price - hover.close) }})</small></span>
             <span v-if="isNumber(hover.past.price_low)">예측 범위 {{ formatNumber(hover.past.price_low) }} ~ {{ formatNumber(hover.past.price_high) }}
               <small>({{ hover.past.price_low <= hover.close && hover.close <= hover.past.price_high ? '범위 안' : '범위 밖' }})</small></span>
             <small>기준일 {{ hover.past.origin_date }}{{ hover.past.kind === 'backfill' ? ' · 소급 계산' : '' }}</small>

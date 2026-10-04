@@ -27,7 +27,7 @@ const hasLive = computed(() => byHorizon.value.some(row => row.live.evaluated > 
               <th class="num">가격 오차<small>(모델 / 현재가 유지, ¢/lb)</small></th>
               <th class="num">80% 범위 적중률</th>
               <th class="num">신호 빈도</th><th class="num">신호 적중률</th>
-              <th class="num">실제 상승 비율<small>(늘 '구매'일 때의 적중률)</small></th>
+              <th class="num">같은 날 늘 '구매'<small>(신호를 낸 날의 상승 비율)</small></th>
             </tr>
           </thead>
           <tbody>
@@ -39,7 +39,7 @@ const hasLive = computed(() => byHorizon.value.some(row => row.live.evaluated > 
               <td class="num">{{ formatPercent(row[section.kind].rangeHit) }}</td>
               <td class="num">{{ formatPercent(row[section.kind].signalRate) }}</td>
               <td class="num">{{ formatPercent(row[section.kind].signalHit) }}</td>
-              <td class="num">{{ formatPercent(row[section.kind].upRate) }}</td>
+              <td class="num">{{ formatPercent(row[section.kind].signalUpRate) }}</td>
             </tr>
           </tbody>
         </table>

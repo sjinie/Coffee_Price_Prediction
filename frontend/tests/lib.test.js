@@ -22,6 +22,9 @@ test('선은 결측에서 끊기고 범위 띠는 닫힌 영역이 된다', () =
   assert.equal(linePath([[0, 1], [1, 2], null, [3, 4]]), 'M0.0,1.0 L1.0,2.0 M3.0,4.0')
   assert.equal(bandPath([[0, 1], [1, 1]], [[0, 3], [1, 3]]), 'M0.0,1.0 L1.0,1.0 L1.0,3.0 L0.0,3.0 Z')
   assert.equal(bandPath([], []), '')
+  // 범위가 없는 날(null)에서 끊는다: 없는 범위를 이어 그리지 않는다
+  assert.equal(bandPath([[0, 1], null, [2, 1], [3, 1]], [[0, 3], null, [2, 3], [3, 3]]),
+    'M0.0,1.0 L0.0,3.0 Z M2.0,1.0 L3.0,1.0 L3.0,3.0 L2.0,3.0 Z')
 })
 
 test('척도와 역변환, 범위 여백', () => {
@@ -54,7 +57,8 @@ test('적중 기록은 목표일 가격이 확인된 예측만 센다', () => {
     { signal: 'buy', origin_close: 100, actual_close: null, predicted_price: 101, price_low: 90, price_high: 110, kind: 'live' },
   ]
   assert.deepEqual(trackRecord(rows), {
-    evaluated: 3, pending: 1, upRate: 2 / 3, signalRate: 2 / 3, signalHit: 0.5, rangeHit: 0.5,
+    evaluated: 3, pending: 1, signalRate: 2 / 3, signalHit: 0.5, rangeHit: 0.5,
+    signalUpRate: 1,  // 신호를 낸 두 날 모두 올랐다: 같은 날 늘 '구매'면 2/2
     returnHit: 0.5, maeModel: 6.5, maeNaive: 7.5,  // 예측 가격 104·98 대 실제 110·105, 현재가 유지는 100
   })
   assert.equal(trackRecord([]).signalHit, null)

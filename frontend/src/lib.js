@@ -73,9 +73,20 @@ export function linePath(points) {
 }
 
 // 위쪽 선을 따라가고 아래쪽 선을 거꾸로 돌아오는 닫힌 영역(예측 범위 띠).
+// null(범위가 없는 날)에서 끊어 조각마다 따로 닫는다. 없는 범위를 이어 그리지 않기 위해서다.
 export function bandPath(upper, lower) {
-  if (!upper.length) return ''
-  return `${linePath(upper)} ${linePath([...lower].reverse()).replace(/^M/, 'L')} Z`
+  const pieces = []
+  let start = 0
+  for (let i = 0; i <= upper.length; i += 1) {
+    if (i < upper.length && upper[i] && lower[i]) continue
+    if (i > start) {
+      const top = linePath(upper.slice(start, i))
+      const bottom = linePath(lower.slice(start, i).reverse()).replace(/^M/, 'L')
+      pieces.push(`${top} ${bottom} Z`)
+    }
+    start = i + 1
+  }
+  return pieces.join(' ')
 }
 
 // 기준선(base)에서 end까지 가는 막대. 데이터 끝만 둥글게, 기준선 쪽은 각지게 그린다.
@@ -131,9 +142,10 @@ export function trackRecord(rows) {
   return {
     evaluated: done.length,
     pending: rows.length - done.length,
-    upRate: share(done.filter(row => row.actual_close > row.origin_close), done),
     signalRate: share(signals, done),
     signalHit: share(correct, signals),
+    // 신호 적중률의 기준선: 신호를 낸 그날들에 늘 '구매'라고 했을 때의 적중률(그날들의 상승 비율)
+    signalUpRate: share(signals.filter(row => row.actual_close > row.origin_close), signals),
     rangeHit: share(inside, ranged),
     returnHit: share(sameSide, moved),
     maeModel: mean(priced.map(row => Math.abs(row.predicted_price - row.actual_close))),
