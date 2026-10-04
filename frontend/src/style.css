@@ -279,9 +279,13 @@ th { font-weight: 500; color: var(--ink-2); } th small { display: block; font-si
   .hz-row { grid-template-columns: none; grid-auto-flow: column; grid-auto-columns: 80%; overflow-x: auto; scroll-snap-type: x mandatory; padding-bottom: 6px; }
   .hz { scroll-snap-align: start; }
   .sparks { grid-template-columns: repeat(2, minmax(0, 1fr)); }
-  .stage { grid-column: 1; grid-row: 1; top: 0; height: 44vh; z-index: 2; background: var(--page); }
+  /* 좁은 화면: 차트를 위에 고정하고 문단은 칸 맨 위에 둔다. 칸(40vh)과 문단 높이의 합이 차트 아래 남는 높이(58vh)보다 낮아
+     앞 문단이 차트 밑으로 사라지기 전에 다음 문단이 들어온다. 그래야 빈 화면이 생기지 않는다. */
+  .stage { grid-column: 1; grid-row: 1; top: 0; height: 42vh; z-index: 2; background: var(--page); border-bottom: 1px solid var(--grid); }
   .steps { grid-column: 1; grid-row: 2; }
-  .steps li, .steps li:first-child { min-height: 64vh; align-items: center; padding-top: 0; }
+  .steps li, .steps li:first-child { min-height: 40vh; align-items: flex-start; padding-top: 24px; }
+  .steps li:last-child { min-height: 58vh; }
+  .steps p { font-size: 22px; }
   .spec dt { border-bottom: 0; padding-bottom: 2px; }
   .spec dd { padding-top: 0; }
   .stats { grid-template-columns: minmax(0, 1fr); }
