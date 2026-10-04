@@ -1,66 +1,47 @@
 <script setup>
 import { SIGNAL_LABELS, formatNumber, formatPercent, formatReturn, formatSigned, isNumber, riskLevel } from '../lib.js'
-
 const props = defineProps({
   forecasts: { type: Array, required: true },
-  metadata: { type: Object, default: null }, // 활성 모델의 metadata: 지평별 신호 기준과 수익률 모델의 검증 성적
+  metadata: { type: Object, default: null },
+  horizon: { type: Number, required: true },
 })
+const emit = defineEmits(['update:horizon'])
 const ICONS = { buy: '▲', wait: '▼', hold: '■' }
-const threshold = h => props.metadata?.direction?.horizons?.[h]?.threshold
 const checks = h => props.metadata?.return?.horizons?.[h]
-const signedPercent = value => (isNumber(value) ? `${formatSigned(value)}%` : '-')
+const signedPercent = value => isNumber(value) ? `${formatSigned(value)}%` : '확인 불가'
 </script>
 
 <template>
-  <section aria-labelledby="forecast-title">
-    <h2 id="forecast-title">지평별 전망</h2>
-    <div class="cards">
-      <article v-for="item in forecasts" :key="item.horizon" class="card">
-        <header>
-          <h3>{{ item.horizon }}거래일 뒤</h3>
-          <span class="muted">목표일 {{ item.target_date }}</span>
-        </header>
-        <p class="signal" :class="item.signal">
-          <span aria-hidden="true">{{ ICONS[item.signal] }}</span> {{ SIGNAL_LABELS[item.signal] }}
-        </p>
-        <dl>
-          <div>
-            <dt>예측 가격</dt>
-            <dd>{{ formatNumber(item.predicted_price) }} <span class="muted">({{ formatReturn(item.predicted_return) }})</span></dd>
-          </div>
-          <div>
-            <dt>80% 예상 범위</dt>
-            <dd>{{ formatNumber(item.price_low) }} ~ {{ formatNumber(item.price_high) }}</dd>
-          </div>
-          <div>
-            <dt>상승 확률</dt>
-            <dd>{{ formatPercent(item.prob_up, 1) }} <span class="muted">(기준 {{ formatPercent(threshold(item.horizon)) }})</span></dd>
-          </div>
-          <div>
-            <dt>예측 변동성(연율)</dt>
-            <dd>{{ formatPercent(item.predicted_vol) }}</dd>
-          </div>
-          <div class="risk">
-            <dt>위험 수준</dt>
-            <dd>
-              {{ riskLevel(item.vol_percentile) }} <span class="muted">(최근 3년 중 {{ formatPercent(item.vol_percentile) }})</span>
-              <span class="meter" role="img" :aria-label="`최근 3년 대비 변동성 위치 ${formatPercent(item.vol_percentile)}`">
-                <span v-if="isNumber(item.vol_percentile)" :style="{ left: `${item.vol_percentile * 100}%` }" />
-              </span>
-            </dd>
-          </div>
-        </dl>
-        <p v-if="checks(item.horizon)" class="muted small">
-          예측 가격의 과거 검증: 현재가 유지 대비 오차(RMSE) {{ signedPercent(checks(item.horizon).dev?.rmse_vs_naive_pct) }} (개발)
-          · {{ signedPercent(checks(item.horizon).holdout?.rmse_vs_naive_pct) }} (보류), 방향 정확도
-          {{ formatPercent(checks(item.horizon).holdout?.direction_acc) }} (보류)
-        </p>
-      </article>
+  <section class="forecast-section" aria-labelledby="forecast-title">
+    <p class="eyebrow">세 가지 시간</p>
+    <h2 id="forecast-title">얼마나 멀리 내다볼까</h2>
+    <div class="forecast-columns" role="group" aria-label="전망 지평 선택">
+      <button v-for="item in forecasts" :key="item.horizon" class="forecast-column"
+        :aria-pressed="horizon === item.horizon" @click="emit('update:horizon', item.horizon)">
+        <span class="column-label">{{ item.horizon }}거래일 뒤 · {{ item.target_date }}</span>
+        <span class="forecast-price">{{ formatNumber(item.predicted_price) }}<span class="unit">¢/lb</span></span>
+        <span>{{ formatReturn(item.predicted_return) }} · 범위 {{ formatNumber(item.price_low, 0) }}–{{ formatNumber(item.price_high, 0) }}¢</span>
+        <span class="signal" :class="item.signal"><span aria-hidden="true">{{ ICONS[item.signal] }}</span> {{ SIGNAL_LABELS[item.signal] }} · 상승 {{ formatPercent(item.prob_up, 1) }}</span>
+        <span>위험 {{ riskLevel(item.vol_percentile) }} · 최근 3년 중 {{ formatPercent(item.vol_percentile) }}</span>
+        <span class="validation">보류 구간 검증: 현재가 유지 대비 오차 {{ signedPercent(checks(item.horizon)?.holdout?.rmse_vs_naive_pct) }}, 방향 정확도 {{ formatPercent(checks(item.horizon)?.holdout?.direction_acc) }}</span>
+      </button>
     </div>
-    <p class="note">
-      기준일 종가는 {{ formatNumber(forecasts[0]?.origin_close) }} ¢/lb입니다. 예측 가격은 지평별 수익률 모델의 값이고, 80% 범위는 예측 가격을 가운데에 둔 구간입니다.
-      수익률 모델은 과거 검증에서 현재가를 그대로 쓰는 것보다 오차가 컸습니다(카드 아래 숫자). 실제 성적은 아래 적중 기록에 쌓입니다.
-      신호는 상승 확률이 기준 이상이면 '지금 구매', (1 − 기준) 이하이면 '미루기'이고, 그 사이는 '보류'입니다.
+    <p class="honesty">
+      예측 가격은 과거 검증에서 현재가를 그대로 쓰는 것보다 오차가 컸습니다. 기준선을 분명히 넘은 것은 5·20일 변동성 예측, 곧 범위의 폭뿐입니다.
+      <template v-if="forecasts.every(item => item.kind === 'backfill')">현재 표시된 예측은 동결 모델로 소급 계산한 값입니다. 실시간 성적과 구분해서 보아야 합니다.</template>
+      <template v-else>동결 모델의 소급 계산과 이후 저장한 실시간 예측의 성적은 아래에서 따로 확인합니다.</template>
     </p>
+    <details class="model-details">
+      <summary>변동성과 검증 숫자 자세히 보기</summary>
+      <div class="table-wrap"><table>
+        <thead><tr><th>지평</th><th>예측 변동성(연율)</th><th>현재가 유지 대비 오차(개발)</th><th>구매 / 미루기 기준</th></tr></thead>
+        <tbody><tr v-for="item in forecasts" :key="item.horizon">
+          <td>{{ item.horizon }}거래일</td><td>{{ formatPercent(item.predicted_vol) }}</td>
+          <td>{{ signedPercent(checks(item.horizon)?.dev?.rmse_vs_naive_pct) }}</td>
+          <td>{{ formatPercent(metadata?.direction?.horizons?.[item.horizon]?.threshold) }} /
+            {{ isNumber(metadata?.direction?.horizons?.[item.horizon]?.threshold) ? formatPercent(1 - metadata.direction.horizons[item.horizon].threshold) : '-' }}</td>
+        </tr></tbody>
+      </table></div>
+    </details>
   </section>
 </template>

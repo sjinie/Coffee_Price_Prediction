@@ -25,7 +25,8 @@ const articles = computed(() => props.news.articles.slice(0, 12))
 
 <template>
   <section aria-labelledby="news-title">
-    <h2 id="news-title">뉴스 압력 <span class="badge">참고 정보 · 모델 입력 아님</span></h2>
+    <p class="eyebrow">뉴스 압력</p>
+    <h2 id="news-title">뉴스는 무엇을 말할까 <span class="badge">참고 정보 · 모델 입력 아님</span></h2>
     <p class="note">
       매일 커피 시장 기사를 골라 TypeSafe Jev로 가격 상승·하락 압력을 분류합니다. 과거 기사를 분석한 결과, 점수는 앞으로의 가격보다
       이미 일어난 움직임과 더 관련되어 예측에 넣지 않았습니다(노트북 05). 실시간 점수가 쌓이면 다시 검증합니다.
