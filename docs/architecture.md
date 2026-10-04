@@ -106,8 +106,8 @@
 
 - `backfill`: 모델 등록, 가격·기상 전체, 2026-01-01부터 최신 기준일까지 예측(`kind='backfill'`), 보관 뉴스 1,446건.
 - `daily`: 소스 갱신 → 기상 최근 30일 적재 → 최신 기준일 예측(`kind='live'`) → 최근 7일 기사 중 새 기사를 Jev로 분류(한 번에 20건). 비용은 응답을 받아야 알 수 있어 실행마다 0.01 USD를 미리 잡고, 누적 상한 1 USD까지 남은 예산이 그보다 작으면 분류하지 않는다.
-- `weather`: 이미 모은 `data/sources/`를 읽어 기상만 전체 upsert한다. 수집·모델 실행·가격 적재·뉴스 분류는 하지 않는다. 별도 적재는 `python -m coffee.pipeline weather`로 실행한다.
-- 기상 적재 시작일은 `settings.yaml`의 `collect_start`(2005-01-01)다. `daily`의 30일은 실행일(UTC)을 포함한 달력 날짜이며 누락된 날을 채우지 않는다. 수집이 실패한 산지는 기존 `sources` 경고를 유지하고 보관 Parquet에서 해당 기간만 적재한다. 필수 Parquet가 없으면 `load_sources`에서 실패한다.
+- `weather`: `data/sources/weather_<산지 id>.parquet` 6개만 읽어 기상 전체를 upsert한다. 가격·거시·ENSO Parquet는 필요 없다. 수집·모델 실행·가격 적재·뉴스 분류는 하지 않는다. 별도 적재는 `python -m coffee.pipeline weather`로 실행한다.
+- 기상 적재 시작일은 `settings.yaml`의 `collect_start`(2005-01-01)다. `daily`의 30일은 실행일(UTC)을 포함한 달력 날짜이며 누락된 날을 채우지 않는다. 수집이 실패한 산지는 기존 `sources` 경고를 유지하고 보관 Parquet에서 해당 기간만 적재한다. `daily`·`backfill`은 기존 `load_sources`로 전체 소스를 읽는다. `weather`는 기상 6개만 직접 읽으며 기상 파일 누락이나 중복 날짜는 실행 실패로 처리한다.
 - 기상 적재는 `pipeline_runs.steps`에 `{"step": "weather", "upserted": n}`을 남긴다. 건수는 새 행과 같은 키의 갱신 행을 모두 포함한다.
 - `backfill`·`daily` 모두 23:00 UTC 마감이 지난 거래일의 가격만 쓴다. 장중에 실행해도 끝나지 않은 오늘 봉으로 예측을 저장하지 않는다.
 - 종료 코드: `0` 성공, `3` 경고(예측은 저장, 일부 소스 실패·가격 지연·기준일 피처 결측·뉴스 실패), `1` 실패.

@@ -194,26 +194,30 @@ def test_weather_api_default_compact_shape_validation_start_and_empty_region(con
         assert client.get("/api/weather", params={"region": invalid}).status_code == 422
 
 
-def test_weather_command_only_updates_weather_and_records_count(conn, monkeypatch, tmp_path, sources):
+@pytest.mark.parametrize("broken_weather, error_type", [("missing", "FileNotFoundError"), ("duplicate", "ValueError")])
+def test_weather_command_needs_only_weather_files_and_preserves_prices(
+        conn, monkeypatch, tmp_path, sources, broken_weather, error_type):
     from coffee import pipeline
-    from coffee.sources import load_sources
 
     for name, frame in sources.items():
         if name.startswith("weather_"):
-            frame = weather_frame(["2004-12-31", "2005-01-01", "2026-10-02"])
-        frame.to_parquet(tmp_path / f"{name}.parquet", index=False)
+            frame = weather_frame(["2026-10-02", "2004-12-31", "2005-01-01"])
+            frame["date"] = frame["date"].dt.strftime("%Y-%m-%d")  # 문자열 날짜도 기존 loader처럼 변환
+            frame.to_parquet(tmp_path / f"{name}.parquet", index=False)
+    assert len(list(tmp_path.glob("*.parquet"))) == 6
+    assert not (tmp_path / "prices.parquet").exists()
     db.upsert_prices(conn, sources["prices"].tail(1))
     conn.commit()
     prices_before = conn.execute("SELECT * FROM prices").fetchall()
     conn.commit()
     monkeypatch.setenv("DATABASE_URL", URL)
     monkeypatch.setattr(pipeline, "load_dotenv", lambda *args: None)
-    monkeypatch.setattr(pipeline, "load_sources", lambda: load_sources(tmp_path))
+    monkeypatch.setattr(pipeline, "SOURCES_DIR", tmp_path)
 
     def forbidden(*args, **kwargs):
         pytest.fail("기상 단독 명령이 수집·모델·가격·뉴스 작업을 실행함")
 
-    for name in ("update_all", "load_models", "build_dataset", "update_news", "load_jev_archive"):
+    for name in ("load_sources", "update_all", "load_models", "build_dataset", "update_news", "load_jev_archive"):
         monkeypatch.setattr(pipeline, name, forbidden)
     monkeypatch.setattr(db, "upsert_prices", forbidden)
     assert pipeline.main(["weather"]) == 0
@@ -223,9 +227,15 @@ def test_weather_command_only_updates_weather_and_records_count(conn, monkeypatc
     run = conn.execute("SELECT command, status, steps FROM pipeline_runs").fetchone()
     assert run == {"command": "weather", "status": "success", "steps": [{"step": "weather", "upserted": 12}]}
     conn.commit()
-    (tmp_path / "weather_co_huila.parquet").unlink()
+    broken_path = tmp_path / "weather_co_huila.parquet"
+    if broken_weather == "missing":
+        broken_path.unlink()
+    else:
+        weather_frame(["2026-10-02", "2026-10-02"]).to_parquet(broken_path, index=False)
     assert pipeline.main(["weather"]) == 1
-    assert conn.execute("SELECT status FROM pipeline_runs ORDER BY run_id DESC LIMIT 1").fetchone()["status"] == "failed"
+    failed = conn.execute("SELECT status, message FROM pipeline_runs ORDER BY run_id DESC LIMIT 1").fetchone()
+    assert failed["status"] == "failed"
+    assert error_type in failed["message"] and "weather_co_huila" in failed["message"]
 
 
 @pytest.mark.parametrize("command, expected_count, first", [

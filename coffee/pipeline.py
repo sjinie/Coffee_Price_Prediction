@@ -17,7 +17,7 @@ import pandas as pd
 from dotenv import load_dotenv
 
 from . import db, jev
-from .config import ARTIFACTS_DIR, FORWARD_START, HORIZONS, REGION_IDS, ROOT, SETTINGS
+from .config import ARTIFACTS_DIR, FORWARD_START, HORIZONS, REGION_IDS, ROOT, SETTINGS, SOURCES_DIR
 from .features import build_dataset, trading_sessions
 from .models import buy_signal, load_bundle, price_range
 from .news import load_jev_archive
@@ -145,7 +145,16 @@ def store_weather(conn, sources: dict, recent_days: int | None = None, now: date
 
 
 def weather(conn) -> tuple[int, list]:
-    step = store_weather(conn, load_sources())
+    """기상 파일 6개만 읽는다. 가격·거시 자료 없이도 단독 적재할 수 있다."""
+    sources = {}
+    for region in REGION_IDS:
+        name = f"weather_{region}"
+        frame = pd.read_parquet(SOURCES_DIR / f"{name}.parquet")
+        frame["date"] = pd.to_datetime(frame["date"]).astype("datetime64[ns]")
+        if frame["date"].duplicated().any():
+            raise ValueError(f"{name}: 날짜가 중복됩니다")
+        sources[name] = frame.sort_values("date").reset_index(drop=True)
+    step = store_weather(conn, sources)
     conn.commit()
     return EXIT_OK, [step]
 
