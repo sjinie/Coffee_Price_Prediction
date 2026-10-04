@@ -28,6 +28,21 @@ export function formatTime(value) {
 // 'YYYY-MM-DD'를 UTC 자정의 밀리초로 바꾼다. 날짜끼리만 비교하므로 시간대 영향이 없다.
 export const toTime = date => Date.parse(`${date}T00:00:00Z`)
 
+// 기후 API와 같은 주: 1월 1일부터 7일씩, 남은 8~9일은 51주다(ISO 주차 아님).
+export function weekIndex(date) {
+  const time = toTime(date)
+  const year = new Date(time).getUTCFullYear()
+  return Math.min(51, Math.floor((time - Date.UTC(year, 0, 1)) / (7 * 86400000)))
+}
+
+export function weeklyLast(prices) {
+  const weeks = new Map()
+  for (const row of [...prices].sort((a, b) => a.date.localeCompare(b.date))) {
+    weeks.set(`${row.date.slice(0, 4)}-${weekIndex(row.date)}`, row)
+  }
+  return [...weeks.values()]
+}
+
 export function linearScale([d0, d1], [r0, r1]) {
   const span = d1 - d0 || 1
   const scale = value => r0 + ((value - d0) / span) * (r1 - r0)
@@ -70,6 +85,11 @@ export function linePath(points) {
     })
     .filter(Boolean)
     .join(' ')
+}
+
+// 선분이 없는 관측도 보이게 할 점·범위. 결측이나 live/backfill 경계의 한 점을 찾는다.
+export function isolatedItems(items) {
+  return items.filter((item, i) => item && !items[i - 1] && !items[i + 1])
 }
 
 // 위쪽 선을 따라가고 아래쪽 선을 거꾸로 돌아오는 닫힌 영역(예측 범위 띠).

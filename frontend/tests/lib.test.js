@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict'
+import * as lib from '../src/lib.js'
 import { test } from 'node:test'
 
 import {
@@ -81,4 +82,26 @@ test('실시간 성적은 소급 계산과 섞지 않는다', () => {
   assert.equal(byKind.live.rangeHit, 0)
   assert.equal(byKind.backfill.signalHit, 1)
   assert.equal(byKind.live.evaluated, 10)
+})
+test('연 시계와 주간 가격은 1월 1일부터 같은 52주를 쓴다', () => {
+  for (const [date, expected] of [
+    ['2025-01-01', 0], ['2025-01-07', 0], ['2025-01-08', 1],
+    ['2025-12-24', 51], ['2025-12-31', 51], ['2024-12-31', 51],
+    ['2024-02-29', 8], ['2026-01-01', 0],
+  ]) assert.equal(lib.weekIndex(date), expected, date)
+})
+
+test('주간 종가는 마지막 관측을 선택하고 결측과 원본 값을 보존한다', () => {
+  const rows = [
+    { date: '2026-01-08', close: 120 }, { date: '2025-12-31', close: 100.125 },
+    { date: '2026-01-02', close: 105 }, { date: '2026-01-07', close: null },
+    { date: '2025-12-24', close: 99 }, { date: '2026-01-09', close: 121 },
+  ]
+  const before = structuredClone(rows)
+  assert.deepEqual(lib.weeklyLast(rows), [
+    { date: '2025-12-31', close: 100.125 }, { date: '2026-01-07', close: null },
+    { date: '2026-01-09', close: 121 },
+  ])
+  assert.deepEqual(rows, before)
+  assert.deepEqual(lib.weeklyLast([]), [])
 })

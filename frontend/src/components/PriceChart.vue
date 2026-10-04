@@ -1,217 +1,253 @@
 <script setup>
-import { computed, ref } from 'vue'
+import { computed, ref, watch } from 'vue'
 import {
-  HORIZONS, SIGNAL_LABELS, bandPath, extent, formatNumber, formatPercent, formatReturn, formatSigned, isNumber,
-  linePath, linearScale, modelFor, nearestIndex, ticks, toTime,
+  HORIZONS, SIGNAL_LABELS, bandPath, extent, formatNumber, formatPercent, formatReturn, formatSigned,
+  isNumber, isolatedItems, linePath, linearScale, modelFor, nearestIndex, ticks, toTime, weeklyLast,
 } from '../lib.js'
 import { useWidth } from '../useWidth.js'
 
 const props = defineProps({
-  prices: { type: Array, required: true },   // [{date, close}]
-  history: { type: Object, required: true }, // {5: [예측 행], 20: [...], 60: [...]}
-  latest: { type: Array, required: true },
-  metadata: { type: Object, default: null }, // 활성 모델의 metadata. 지평별 모델 이름과 신호 기준을 읽는다.
+  prices: { type: Array, required: true }, history: { type: Object, required: true }, latest: { type: Array, required: true },
+  metadata: { type: Object, default: null }, horizon: { type: Number, required: true },
+  allPrices: { type: Array, default: null }, fullLoading: Boolean, fullError: { type: String, default: '' }, historyFailed: Boolean,
 })
-// 위 칸은 종가와 예상 범위, 아래 칸은 기준일마다 낸 상승 확률. 두 칸이 x축을 같이 쓴다.
-const PRICE = { top: 16, bottom: 276 }
-const PROB = { top: 300, bottom: 396 }
-const HEIGHT = 420
-const MARGIN = { right: 64, left: 48 } // 오른쪽 여백에 구매·미루기 기준 라벨을 둔다(선과 겹치지 않게)
-const horizon = ref(20)
+const emit = defineEmits(['update:horizon', 'load-all'])
+const period = ref('year')
 const box = ref(null)
 const width = useWidth(box)
-
-const returnModel = computed(() => modelFor(props.metadata, 'return', horizon.value))
-const rangeModel = computed(() => modelFor(props.metadata, 'volatility', horizon.value))
-const probModel = computed(() => modelFor(props.metadata, 'direction', horizon.value))
-const threshold = computed(() => props.metadata?.direction?.horizons?.[horizon.value]?.threshold)
-
-const prices = computed(() => props.prices.filter(row => isNumber(row.close)))
-const start = computed(() => prices.value[0]?.date)
-const current = computed(() => props.latest.find(row => row.horizon === horizon.value))
-const rows = computed(() => props.history[horizon.value] || [])
-// 목표일이 이미 지난 과거 예측. 목표일에 맞춰 그려 그날의 실제 종가와 비교한다.
-// 아직 오지 않은 목표일은 오늘의 예측(부채꼴)으로만 보여 준다.
-const past = computed(() => rows.value
-  .filter(row => row.target_date >= start.value && row.target_date <= prices.value.at(-1)?.date))
-const band = computed(() => past.value.filter(row => isNumber(row.price_low)))
-const probRows = computed(() => rows.value.filter(row => isNumber(row.prob_up) && row.origin_date >= start.value))
+const hover = ref(null)
+const all = computed(() => period.value === 'all' && props.allPrices !== null)
+const PRICE = { top: 40, bottom: 320 }
+const PROB = { top: 408, bottom: 488 }
+const MARGIN = { left: 40, right: 88 }
+const height = computed(() => all.value ? 408 : 520)
+const current = computed(() => props.latest.find(row => row.horizon === props.horizon))
+const threshold = computed(() => props.metadata?.direction?.horizons?.[props.horizon]?.threshold)
+const prices = computed(() => all.value ? weeklyLast(props.allPrices) : props.prices)
+const start = computed(() => prices.value[0]?.date || current.value?.origin_date)
+const lastDate = computed(() => prices.value.at(-1)?.date || current.value?.origin_date)
+const end = computed(() => [lastDate.value, current.value?.target_date].filter(Boolean).sort().at(-1))
+const rows = computed(() => props.history[props.horizon] || [])
+const past = computed(() => rows.value.filter(row => row.target_date >= start.value && row.target_date <= lastDate.value))
+const probRows = computed(() => rows.value.filter(row => row.origin_date >= start.value && row.origin_date <= lastDate.value))
 const byTarget = computed(() => new Map(past.value.map(row => [row.target_date, row])))
 const byOrigin = computed(() => new Map(probRows.value.map(row => [row.origin_date, row])))
-
-const x = computed(() => {
-  const end = current.value?.target_date || prices.value.at(-1)?.date
-  return linearScale([toTime(start.value), toTime(end)], [MARGIN.left, width.value - MARGIN.right])
-})
+const hasData = computed(() => prices.value.some(row => isNumber(row.close)) || (!all.value && isNumber(current.value?.origin_close)))
+const x = computed(() => linearScale([toTime(start.value), toTime(end.value)], [MARGIN.left, width.value - MARGIN.right]))
 const yDomain = computed(() => extent([
   ...prices.value.map(row => row.close),
-  ...band.value.flatMap(row => [row.price_low, row.price_high]),
-  ...past.value.map(row => row.predicted_price),
-  current.value?.price_low, current.value?.price_high, current.value?.predicted_price,
+  ...(!all.value ? past.value.flatMap(row => [row.predicted_price, row.price_low, row.price_high]) : []),
+  current.value?.origin_close, current.value?.predicted_price, current.value?.price_low, current.value?.price_high,
 ]))
-const y = computed(() => linearScale(yDomain.value, [PRICE.bottom, PRICE.top]))
-// 수축한 확률은 0.5 근처에 모이므로 0~100% 전체 대신 값과 기준선이 들어가는 범위만 보여 준다.
+const y = computed(() => linearScale(yDomain.value, [PRICE.bottom, all.value ? 96 : PRICE.top]))
 const probDomain = computed(() => {
   const t = threshold.value
-  const [low, high] = extent([...probRows.value.map(row => row.prob_up), 0.5, t, isNumber(t) ? 1 - t : null], 0.15)
+  const [low, high] = extent([...probRows.value.map(row => row.prob_up), current.value?.prob_up, .5, t, isNumber(t) ? 1 - t : null], .15)
   return [Math.max(0, low), Math.min(1, high)]
 })
 const yProb = computed(() => linearScale(probDomain.value, [PROB.bottom, PROB.top]))
-
-const point = (date, value) => [x.value(toTime(date)), y.value(value)]
+const point = (date, value) => isNumber(value) && Number.isFinite(toTime(date)) ? [x.value(toTime(date)), y.value(value)] : null
 const pricePath = computed(() => linePath(prices.value.map(row => point(row.date, row.close))))
-// 범위가 없는 날은 null로 남겨 띠를 끊는다
-const pastBand = computed(() => bandPath(
-  past.value.map(row => (isNumber(row.price_low) ? point(row.target_date, row.price_high) : null)),
-  past.value.map(row => (isNumber(row.price_low) ? point(row.target_date, row.price_low) : null))))
+const kinds = ['backfill', 'live']
+const series = computed(() => kinds.map(kind => {
+  const prediction = past.value.map(row => row.kind === kind ? point(row.target_date, row.predicted_price) : null)
+  const ranges = past.value.map(row => row.kind === kind && isNumber(row.price_low) && isNumber(row.price_high)
+    ? { high: point(row.target_date, row.price_high), low: point(row.target_date, row.price_low) } : null)
+  const probability = probRows.value.map(row => row.kind === kind && isNumber(row.prob_up)
+    ? [x.value(toTime(row.origin_date)), yProb.value(row.prob_up)] : null)
+  return {
+    kind, prediction: linePath(prediction), probability: linePath(probability),
+    band: bandPath(ranges.map(item => item?.high), ranges.map(item => item?.low)),
+    singlePrices: isolatedItems(prediction), singleRanges: isolatedItems(ranges), singleProbabilities: isolatedItems(probability),
+  }
+}))
+const origin = computed(() => current.value ? point(current.value.origin_date, current.value.origin_close) : null)
+const predicted = computed(() => current.value ? point(current.value.target_date, current.value.predicted_price) : null)
 const fan = computed(() => {
   const row = current.value
-  if (!row || !isNumber(row.price_low)) return ''
-  const [ox, oy] = point(row.origin_date, row.origin_close)
-  const [tx, high] = point(row.target_date, row.price_high)
-  const low = y.value(row.price_low)
-  return `M${ox},${oy} L${tx},${high} L${tx},${low} Z`
+  if (!origin.value || !isNumber(row?.price_low) || !isNumber(row?.price_high)) return ''
+  return `M${origin.value.join(',')} L${point(row.target_date, row.price_high).join(',')} L${point(row.target_date, row.price_low).join(',')} Z`
 })
-const pastPrediction = computed(() => linePath(past.value
-  .map(row => (isNumber(row.predicted_price) ? point(row.target_date, row.predicted_price) : null))))
-// 오늘의 예측: 기준일 종가에서 목표일의 예측 가격까지
-const todayPrediction = computed(() => {
+const directLabels = computed(() => {
   const row = current.value
-  if (!row || !isNumber(row.predicted_price)) return null
-  return { from: point(row.origin_date, row.origin_close), to: point(row.target_date, row.predicted_price) }
+  if (!row) return []
+  const labels = [
+    { value: row.price_high, text: `상한 ${formatNumber(row.price_high, 0)}` },
+    { value: row.predicted_price, text: `예측 ${formatNumber(row.predicted_price)}`, predicted: true },
+    { value: row.price_low, text: `하한 ${formatNumber(row.price_low, 0)}` },
+  ].filter(item => isNumber(item.value)).map(item => ({ ...item, actualY: y.value(item.value), labelY: y.value(item.value) }))
+  labels.sort((a, b) => a.actualY - b.actualY)
+  for (let i = 1; i < labels.length; i++) labels[i].labelY = Math.max(labels[i].labelY, labels[i - 1].labelY + 16)
+  return labels
 })
-const probPath = computed(() => linePath(probRows.value.map(row => [x.value(toTime(row.origin_date)), yProb.value(row.prob_up)])))
-const lastProb = computed(() => probRows.value.at(-1))
+const backfillStart = computed(() => past.value.find(row => row.kind === 'backfill' && isNumber(row.predicted_price)))
 const yTicks = computed(() => ticks(yDomain.value))
 const probTicks = computed(() => ticks(probDomain.value, 3))
 const xTicks = computed(() => {
-  const [t0, t1] = [x.value.invert(MARGIN.left), x.value.invert(width.value - MARGIN.right)]
-  const step = width.value < 600 ? 3 : 2
+  if (!hasData.value) return []
   const result = []
-  for (let d = new Date(t0); d.getTime() <= t1; d.setUTCMonth(d.getUTCMonth() + 1)) {
-    d.setUTCDate(1)
-    if (d.getTime() >= t0 && d.getUTCMonth() % step === 0) {
-      result.push({ time: d.getTime(), label: `${String(d.getUTCFullYear()).slice(2)}.${d.getUTCMonth() + 1}` })
-    }
+  if (all.value) {
+    const lastYear = Number(end.value?.slice(0, 4))
+    const years = width.value < 600 ? [2005, 2015, lastYear] : [2005, 2010, 2015, 2020, lastYear]
+    return [...new Set(years)].map(year => ({ time: Math.max(toTime(start.value), toTime(`${year}-01-01`)), label: `${year}` }))
+  }
+  const date = new Date(toTime(start.value))
+  date.setUTCDate(1)
+  const step = width.value < 600 ? 4 : 2
+  while (date.getTime() <= toTime(end.value)) {
+    if (date.getTime() >= toTime(start.value) && date.getUTCMonth() % step === 0) result.push({ time: date.getTime(), label: `${String(date.getUTCFullYear()).slice(2)}.${date.getUTCMonth() + 1}` })
+    date.setUTCMonth(date.getUTCMonth() + 1)
   }
   return result
 })
-
-const hover = ref(null)
+// 주석은 실제로 표시하는 관측에서 위치를 정한다.
+const annotations = computed(() => {
+  if (!all.value) {
+    const i = prices.value.findIndex(row => row.date === '2026-07-06')
+    const row = prices.value[i], previous = prices.value[i - 1]
+    if (!row || !isNumber(row.close) || !isNumber(previous?.close) || previous.close === 0) return []
+    const [cx, cy] = point(row.date, row.close)
+    const lx = Math.max(MARGIN.left, Math.min(cx - 160, width.value - 216))
+    return [{ date: row.date, cx, cy, lx, ly: 16, text: `7월 6일 로그수익률 ${formatSigned(Math.log(row.close / previous.close) * 100)}%` }]
+  }
+  const peak = year => prices.value.filter(row => row.date.startsWith(year) && isNumber(row.close)).reduce((best, row) => !best || row.close > best.close ? row : best, null)
+  const frost = prices.value.find(row => row.date >= '2021-07-20' && row.date <= '2021-07-27' && isNumber(row.close))
+  return [[peak('2011'), '2011 고점'], [frost, '2021.7 산지 한파 뒤 급등'], [peak('2025'), '2025 고점']]
+    .filter(([row]) => row).map(([row, text], i) => {
+      const [cx, cy] = point(row.date, row.close)
+      return { date: row.date, cx, cy, lx: MARGIN.left + 8, ly: 16 + i * 24, text }
+    })
+})
+function selectPeriod(value) {
+  period.value = value
+  hover.value = null
+  if (value === 'all') emit('load-all')
+}
 function onMove(event) {
+  if (!hasData.value) return
   const rect = event.currentTarget.getBoundingClientRect()
-  const time = x.value.invert(event.clientX - rect.left)
-  const lastPrice = prices.value.at(-1)
-  if (current.value && time > toTime(lastPrice.date)) {
-    hover.value = { left: x.value(toTime(current.value.target_date)), date: current.value.target_date, future: current.value }
+  const time = x.value.invert((event.clientX - rect.left) * width.value / rect.width)
+  if (current.value && time > toTime(lastDate.value)) {
+    hover.value = { date: current.value.target_date, left: x.value(toTime(current.value.target_date)), future: current.value }
     return
   }
-  const index = nearestIndex(prices.value.map(row => toTime(row.date)), time)
-  const row = prices.value[index]
-  hover.value = {
-    left: x.value(toTime(row.date)), date: row.date, close: row.close,
-    past: byTarget.value.get(row.date), prob: byOrigin.value.get(row.date),
-  }
+  if (!prices.value.length) return
+  const row = prices.value[nearestIndex(prices.value.map(row => toTime(row.date)), time)]
+  hover.value = { ...row, left: x.value(toTime(row.date)), past: !all.value && byTarget.value.get(row.date), prob: !all.value && byOrigin.value.get(row.date) }
 }
+watch(() => [props.horizon, all.value], () => { hover.value = null })
 </script>
 
 <template>
-  <section aria-labelledby="chart-title">
-    <div class="section-head">
-      <h2 id="chart-title">가격과 예측 <span class="muted">센트/파운드</span></h2>
-      <div class="segmented" role="group" aria-label="지평 선택">
-        <button v-for="h in HORIZONS" :key="h" :class="{ active: horizon === h }" :aria-pressed="horizon === h" @click="horizon = h">
-          {{ h }}거래일
-        </button>
+  <section id="price-section" class="forecast-chart" aria-labelledby="chart-title">
+    <p class="eyebrow">가격의 흐름</p>
+    <h2 id="chart-title">가격은 어디로 향하고 있을까</h2>
+    <div class="chart-controls">
+      <div class="toggle-group" role="group" aria-label="지평 선택">
+        <button v-for="h in HORIZONS" :key="h" class="toggle" :aria-pressed="horizon === h" @click="emit('update:horizon', h)">{{ h }}거래일</button>
+      </div>
+      <div class="toggle-group" role="group" aria-label="가격 조회 기간">
+        <button class="toggle" :aria-pressed="period === 'year'" @click="selectPeriod('year')">1년</button>
+        <button class="toggle" :aria-pressed="period === 'all'" @click="selectPeriod('all')">전체 2005–</button>
       </div>
     </div>
-    <ul class="legend">
-      <li><i class="key line" />종가</li>
-      <li><i class="key pred" />{{ horizon }}거래일 전에 예측한 가격</li>
-      <li><i class="key band" />그때 예측한 80% 범위 (2026년은 소급 계산)</li>
-      <li><i class="key fan" />오늘의 예측 가격·범위</li>
-      <li><i class="key prob" />기준일에 낸 {{ horizon }}거래일 상승 확률 (아래 칸)</li>
-      <li><i class="key threshold" />구매·미루기 기준</li>
+    <p v-if="period === 'all' && fullLoading" class="small" role="status">전체 가격을 불러오는 동안 최근 1년을 보여 줍니다…</p>
+    <p v-if="period === 'all' && fullError" class="small" role="status">{{ fullError }} 현재 그래프는 최근 1년입니다. <button class="toggle" @click="emit('load-all')">다시 시도</button></p>
+    <p v-if="historyFailed" class="small">선택한 지평의 과거 예측을 불러오지 못했습니다.</p>
+    <ul v-if="!all" class="legend" aria-label="가격 그래프 범례">
+      <li v-if="pricePath"><i class="key line" />실제 종가</li>
+      <li v-if="series.some(s => s.prediction)"><i class="key pred" />{{ horizon }}거래일 전 예측</li>
+      <li v-if="series.some(s => s.band)"><i class="key band" />그때의 80% 범위</li>
+      <li v-if="fan"><i class="key fan" />오늘의 예측</li>
     </ul>
     <div ref="box" class="chart-box">
-      <svg :width="width" :height="HEIGHT" role="img"
-           :aria-label="`KC=F 종가와 ${horizon}거래일 예측. 위 칸은 예상 범위, 아래 칸은 상승 확률입니다. 표는 아래 '표로 보기'에 있습니다.`"
-           @pointermove="onMove" @pointerleave="hover = null">
-        <g class="grid">
-          <line v-for="(tick, i) in yTicks" :key="i" :x1="MARGIN.left" :x2="width - MARGIN.right" :y1="y(tick)" :y2="y(tick)" />
-          <line v-for="(tick, i) in probTicks" :key="`p${i}`" :x1="MARGIN.left" :x2="width - MARGIN.right" :y1="yProb(tick)" :y2="yProb(tick)" />
-        </g>
+      <svg v-if="hasData" :width="width" :height="height" role="img"
+        :aria-label="`${all ? '2005년 이후 주간' : '최근 400일 일별'} 종가와 ${horizon}거래일 예측. ${all ? '' : '아래 칸은 기준일별 상승 확률입니다.'} 값은 아래 표에서도 확인할 수 있습니다.`"
+        @pointermove="onMove" @pointerleave="hover = null" @pointercancel="hover = null">
+        <g class="grid"><line v-for="tick in yTicks" :key="tick" :x1="MARGIN.left" :x2="width - MARGIN.right" :y1="y(tick)" :y2="y(tick)" /></g>
         <g class="axis-label">
-          <text v-for="(tick, i) in yTicks" :key="`y${i}`" :x="MARGIN.left - 8" :y="y(tick) + 4" text-anchor="end">{{ Math.round(tick) }}</text>
-          <text v-for="(tick, i) in probTicks" :key="`py${i}`" :x="MARGIN.left - 8" :y="yProb(tick) + 4" text-anchor="end">{{ formatPercent(tick) }}</text>
-          <text v-for="tick in xTicks" :key="tick.time" :x="x(tick.time)" :y="HEIGHT - 8" text-anchor="middle">{{ tick.label }}</text>
+          <text v-for="tick in yTicks" :key="tick" :x="MARGIN.left - 8" :y="y(tick) + 4" text-anchor="end">{{ Math.round(tick) }}</text>
+          <text v-for="tick in xTicks" :key="tick.time" :x="x(tick.time)" :y="height - 8" text-anchor="middle">{{ tick.label }}</text>
+          <text class="plot-label" :x="MARGIN.left" :y="all ? 88 : 32">센트/파운드</text>
         </g>
-        <!-- 각 칸을 그린 모델. 지평마다 다를 수 있어 활성 모델의 metadata에서 읽는다. -->
-        <text class="model-mark" :x="MARGIN.left + 8" :y="PRICE.bottom - 24">예측 가격: {{ returnModel ?? '없음' }}</text>
-        <text class="model-mark" :x="MARGIN.left + 8" :y="PRICE.bottom - 8">예상 범위: {{ rangeModel ?? '없음' }}</text>
-        <text class="model-mark" :x="MARGIN.left + 8" :y="PROB.top + 12">상승 확률: {{ probModel ?? '없음' }}</text>
-        <path :d="pastBand" class="band" />
-        <path :d="fan" class="fan" />
-        <path :d="pastPrediction" class="pred" />
-        <path :d="pricePath" class="price" />
-        <g v-if="todayPrediction">
-          <line class="pred" :x1="todayPrediction.from[0]" :y1="todayPrediction.from[1]"
-                :x2="todayPrediction.to[0]" :y2="todayPrediction.to[1]" />
-          <circle class="pred-dot" r="4" :cx="todayPrediction.to[0]" :cy="todayPrediction.to[1]" />
+        <template v-if="!all"><path v-for="s in series" :key="s.kind" :d="s.band" :class="['band', s.kind]" /></template>
+        <path :key="`fan-${horizon}-${all}`" :d="fan" class="fan enter" />
+        <template v-if="!all"><path v-for="s in series" :key="s.kind" :d="s.prediction" :class="['pred', s.kind]" /></template>
+        <template v-if="!all">
+          <g v-for="s in series" :key="`single-${s.kind}`">
+            <rect v-for="(range, i) in s.singleRanges" :key="`range-${i}`" :class="['band', 'isolated-band', s.kind]" width="2"
+              :x="range.high[0] - 1" :y="range.high[1]" :height="range.low[1] - range.high[1]" />
+            <circle v-for="(p, i) in s.singlePrices" :key="`price-${i}`" :class="['pred-dot', 'isolated-pred', s.kind]" r="3" :cx="p[0]" :cy="p[1]" />
+          </g>
+        </template>
+        <path :key="`price-${all}`" :d="pricePath" class="price enter" pathLength="1" />
+        <line v-if="origin" class="origin-rule" :x1="origin[0]" :x2="origin[0]" :y1="PRICE.top" :y2="all ? PRICE.bottom : PROB.bottom" />
+        <text v-if="origin" class="plot-label" :x="Math.max(MARGIN.left, origin[0] - 8)" :y="PRICE.bottom + 24" text-anchor="end">{{ current.origin_date.slice(5) }} 기준</text>
+        <g v-if="predicted && origin">
+          <line class="pred" :x1="origin[0]" :y1="origin[1]" :x2="predicted[0]" :y2="predicted[1]" />
+          <circle class="pred-dot" r="4" :cx="predicted[0]" :cy="predicted[1]" />
         </g>
-        <g v-if="isNumber(threshold)" class="threshold-label">
-          <line class="threshold" :x1="MARGIN.left" :x2="width - MARGIN.right" :y1="yProb(threshold)" :y2="yProb(threshold)" />
-          <line class="threshold" :x1="MARGIN.left" :x2="width - MARGIN.right" :y1="yProb(1 - threshold)" :y2="yProb(1 - threshold)" />
-          <text :x="width - MARGIN.right + 6" :y="yProb(threshold) + 4">구매 {{ formatPercent(threshold) }}</text>
-          <text :x="width - MARGIN.right + 6" :y="yProb(1 - threshold) + 4">미루기 {{ formatPercent(1 - threshold) }}</text>
+        <text v-for="label in directLabels" :key="label.text" :class="['direct-label', { predicted: label.predicted }]"
+          :x="width - MARGIN.right + 8" :y="label.labelY + 4">{{ label.text }}</text>
+        <text v-if="all && pricePath" class="direct-label" :x="MARGIN.left" :y="PRICE.bottom + 48">실제 종가 · 주간 마지막 관측</text>
+        <g v-for="a in annotations" :key="a.date" class="annot">
+          <circle :cx="a.cx" :cy="a.cy" r="9" />
+          <line :x1="a.cx" :y1="a.cy - 9" :x2="Math.min(a.lx + a.text.length * 6, width - MARGIN.right)" :y2="a.ly + 8" />
+          <text :x="a.lx" :y="a.ly">{{ a.text }}</text>
         </g>
-        <path :d="probPath" class="prob" />
-        <circle v-if="lastProb" class="prob-dot" r="4" :cx="x(toTime(lastProb.origin_date))" :cy="yProb(lastProb.prob_up)" />
-        <g v-if="hover">
-          <line class="crosshair" :x1="hover.left" :x2="hover.left" :y1="PRICE.top" :y2="PROB.bottom" />
-        </g>
+        <template v-if="!all">
+          <text v-if="backfillStart" class="plot-label" :x="Math.max(MARGIN.left, Math.min(x(toTime(backfillStart.target_date)) + 8, width - 224))" :y="PRICE.bottom + 56">← 여기부터 동결 모델의 소급 계산</text>
+          <line v-if="backfillStart" class="origin-rule" :x1="x(toTime(backfillStart.target_date))" :x2="x(toTime(backfillStart.target_date))" :y1="PRICE.bottom" :y2="PRICE.bottom + 40" />
+          <text class="plot-label" :x="MARGIN.left" :y="PROB.top - 16">기준일에 낸 상승 확률</text>
+          <g class="axis-label"><text v-for="tick in probTicks" :key="tick" :x="MARGIN.left - 8" :y="yProb(tick) + 4" text-anchor="end">{{ formatPercent(tick) }}</text></g>
+          <g v-if="isNumber(threshold)" class="threshold-label">
+            <line v-for="v in [threshold, 1 - threshold]" :key="v" class="threshold" :x1="MARGIN.left" :x2="width - MARGIN.right" :y1="yProb(v)" :y2="yProb(v)" />
+            <text :x="width - MARGIN.right + 8" :y="yProb(threshold) + 4">구매 {{ formatPercent(threshold) }}</text>
+            <text :x="width - MARGIN.right + 8" :y="yProb(1 - threshold) + 4">미루기 {{ formatPercent(1 - threshold) }}</text>
+          </g>
+          <path v-for="s in series" :key="s.kind" :d="s.probability" :class="['prob', s.kind]" />
+          <g v-for="s in series" :key="`prob-${s.kind}`">
+            <circle v-for="(p, i) in s.singleProbabilities" :key="i" :class="['prob-dot', 'isolated-prob', s.kind]" r="3" :cx="p[0]" :cy="p[1]" />
+          </g>
+          <circle v-if="origin && isNumber(current.prob_up)" class="prob-dot" :cx="origin[0]" :cy="yProb(current.prob_up)" r="4" />
+        </template>
+        <line v-if="hover" class="crosshair" :x1="hover.left" :x2="hover.left" :y1="PRICE.top" :y2="all ? PRICE.bottom : PROB.bottom" />
       </svg>
-      <div v-if="hover" class="tooltip" :style="{ left: `${Math.min(hover.left + 12, width - 210)}px` }">
-        <strong>{{ hover.date }}</strong>
+      <p v-else class="note">이 기간에 표시할 가격 자료가 없습니다.</p>
+      <div v-if="hover" class="tip" :style="{ left: `${Math.max(0, Math.min(hover.left + 16, width - Math.min(280, width)))}px` }">
+        <span>{{ hover.date }}</span>
         <template v-if="hover.future">
-          <span>오늘 기준 {{ horizon }}거래일 예측</span>
-          <span>예측 가격 {{ formatNumber(hover.future.predicted_price) }} <small>({{ formatReturn(hover.future.predicted_return) }})</small></span>
-          <span v-if="isNumber(hover.future.price_low)">예상 범위 {{ formatNumber(hover.future.price_low) }} ~ {{ formatNumber(hover.future.price_high) }}</span>
+          <span>오늘의 {{ horizon }}거래일 예측 {{ formatNumber(hover.future.predicted_price) }}¢ ({{ formatReturn(hover.future.predicted_return) }})</span>
+          <span>80% 범위 {{ formatNumber(hover.future.price_low) }}–{{ formatNumber(hover.future.price_high) }}¢</span>
           <span>상승 확률 {{ formatPercent(hover.future.prob_up, 1) }} · {{ SIGNAL_LABELS[hover.future.signal] }}</span>
+          <small>예측 기준 종가 {{ formatNumber(hover.future.origin_close, 2) }}¢ · {{ hover.future.kind === 'backfill' ? '소급 계산' : '실시간 예측' }}</small>
         </template>
         <template v-else>
-          <span>종가 {{ formatNumber(hover.close) }}</span>
+          <span>종가 {{ formatNumber(hover.close) }}¢</span>
           <template v-if="hover.past">
-            <span>{{ horizon }}거래일 전 예측 {{ formatNumber(hover.past.predicted_price) }}
-              <small v-if="isNumber(hover.past.predicted_price)">(오차 {{ formatSigned(hover.past.predicted_price - hover.close) }})</small></span>
-            <span v-if="isNumber(hover.past.price_low)">예측 범위 {{ formatNumber(hover.past.price_low) }} ~ {{ formatNumber(hover.past.price_high) }}
-              <small>({{ hover.past.price_low <= hover.close && hover.close <= hover.past.price_high ? '범위 안' : '범위 밖' }})</small></span>
-            <small>기준일 {{ hover.past.origin_date }}{{ hover.past.kind === 'backfill' ? ' · 소급 계산' : '' }}</small>
+            <span>{{ horizon }}거래일 전 예측 {{ formatNumber(hover.past.predicted_price) }}¢
+              <template v-if="isNumber(hover.past.predicted_price) && isNumber(hover.close)">(오차 {{ formatSigned(hover.past.predicted_price - hover.close) }})</template></span>
+            <span v-if="isNumber(hover.past.price_low) && isNumber(hover.past.price_high)">80% 범위 {{ formatNumber(hover.past.price_low) }}–{{ formatNumber(hover.past.price_high) }}¢
+              <template v-if="isNumber(hover.close)"> · {{ hover.past.price_low <= hover.close && hover.close <= hover.past.price_high ? '범위 안' : '범위 밖' }}</template></span>
+            <small>예측 기준일 {{ hover.past.origin_date }} · {{ hover.past.kind === 'backfill' ? '소급 계산' : '실시간 예측' }}</small>
           </template>
-          <span v-if="hover.prob">이날 낸 상승 확률 {{ formatPercent(hover.prob.prob_up, 1) }} · {{ SIGNAL_LABELS[hover.prob.signal] }}</span>
+          <span v-if="hover.prob">이날 낸 상승 확률 {{ formatPercent(hover.prob.prob_up, 1) }}</span>
         </template>
       </div>
     </div>
+    <p v-if="all" class="small">주간 종가 · 과거 예측과 상승 확률은 1년 보기에서 자세히 확인할 수 있습니다.</p>
+    <p class="small">실시간 예측은 진하게, 소급 계산은 옅게 표시합니다. 예측 부채꼴은 모델이 사용한 기준 종가에서 시작하므로 가격 표의 종가와 다를 수 있습니다.</p>
     <details>
-      <summary>표로 보기 (최근 20개 예측)</summary>
-      <table>
-        <thead>
-          <tr>
-            <th>기준일</th><th>목표일</th><th class="num">기준 종가</th>
-            <th class="num">예측 가격</th><th class="num">상승 확률</th><th>신호</th>
-            <th class="num">80% 범위</th><th class="num">실제 종가</th>
-          </tr>
-        </thead>
-        <tbody>
-          <tr v-for="row in rows.slice(-20).reverse()" :key="row.origin_date">
-            <td>{{ row.origin_date }}</td><td>{{ row.target_date }}</td><td class="num">{{ formatNumber(row.origin_close) }}</td>
-            <td class="num">{{ formatNumber(row.predicted_price) }}</td>
-            <td class="num">{{ formatPercent(row.prob_up, 1) }}</td><td>{{ SIGNAL_LABELS[row.signal] ?? '-' }}</td>
-            <td class="num">{{ isNumber(row.price_low) ? `${formatNumber(row.price_low)} ~ ${formatNumber(row.price_high)}` : '-' }}</td>
-            <td class="num">{{ formatNumber(row.actual_close) }}</td>
-          </tr>
-        </tbody>
-      </table>
+      <summary>표로 보기 · 최근 20개 예측과 모델</summary>
+      <p class="small">예측 가격 {{ modelFor(metadata, 'return', horizon) ?? '확인 불가' }} · 예상 범위 {{ modelFor(metadata, 'volatility', horizon) ?? '확인 불가' }} · 상승 확률 {{ modelFor(metadata, 'direction', horizon) ?? '확인 불가' }}</p>
+      <div class="table-wrap"><table>
+        <thead><tr><th>기준일</th><th>목표일</th><th>구분</th><th class="num">기준 종가</th><th class="num">예측 가격</th><th class="num">상승 확률</th><th>신호</th><th class="num">80% 범위</th><th class="num">실제 종가</th></tr></thead>
+        <tbody><tr v-for="row in rows.slice(-20).reverse()" :key="`${row.origin_date}-${row.kind}`">
+          <td>{{ row.origin_date }}</td><td>{{ row.target_date }}</td><td>{{ row.kind === 'backfill' ? '소급' : '실시간' }}</td>
+          <td class="num">{{ formatNumber(row.origin_close) }}</td><td class="num">{{ formatNumber(row.predicted_price) }}</td><td class="num">{{ formatPercent(row.prob_up, 1) }}</td>
+          <td>{{ SIGNAL_LABELS[row.signal] ?? '-' }}</td><td class="num">{{ formatNumber(row.price_low) }}–{{ formatNumber(row.price_high) }}</td><td class="num">{{ formatNumber(row.actual_close) }}</td>
+        </tr></tbody>
+      </table></div>
     </details>
   </section>
 </template>

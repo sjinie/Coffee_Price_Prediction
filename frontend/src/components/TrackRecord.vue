@@ -2,7 +2,7 @@
 import { computed } from 'vue'
 import { HORIZONS, formatNumber, formatPercent, trackRecordByKind } from '../lib.js'
 
-const props = defineProps({ history: { type: Object, required: true } })
+const props = defineProps({ history: { type: Object, required: true }, failedHorizons: { type: Array, default: () => [] } })
 const byHorizon = computed(() => HORIZONS.map(h => ({ horizon: h, ...trackRecordByKind(props.history[h] || []) })))
 const sections = [
   { kind: 'live', title: '실시간 예측', note: '모델을 동결한 뒤 매일 저장한 예측입니다. 처음 보는 자료에 대한 성적은 이 표뿐입니다.' },
@@ -13,11 +13,12 @@ const hasLive = computed(() => byHorizon.value.some(row => row.live.evaluated > 
 
 <template>
   <section aria-labelledby="record-title">
-    <h2 id="record-title">지금까지의 적중 기록</h2>
+    <p class="eyebrow">적중 기록</p>
+    <h2 id="record-title">예측은 얼마나 맞았을까</h2>
     <div v-for="section in sections" :key="section.kind" class="record">
       <h3>{{ section.title }}</h3>
       <p class="note">{{ section.note }}</p>
-      <p v-if="section.kind === 'live' && !hasLive" class="muted small">아직 목표일이 지난 실시간 예측이 없습니다.</p>
+      <p v-if="section.kind === 'live' && !hasLive && !failedHorizons.length" class="muted small">아직 목표일이 지난 실시간 예측이 없습니다.</p>
       <div v-else class="table-wrap">
         <table>
           <thead>
@@ -33,6 +34,8 @@ const hasLive = computed(() => byHorizon.value.some(row => row.live.evaluated > 
           <tbody>
             <tr v-for="row in byHorizon" :key="row.horizon">
               <td>{{ row.horizon }}거래일</td>
+              <td v-if="failedHorizons.includes(row.horizon)" colspan="7">기록 조회 실패 · 성적을 확인할 수 없습니다.</td>
+              <template v-else>
               <td class="num">{{ row[section.kind].evaluated }}</td>
               <td class="num">{{ formatPercent(row[section.kind].returnHit) }}</td>
               <td class="num">{{ formatNumber(row[section.kind].maeModel) }} / {{ formatNumber(row[section.kind].maeNaive) }}</td>
@@ -40,6 +43,7 @@ const hasLive = computed(() => byHorizon.value.some(row => row.live.evaluated > 
               <td class="num">{{ formatPercent(row[section.kind].signalRate) }}</td>
               <td class="num">{{ formatPercent(row[section.kind].signalHit) }}</td>
               <td class="num">{{ formatPercent(row[section.kind].signalUpRate) }}</td>
+              </template>
             </tr>
           </tbody>
         </table>

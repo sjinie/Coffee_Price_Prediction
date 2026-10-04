@@ -7,7 +7,8 @@ const STATUS = { success: '성공', warning: '경고', failed: '실패', running
 
 <template>
   <section aria-labelledby="status-title">
-    <h2 id="status-title">모델과 실행 상태</h2>
+    <p class="eyebrow">모델과 실행 상태</p>
+    <h2 id="status-title">어떻게 계산하고 있을까</h2>
     <dl class="facts">
       <div><dt>모델 버전</dt><dd>{{ model?.model_version ?? '-' }}</dd></div>
       <div><dt>예측 가격</dt><dd>{{ HORIZONS.map(h => `${h}일 ${modelFor(model?.metadata, 'return', h) ?? '-'}`).join(' · ') }}</dd></div>
