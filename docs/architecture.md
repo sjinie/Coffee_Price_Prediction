@@ -128,13 +128,37 @@ Azure VM (deploy/compose.azure.yaml)
 
 ## 운영 전환 절차
 
-기존 운영(이전 코드, database `coffee_price`)은 그대로 두고 같은 PostgreSQL 클러스터에 새 database `coffee_v2`를 만든다. 실행 직전에 사용자 승인을 받는다.
+기존 운영(이전 코드, database `coffee_price`)은 그대로 두고 같은 PostgreSQL 클러스터에 새 database `coffee_v2`를 만든다. VM에서 실행하는 단계마다 사용자 승인을 받는다. PR #7은 전환보다 먼저 병합됐고(2026-10-04), 이때 이전 `daily-pipeline.yml`이 사라져 이전 화면은 2026-10-02 종가에서 멈췄다.
 
-1. 이전 database를 `pg_dump`로 백업한다(`/srv/coffee/backups`).
-2. VM `/srv/coffee/.env`에 `COFFEE_DB_NAME=coffee_v2`를 넣고 `sudo COFFEE_SOURCE_SHA=<커밋> deploy/setup-db.sh /srv/coffee/.env`를 실행한다(명령에서 넘긴 커밋이 `.env`의 값보다 우선한다). database·권한·스키마를 만들고 API·대시보드를 새 이미지로 바꾼다.
-3. Mac의 `data/sources/`를 VM `/srv/coffee/v2/sources/`로 올린다.
-4. Mac에서 SSH 터널을 열고 `python -m coffee.pipeline backfill`을 실행한다(보관 뉴스 `data/jev/`가 Mac에만 있다). 2와 4 사이에는 대시보드가 비어 있다.
-5. 브랜치를 병합하고 `daily.yml`을 수동 실행해 결과를 확인한다.
-6. `daily.yml`에 schedule을 추가한다(이전 `daily-pipeline.yml`은 병합과 함께 사라진다).
+1. VM 점검: compose 프로젝트가 `coffee`, 볼륨이 `coffee_postgres-data`인지 확인한다. 다르면 멈춘다. 새 구성이 빈 볼륨을 만들고 포트가 겹친다.
+2. 백업: `coffee_price`를 `pg_dump -Fc`로 받고 `pg_restore -l`로 읽히는지 확인한다. `.env`도 복사한다. compose를 거치면 이전 compose 파일의 필수 변수(`COFFEE_SOURCE_SHA`) 검사에 걸릴 수 있어 `docker exec`를 쓴다. 파이프로 저장하면 `pg_dump`가 실패해도 성공처럼 보이므로 리다이렉트로 저장한다.
+3. VM 코드와 `.env`: `/srv/coffee/app`을 병합 커밋으로 올린다(이전 커밋에는 `setup-db.sh`가 없다). `.env`에 `COFFEE_DB_NAME=coffee_v2`와 `COFFEE_SOURCE_SHA`를 넣는다. DB 이름을 `coffee_price`로 잘못 적으면 새 스키마가 이전 database에 들어가므로 `grep`으로 확인한다.
+4. `setup-db.sh`로 database·권한·스키마를 만들고 API·대시보드를 새 이미지로 바꾼다. 명령에서 넘긴 커밋이 `.env`의 값보다 우선한다. 여기부터 6까지 대시보드가 비어 있다.
+5. 소스 업로드: Mac의 `data/sources/`를 VM 임시 폴더로 올린 뒤 VM에서 `coffee-actions` 소유로 넣는다. Mac의 openrsync에는 `--chown`이 없고, 소유자가 다르면 일일 실행의 rsync가 실패한다.
+6. backfill: Mac에서 SSH 터널을 열고 외부 venv의 Python으로 실행한다(보관 뉴스 `data/jev/`가 Mac에만 있다). 비밀번호는 `read -s`로 받아 셸 기록에 남기지 않는다. `/health`, `/api/status`, `/api/forecasts/latest`와 브라우저로 확인한다.
+7. `daily.yml`을 수동 실행한다. 새 종가가 없는 날이면 예측 0건이 정상이다(같은 기준일의 backfill이 있으면 live는 저장하지 않는다).
+8. 7이 성공한 뒤 schedule을 추가한 브랜치를 병합한다. 먼저 병합하면 빈 `coffee_v2`로 예약 실행이 돈다.
 
-되돌리기: 이전 커밋을 체크아웃해 이전 `deploy/start-azure.sh`로 API·대시보드를 다시 띄운다. 이전 database는 바꾸지 않았으므로 그대로 쓸 수 있다.
+```
+# VM (1–5). <커밋>은 병합 커밋의 짧은 SHA, 체크아웃 소유자가 root가 아니면 git에서 sudo를 뺀다
+# 마지막 줄은 아래 Mac의 첫 줄(임시 폴더 업로드) 다음에 실행한다
+sudo docker compose ls && sudo docker volume ls | grep postgres && sudo docker ps --format '{{.Names}}'
+sudo bash -c 'docker exec coffee-postgres-1 pg_dump -U postgres -Fc coffee_price > /srv/coffee/backups/coffee_price_YYYYMMDD.dump'
+sudo bash -c 'docker exec -i coffee-postgres-1 pg_restore -l < /srv/coffee/backups/coffee_price_YYYYMMDD.dump | head -5'
+sudo cp -p /srv/coffee/.env /srv/coffee/backups/env_YYYYMMDD
+sudo git -C /srv/coffee/app pull --ff-only && sudo git -C /srv/coffee/app rev-parse --short HEAD
+sudo sed -i -e '/^COFFEE_DB_NAME=/d' -e '/^COFFEE_SOURCE_SHA=/d' /srv/coffee/.env
+printf 'COFFEE_DB_NAME=coffee_v2\nCOFFEE_SOURCE_SHA=<커밋>\n' | sudo tee -a /srv/coffee/.env >/dev/null
+sudo grep -E '^(COFFEE_DB_NAME|COFFEE_SOURCE_SHA)=' /srv/coffee/.env
+cd /srv/coffee/app && sudo COFFEE_SOURCE_SHA=<커밋> deploy/setup-db.sh /srv/coffee/.env
+sudo rsync -a --chown=coffee-actions:coffee-actions /tmp/coffee-sources/ /srv/coffee/v2/sources/ && sudo rm -rf /tmp/coffee-sources
+
+# Mac (5–7). 터널은 다른 터미널에 열어 둔다
+rsync -a data/sources/ <관리자>@<VM>:/tmp/coffee-sources/
+ssh -N -L 15432:127.0.0.1:15432 <관리자>@<VM>
+read -s PGPASSWORD && export PGPASSWORD PGHOST=127.0.0.1 PGPORT=15432 PGDATABASE=coffee_v2 PGUSER=coffee_pipeline DATABASE_URL=postgresql://
+$HOME/.virtualenvs/coffee-price-prediction/bin/python -m coffee.pipeline backfill; unset PGPASSWORD
+gh workflow run daily.yml --ref main
+```
+
+되돌리기: 백업한 `.env`를 되돌린 뒤 `/srv/coffee/app`을 병합 직전 커밋(`9181b7c`)으로 체크아웃하고 이전 `deploy/start-azure.sh`를 실행한다. 이전 스크립트는 `.env`의 `COFFEE_SOURCE_SHA`를 이미지 태그로 쓰므로, `.env`를 되돌리지 않으면 이전 코드가 새 커밋의 태그로 빌드된다. 이전 database는 바꾸지 않았으므로 이전 화면이 돌아온다. 이전 일일 workflow는 main에 없어 자동 갱신은 돌아오지 않는다.
