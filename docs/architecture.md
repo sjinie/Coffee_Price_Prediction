@@ -131,7 +131,7 @@ Azure VM (deploy/compose.azure.yaml)
 기존 운영(이전 코드, database `coffee_price`)은 그대로 두고 같은 PostgreSQL 클러스터에 새 database `coffee_v2`를 만든다. VM에서 실행하는 단계마다 사용자 승인을 받는다. PR #7은 전환보다 먼저 병합됐고(2026-10-04), 이때 이전 `daily-pipeline.yml`이 사라져 이전 화면은 2026-10-02 종가에서 멈췄다.
 
 1. VM 점검: compose 프로젝트가 `coffee`, 볼륨이 `coffee_postgres-data`인지 확인한다. 다르면 멈춘다. 새 구성이 빈 볼륨을 만들고 포트가 겹친다.
-2. 백업: `coffee_price`를 `pg_dump -Fc`로 받고 `pg_restore -l`로 읽히는지 확인한다. `.env`도 복사한다. compose를 거치면 이전 compose 파일의 필수 변수(`COFFEE_SOURCE_SHA`) 검사에 걸릴 수 있어 `docker exec`를 쓴다. 파이프로 저장하면 `pg_dump`가 실패해도 성공처럼 보이므로 리다이렉트로 저장한다.
+2. 백업: `coffee_price`를 `pg_dump -Fc`로 받고 `pg_restore -l`로 목록(TOC)이 읽히는지 확인한다. `.env`도 복사한다. compose를 거치면 이전 compose 파일의 필수 변수(`COFFEE_SOURCE_SHA`) 검사에 걸릴 수 있어 `docker exec`를 쓴다. 파이프의 종료 코드는 마지막 명령의 것이라 `pg_dump | tee`나 `pg_restore -l | head`는 실패해도 성공처럼 보인다. 그래서 dump는 리다이렉트로 저장하고, 목록은 변수에 먼저 받은 뒤 일부만 출력한다.
 3. VM 코드와 `.env`: `/srv/coffee/app`을 병합 커밋으로 올린다(이전 커밋에는 `setup-db.sh`가 없다). `.env`에 `COFFEE_DB_NAME=coffee_v2`와 `COFFEE_SOURCE_SHA`를 넣는다. DB 이름을 `coffee_price`로 잘못 적으면 새 스키마가 이전 database에 들어가므로 `grep`으로 확인한다.
 4. `setup-db.sh`로 database·권한·스키마를 만들고 API·대시보드를 새 이미지로 바꾼다. 명령에서 넘긴 커밋이 `.env`의 값보다 우선한다. 여기부터 6까지 대시보드가 비어 있다.
 5. 소스 업로드: Mac의 `data/sources/`를 VM 임시 폴더로 올린 뒤 VM에서 `coffee-actions` 소유로 넣는다. Mac의 openrsync에는 `--chown`이 없고, 소유자가 다르면 일일 실행의 rsync가 실패한다.
@@ -144,7 +144,7 @@ Azure VM (deploy/compose.azure.yaml)
 # 마지막 줄은 아래 Mac의 첫 줄(임시 폴더 업로드) 다음에 실행한다
 sudo docker compose ls && sudo docker volume ls | grep postgres && sudo docker ps --format '{{.Names}}'
 sudo bash -c 'docker exec coffee-postgres-1 pg_dump -U postgres -Fc coffee_price > /srv/coffee/backups/coffee_price_YYYYMMDD.dump'
-sudo bash -c 'docker exec -i coffee-postgres-1 pg_restore -l < /srv/coffee/backups/coffee_price_YYYYMMDD.dump | head -5'
+sudo bash -c 'toc=$(docker exec -i coffee-postgres-1 pg_restore -l < /srv/coffee/backups/coffee_price_YYYYMMDD.dump) && printf "%s\n" "$toc" | head -5'
 sudo cp -p /srv/coffee/.env /srv/coffee/backups/env_YYYYMMDD
 sudo git -C /srv/coffee/app pull --ff-only && sudo git -C /srv/coffee/app rev-parse --short HEAD
 sudo sed -i -e '/^COFFEE_DB_NAME=/d' -e '/^COFFEE_SOURCE_SHA=/d' /srv/coffee/.env
