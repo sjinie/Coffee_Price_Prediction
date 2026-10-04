@@ -131,7 +131,7 @@ Azure VM (deploy/compose.azure.yaml)
 기존 운영(이전 코드, database `coffee_price`)은 그대로 두고 같은 PostgreSQL 클러스터에 새 database `coffee_v2`를 만든다. VM에서 실행하는 단계마다 사용자 승인을 받는다. PR #7은 전환보다 먼저 병합됐고(2026-10-04), 이때 이전 `daily-pipeline.yml`이 사라져 이전 화면은 2026-10-02 종가에서 멈췄다.
 
 1. VM 점검: compose 프로젝트가 `coffee`, 볼륨이 `coffee_postgres-data`인지 확인한다. 다르면 멈춘다. 새 구성이 빈 볼륨을 만들고 포트가 겹친다.
-2. 백업: `coffee_price`를 `pg_dump -Fc`로 받고 `pg_restore -l`로 목록(TOC)이 읽히는지 확인한다. `.env`도 복사한다. compose를 거치면 이전 compose 파일의 필수 변수(`COFFEE_SOURCE_SHA`) 검사에 걸릴 수 있어 `docker exec`를 쓴다. 파이프의 종료 코드는 마지막 명령의 것이라 `pg_dump | tee`나 `pg_restore -l | head`는 실패해도 성공처럼 보인다. 그래서 dump는 리다이렉트로 저장하고, 목록은 변수에 먼저 받은 뒤 일부만 출력한다.
+2. 백업: `coffee_price`를 `pg_dump -Fc`로 받고 `pg_restore -l`로 목록(TOC)이 읽히는지 확인한다. `.env`도 복사한다. compose를 거치면 이전 compose 파일의 필수 변수(`COFFEE_SOURCE_SHA`) 검사에 걸릴 수 있어 `docker exec`를 쓴다. 파이프의 종료 코드는 마지막 명령의 것이라 `pg_dump | tee`나 `pg_restore -l | head`는 실패해도 성공처럼 보인다. 그래서 dump는 리다이렉트로 저장하고, 목록은 변수에 먼저 받은 뒤 일부만 출력한다. 백업(dump·`.env`·3의 app 폴더)은 실행마다 새로 만드는 폴더 하나에 모은다. `mkdir`는 폴더가 이미 있으면 실패하므로, 같은 이름으로 다시 실행해도 전환 전 원본을 새 설정으로 덮지 않는다(`cp`와 `>`는 기존 파일을 덮어쓴다). 전환 도중 재시도할 때는 백업을 다시 하지 않고 첫 폴더를 쓴다. 백업 단계 자체가 중간에 실패했다면 아직 아무것도 바꾸지 않았으므로 그 폴더를 지우고 다시 한다.
 3. VM 코드와 `.env`: `/srv/coffee/app`은 git 저장소가 아니고 root 전용 폴더다. Mac에서 병합 커밋을 `git archive`로 묶어 보내고 SHA-256을 양쪽에서 대조한다. 압축을 새 폴더에 푼 뒤, 이전 폴더는 백업 폴더로 옮기고 새 폴더로 바꾼다. VM 명령은 `cd` 없이 절대 경로에 `sudo`로 실행한다. `.env`에는 `COFFEE_DB_NAME=coffee_v2`와 `COFFEE_SOURCE_SHA`를 넣는다. DB 이름을 `coffee_price`로 잘못 적으면 새 스키마가 이전 database에 들어가므로 `grep`으로 확인한다.
 4. `setup-db.sh`로 database·권한·스키마를 만들고 API·대시보드를 새 이미지로 바꾼다. 명령에서 넘긴 커밋이 `.env`의 값보다 우선한다. 여기부터 6까지 대시보드가 비어 있다.
 5. 소스 업로드: Mac의 `data/sources/`를 VM 임시 폴더로 올린 뒤 VM에서 `coffee-actions` 소유로 넣는다. Mac의 openrsync에는 `--chown`이 없고, 소유자가 다르면 일일 실행의 rsync가 실패한다.
@@ -142,9 +142,15 @@ Azure VM (deploy/compose.azure.yaml)
 ```
 # 1–2 VM: 점검·백업. 이미지 태그는 되돌릴 때 쓴다
 sudo docker compose ls && sudo docker volume ls | grep postgres && sudo docker ps --format '{{.Names}} {{.Image}}'
-sudo bash -c 'docker exec coffee-postgres-1 pg_dump -U postgres -Fc coffee_price > /srv/coffee/backups/coffee_price_YYYYMMDD.dump'
-sudo bash -c 'toc=$(docker exec -i coffee-postgres-1 pg_restore -l < /srv/coffee/backups/coffee_price_YYYYMMDD.dump) && printf "%s\n" "$toc" | head -5'
-sudo cp -p /srv/coffee/.env /srv/coffee/backups/env_YYYYMMDD
+sudo bash -s <<'EOF'
+set -e
+b=/srv/coffee/backups/cutover-YYYYMMDD
+mkdir -m 0700 "$b"   # 이미 있으면 여기서 멈춘다. 첫 백업이 전환 전 원본이다
+docker exec coffee-postgres-1 pg_dump -U postgres -Fc coffee_price > "$b/coffee_price.dump"
+toc=$(docker exec -i coffee-postgres-1 pg_restore -l < "$b/coffee_price.dump")
+printf '%s\n' "$toc" | head -5
+cp -p /srv/coffee/.env "$b/env"
+EOF
 
 # 3 Mac: <커밋>은 병합 커밋의 짧은 SHA
 git archive --format=tar.gz -o /tmp/coffee-<커밋>.tar.gz <커밋> && shasum -a 256 /tmp/coffee-<커밋>.tar.gz
@@ -152,7 +158,7 @@ scp /tmp/coffee-<커밋>.tar.gz <관리자>@<VM>:/tmp/
 
 # 3–4 VM: 해시가 Mac과 같은지 본 뒤 폴더를 바꾼다. 이전 폴더는 지우지 않고 백업으로 옮긴다
 sha256sum /tmp/coffee-<커밋>.tar.gz
-sudo bash -c 'set -e; install -d -m 0700 /srv/coffee/app.new; tar -xzf /tmp/coffee-<커밋>.tar.gz -C /srv/coffee/app.new; mv -T /srv/coffee/app /srv/coffee/backups/app_YYYYMMDD; mv -T /srv/coffee/app.new /srv/coffee/app' && rm /tmp/coffee-<커밋>.tar.gz
+sudo bash -c 'set -e; install -d -m 0700 /srv/coffee/app.new; tar -xzf /tmp/coffee-<커밋>.tar.gz -C /srv/coffee/app.new; mv -T /srv/coffee/app /srv/coffee/backups/cutover-YYYYMMDD/app; mv -T /srv/coffee/app.new /srv/coffee/app' && rm /tmp/coffee-<커밋>.tar.gz
 sudo sed -i -e '/^COFFEE_DB_NAME=/d' -e '/^COFFEE_SOURCE_SHA=/d' /srv/coffee/.env
 printf 'COFFEE_DB_NAME=coffee_v2\nCOFFEE_SOURCE_SHA=<커밋>\n' | sudo tee -a /srv/coffee/.env >/dev/null
 sudo grep -E '^(COFFEE_DB_NAME|COFFEE_SOURCE_SHA)=' /srv/coffee/.env
@@ -169,10 +175,10 @@ $HOME/.virtualenvs/coffee-price-prediction/bin/python -m coffee.pipeline backfil
 test "$rc" = 0 && gh workflow run daily.yml --ref main   # API·화면 확인 뒤. 3이면 로그 확인 후 직접 실행
 ```
 
-되돌리기: 이전 app 폴더와 `.env`를 되돌리고 이전 `deploy/start-azure.sh`를 실행한다. 이 스크립트는 실행 권한이 없어 `bash`로 부른다.
+되돌리기: 백업 폴더의 app과 `.env`를 되돌리고 이전 `deploy/start-azure.sh`를 실행한다. 이 스크립트는 실행 권한이 없어 `bash`로 부른다. 되돌린 뒤 다시 전환할 때는 새 이름의 백업 폴더를 쓴다.
 
 ```
-sudo bash -c 'set -e; mv -T /srv/coffee/app /srv/coffee/backups/app_<커밋>_failed; mv -T /srv/coffee/backups/app_YYYYMMDD /srv/coffee/app; cp -p /srv/coffee/backups/env_YYYYMMDD /srv/coffee/.env'
+sudo bash -c 'set -e; b=/srv/coffee/backups/cutover-YYYYMMDD; mv -T /srv/coffee/app "$b/app_failed"; mv -T "$b/app" /srv/coffee/app; cp -p "$b/env" /srv/coffee/.env'
 sudo bash /srv/coffee/app/deploy/start-azure.sh /srv/coffee/.env
 ```
 
