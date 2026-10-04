@@ -2,7 +2,7 @@
   "version": "2026-10-04",
   "train_end": "2025-12-31",
   "data_end": "2026-10-02 00:00:00",
-  "code_commit": "0cb26c7",
+  "code_commit": "31df685",
   "train_rows": {
     "방향_5": 4844,
     "수익률(LightGBM)_5": 4844,
