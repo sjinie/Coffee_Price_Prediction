@@ -177,6 +177,28 @@ export function trackRecord(rows) {
   }
 }
 
+// 정렬된 값의 p 분위수(선형 보간).
+export function quantile(sorted, p) {
+  if (!sorted.length) return null
+  const at = (sorted.length - 1) * p, lo = Math.floor(at), hi = Math.ceil(at)
+  return sorted[lo] + (sorted[hi] - sorted[lo]) * (at - lo)
+}
+
+// 모든 거래일에서 잰 h거래일 뒤 가격 변화(%)의 10·50·90% 분위와, 10% 넘게 움직인 날의 비율.
+// h거래일 뒤는 가격 표에서 h행 뒤다. 종가가 없는 행은 건너뛰지 않고 그 쌍만 뺀다(결측을 채우지 않는다).
+export function horizonMoves(prices, horizons = HORIZONS) {
+  const closes = [...prices].sort((a, b) => a.date.localeCompare(b.date)).map(row => row.close)
+  return horizons.map(h => {
+    const moves = []
+    for (let i = 0; i + h < closes.length; i += 1) {
+      if (isNumber(closes[i]) && isNumber(closes[i + h]) && closes[i] > 0) moves.push((closes[i + h] / closes[i] - 1) * 100)
+    }
+    moves.sort((a, b) => a - b)
+    return { h, q10: quantile(moves, 0.1), q50: quantile(moves, 0.5), q90: quantile(moves, 0.9),
+      big: moves.length ? moves.filter(v => Math.abs(v) > 10).length / moves.length : null }
+  })
+}
+
 // ---------- 연간 시계 (1월 1일 기준 52주, 기후 API와 같은 주) ----------
 
 // 연도 × 52주 칸마다 일간 로그수익률의 합. 앞 거래일 종가가 없으면 그날 수익률은 계산하지 않는다(결측을 채우지 않는다).
@@ -205,6 +227,31 @@ export function weeklyRainGrid(weather, years) {
       return isNumber(value) && days >= 7 ? (value / days) * 7 : null
     })
   })
+}
+
+// 기온(t_min·t_max·t_mean)이 같은 주의 평년(years 안 해들의 평균)보다 얼마나 높았는지(℃). 이상기후를 보려는 그림용이다.
+// 관측일이 7일보다 적은 주는 최저·최고가 덜 극단적으로 나오므로 그리지 않는다. 피처는 직전 10년만 쓰므로 이 평년과 다르다.
+export function weeklyAnomalyGrid(weather, years, key) {
+  const rowOf = new Map((weather?.years ?? []).map((year, i) => [year, i]))
+  const grid = years.map(year => {
+    const i = rowOf.get(year)
+    if (i === undefined) return Array(52).fill(null)
+    return weather[key][i].map((value, week) => (isNumber(value) && weather.days[i][week] >= 7 ? value : null))
+  })
+  const normal = Array.from({ length: 52 }, (_, week) => {
+    const column = grid.map(row => row[week]).filter(isNumber)
+    return column.length ? column.reduce((sum, v) => sum + v, 0) / column.length : null
+  })
+  return grid.map(row => row.map((value, week) => (isNumber(value) && isNumber(normal[week]) ? value - normal[week] : null)))
+}
+
+// 격자에서 가장 낮은(lowest) 또는 가장 높은 칸. 없으면 null.
+export function extremeWeek(grid, years, lowest) {
+  let best = null
+  grid.forEach((row, y) => row.forEach((value, week) => {
+    if (isNumber(value) && (!best || (lowest ? value < best.value : value > best.value))) best = { year: years[y], week, value }
+  }))
+  return best
 }
 
 function correlation(a, b) {

@@ -11,9 +11,8 @@ const STATUS = { success: '성공', warning: '경고', failed: '실패', running
     <p class="flow"><b>Yahoo, FRED, NOAA, NASA, Google News</b><i>→</i><b>GitHub Actions</b><span>매일 수집, 피처, 예측, 뉴스 분류</span><i>→</i><b>PostgreSQL</b><i>→</i><b>FastAPI</b><i>→</i><b>Vue</b></p>
     <dl class="facts-list compact">
       <div><dt>모델 버전</dt><dd>{{ model?.model_version ?? '-' }}, 학습 구간 끝 {{ model?.train_end ?? '-' }}</dd></div>
-      <div><dt>예측 가격</dt><dd>{{ HORIZONS.map(h => `${h}일 ${modelFor(model?.metadata, 'return', h) ?? '-'}`).join(', ') }}</dd></div>
-      <div><dt>상승 확률과 신호</dt><dd>{{ model?.metadata?.direction?.algorithm ?? '-' }}</dd></div>
-      <div><dt>예상 범위와 위험 수준</dt><dd>{{ model?.metadata?.volatility?.algorithm ?? '-' }}</dd></div>
+      <div><dt>예측 모델</dt><dd>{{ model?.metadata?.distribution?.algorithm ?? '-' }}. 범위·가운데 가격·상승 확률·신호·위험 수준이 모두 같은 분포에서 나온다.</dd></div>
+      <div><dt>지평별 설정</dt><dd>{{ HORIZONS.map(h => `${h}일 ${modelFor(model?.metadata, 'distribution', h) ?? '-'}`).join(', ') }}</dd></div>
       <div><dt>최신 가격</dt><dd>{{ status?.latest_price_date ?? '-' }}</dd></div>
     </dl>
     <details v-if="status?.runs?.length">

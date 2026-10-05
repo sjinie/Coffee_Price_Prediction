@@ -71,3 +71,18 @@ test('Why 섹션: 전체 가격 요청이 실패하면 계속 불러오는 중�
   assert.doesNotMatch(empty, /전체 가격을 불러오는 중입니다/)   // 빈 응답은 로딩이 아니다
   assert.match(empty, /표시할 가격 자료가 없습니다/)
 })
+
+test('Why 섹션: 장은 문제 정의부터 의사결정까지 정한 순서이고, 장마다 질문·방법·판단이 붙는다', async () => {
+  const { default: WhySection } = await server.ssrLoadModule('/src/components/WhySection.vue')
+  const html = await renderToString(createSSRApp(WhySection, { allPrices: [], weather: null }))
+  const sides = [...html.matchAll(/<p class="side">([^<]+)<\/p>/g)].map(m => m[1])
+  assert.deepEqual(sides, ['문제 정의', '데이터 탐색', '피처 선택', '뉴스 분석', '평가', '결과', '시행착오', '의사결정'])
+  assert.equal([...html.matchAll(/<dl class="qmj">/g)].length, 8)
+})
+
+test('CRPS 막대: 값이 ±1% 안이면 0.5 간격 눈금을 소수로 적어 같은 글자가 겹치지 않는다', async () => {
+  const { default: CrpsBars } = await server.ssrLoadModule('/src/components/CrpsBars.vue')
+  const html = await renderToString(createSSRApp(CrpsBars, { metadata: null }))
+  const ticks = [...html.matchAll(/text-anchor="middle">([^<]+)<\/text>/g)].map(m => m[1])
+  assert.deepEqual(ticks, ['−1%', '−0.5%', '0', '+0.5%', '+1%'])
+})

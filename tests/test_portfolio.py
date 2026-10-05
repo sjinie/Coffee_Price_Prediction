@@ -10,14 +10,14 @@ import numpy as np
 import pandas as pd
 
 from coffee.config import DEV_YEARS, HOLDOUT_YEARS, ROOT, SETTINGS
-from coffee.features import EXTRA_GROUPS, FEATURE_GROUPS
+from coffee.features import EXTRA_GROUPS, FEATURE_GROUPS, NEWS_FEATURES
 from coffee.portfolio import OUTPUT, news_lag
 
 
 def test_research_data_matches_current_method():
     data = json.loads(OUTPUT.read_text(encoding="utf-8"))
     assert data["model_version"] == SETTINGS["model_version"]
-    assert data["feature_groups"] == {**FEATURE_GROUPS, **EXTRA_GROUPS}
+    assert data["feature_groups"] == {**FEATURE_GROUPS, **EXTRA_GROUPS, "news": NEWS_FEATURES}
     assert data["periods"]["development"] == [DEV_YEARS[0], DEV_YEARS[-1]]
     assert data["periods"]["holdout"] == [HOLDOUT_YEARS[0], HOLDOUT_YEARS[-1]]
 

@@ -25,11 +25,11 @@ const articles = computed(() => props.news.articles.slice(0, 12))
 
 <template>
   <div class="news-block" aria-labelledby="news-title">
-    <h3 id="news-title" class="h3">최근 뉴스는 무엇을 말할까 <span class="badge">참고 정보, 모델 입력 아님</span></h3>
+    <h3 id="news-title" class="h3">최근 뉴스는 무엇을 말할까 <span class="badge">분포 모델의 희소 입력 하나</span></h3>
     <p class="note">
       매일 커피 시장 기사를 골라 TypeSafe Jev로 가격 상승·하락 압력을 분류합니다. 과거 기사를 분석한 결과, 점수는 앞으로의 가격보다
-      이미 일어난 움직임과 더 관련되어 예측에 넣지 않았습니다(노트북 05). 실시간 점수가 쌓이면 다시 검증합니다.
-      막대와 목록은 기사가 나온 날(뉴욕 기준)로 묶었습니다.
+      이미 일어난 움직임과 더 관련되었습니다(노트북 05). 그래서 분포 모델에는 기사가 없는 날 0인 입력 하나로만 넣었고, 빼고 다시 계산해도
+      차이는 작았습니다(노트북 07). 실시간 점수가 쌓이면 다시 검증합니다. 막대와 목록은 기사가 나온 날(뉴욕 기준)로 묶었습니다.
     </p>
     <ul class="legend">
       <li><i class="key up" />상승 압력</li>

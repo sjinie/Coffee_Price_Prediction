@@ -24,8 +24,8 @@ const hasLive = computed(() => byHorizon.value.some(row => row.live.evaluated > 
           <thead>
             <tr>
               <th>지평</th><th class="num">채점한 예측</th>
-              <th class="num">수익률 방향 적중률</th>
-              <th class="num">가격 오차<small>(모델 / 현재가 유지, ¢/lb)</small></th>
+              <th class="num">방향 적중률<small>(가운데 가격 기준)</small></th>
+              <th class="num">가격 오차<small>(가운데 가격 / 현재가 유지, ¢/lb)</small></th>
               <th class="num">80% 범위 적중률</th>
               <th class="num">신호 빈도</th><th class="num">신호 적중률</th>
               <th class="num">같은 날 늘 '구매'<small>(신호를 낸 날의 상승 비율)</small></th>

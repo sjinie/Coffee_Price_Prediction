@@ -2,13 +2,13 @@
 import { computed } from 'vue'
 import { FEATURE_GROUP_LABELS } from '../research.js'
 
-// 만든 피처 묶음(research-data.json)과 모델별로 실제 쓰는 피처(모델 metadata)를 한 칸에 하나씩 보여 준다.
+// 만든 피처 묶음(research-data.json)과 분포 모델이 실제 쓰는 피처(모델 metadata)를 한 칸에 하나씩 보여 준다.
 // 모델을 바꾸면 metadata가 바뀌므로 이 그림도 저절로 바뀐다.
 const props = defineProps({ groups: { type: Object, required: true }, metadata: { type: Object, default: null } })
-const used = kind => new Set(props.metadata?.[kind]?.horizons?.[20]?.features ?? [])
+const used = computed(() => new Set(props.metadata?.distribution?.horizons?.[20]?.features ?? []))
 const columns = computed(() => {
   const grouped = new Set(Object.values(props.groups).flat())
-  const separate = [...used('volatility')].filter(name => !grouped.has(name))
+  const separate = [...used.value].filter(name => !grouped.has(name))  // 폭의 HAR 입력
   return [
     ...Object.entries(props.groups).map(([key, names]) => ({ key, label: FEATURE_GROUP_LABELS[key] ?? key, names })),
     ...(separate.length ? [{ key: 'separate', label: '변동성(별도)', names: separate, extra: true }] : []),
@@ -16,9 +16,7 @@ const columns = computed(() => {
 })
 const rows = computed(() => [
   { key: 'all', name: '만든 피처', set: null },
-  { key: 'direction', name: '상승 확률', set: used('direction') },
-  { key: 'return', name: '수익률', set: used('return') },
-  { key: 'volatility', name: '변동성', set: used('volatility') },
+  { key: 'distribution', name: '분포 모델', set: used.value },
 ].map(row => ({ ...row, count: row.set ? row.set.size : Object.values(props.groups).flat().length })))
 </script>
 
