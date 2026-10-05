@@ -8,12 +8,20 @@
 - 콜롬비아 페소(Yahoo): 다음 날부터
 - ENSO: 3개월 평균의 마지막 달 + 10일부터
 - NASA 기상: 관측일 + 4일부터 (편차의 기준은 직전 10년 같은 달 평균)
+- 뉴스: 분석이 끝난 뒤 첫 거래일 마감부터. 소급 분류한 보관 기사는 발행 + 1일(연구용, news.daily_news)
+
+이상치: 피처를 만드는 원자료 가운데 환율·WTI·운임·ENSO·기온은 하루 변화가 그 전까지의 변화로 만든
+IQR 울타리 20배 밖이면 직전 값으로 바꾼다(clean_sources). 커피 가격(예측 대상), 금리(계단형),
+강수(원래 튀는 자료)는 그대로 두고, 강수는 음수만 직전 값으로 바꾼다.
 """
+import bisect
+
 import numpy as np
 import pandas as pd
 import pandas_market_calendars as mcal
 
 from .config import HORIZONS, REGIONS, SETTINGS
+from .news import daily_news
 
 WEATHER_LAG = pd.Timedelta(days=SETTINGS["weather"]["availability_lag_days"])
 HEAT_C = SETTINGS["weather"]["heat_threshold_c"]
@@ -25,6 +33,13 @@ Z_FLOOR = {"rain30": 1.0, "rain90": 1.0, "temp30": 0.1, "heat30": 1.0, "tmin7": 
 SEASON_MONTHS = {"frost": (6, 7, 8), "flowering": (9, 10)}
 # 이보다 오래된 값은 결측으로 둔다. 월별 지표는 공개 주기가 길어 여유를 더 둔다.
 MAX_AGE = {"daily": pd.Timedelta(days=14), "monthly": pd.Timedelta(days=80), "weather": pd.Timedelta(days=4)}
+# 이상치 울타리: 하루 변화가 [Q1 − 20·IQR, Q3 + 20·IQR] 밖. 1.5배면 페소 7.9%, 강수 31%가 걸려 실제
+# 움직임까지 지운다. 20배에서 걸리는 것은 페소의 잘못된 시세(2013-07-12 종가 3.67 등)와 WTI 2020-04-20이다.
+SPIKE_FENCE = 20
+# 원자료 이름 → (열, 로그 변화로 볼지, 울타리를 쓰기 전에 쌓을 변화 수)
+SPIKE_SERIES = {"fx_cop": ("close", True, 250), "macro_brl": ("value", True, 250), "macro_oil": ("value", False, 250),
+                "macro_freight": ("value", True, 36), "enso": ("value", False, 36)}
+WEATHER_SPIKES = ["T2M", "T2M_MIN", "T2M_MAX"]
 
 
 def _weather_names(region: dict) -> list[str]:
@@ -51,6 +66,8 @@ EXTRA_GROUPS = {
     "macro_long": ["brl_chg_60", "brl_chg_120", "cop_chg_60", "rate_chg_60", "oil_chg_60", "freight_chg_120"],
 }
 EXTRA_FEATURES = [name for group in EXTRA_GROUPS.values() for name in group]
+# 통합 분포 모델(노트북 07)의 희소 신호. 기사가 없는 날과 수집 전 기간은 0(중립)이다.
+NEWS_FEATURES = ["news_score"]
 
 
 def trading_sessions(start, end) -> pd.DatetimeIndex:
@@ -104,6 +121,58 @@ def price_features(prices: pd.DataFrame, sessions: pd.DatetimeIndex) -> pd.DataF
     features["vol_ratio_5_60"] = features["vol_5"] / features["vol_60"]
     features["vol_ratio_20_60"] = features["vol_20"] / features["vol_60"]
     return features
+
+
+def _quantile(ordered: list, p: float) -> float:
+    """정렬된 목록의 분위수(numpy 기본과 같은 선형 보간)."""
+    position = (len(ordered) - 1) * p
+    low = int(position)
+    high = min(low + 1, len(ordered) - 1)
+    return ordered[low] + (position - low) * (ordered[high] - ordered[low])
+
+
+def replace_spikes(values: pd.Series, log: bool = False, fence: float = SPIKE_FENCE, history: int = 250) -> pd.Series:
+    """하루 변화가 그 전까지 받아들인 변화의 IQR 울타리(fence배) 밖이면 그 값을 직전 값으로 바꾼다.
+
+    앞에서부터 차례로 판단하므로 그날까지의 값만 쓴다. 바꾼 다음 날은 직전 값과 비교하므로 하루짜리
+    오류 시세는 그날만 바뀌고 되돌아온 날은 남는다. 울타리는 변화가 history개 쌓인 뒤부터 쓴다.
+    ponytail: 화폐 개혁 같은 영구적인 단위 변경은 계속 걸러진다. 그런 일이 생기면 원자료를 나눠 다룬다.
+    """
+    raw = values.to_numpy(float)
+    x = np.log(np.where(raw > 0, raw, np.nan)) if log else raw
+    out, accepted, last = raw.copy(), [], None  # accepted: 받아들인 하루 변화(정렬 유지), last: 마지막으로 받아들인 위치
+    for i, value in enumerate(x):
+        if np.isnan(value):
+            if log and raw[i] <= 0 and last is not None:  # 0 이하 환율·운임은 있을 수 없는 값
+                out[i] = raw[last]
+            continue
+        if last is not None:
+            change = value - x[last]
+            if len(accepted) >= history:
+                q1, q3 = _quantile(accepted, 0.25), _quantile(accepted, 0.75)
+                if q3 > q1 and not q1 - fence * (q3 - q1) <= change <= q3 + fence * (q3 - q1):
+                    out[i] = raw[last]
+                    continue
+            bisect.insort(accepted, change)
+        last = i
+    return pd.Series(out, index=values.index)  # 바꾸지 않은 값은 원래 값 그대로(비트 단위)
+
+
+def clean_sources(sources: dict) -> dict:
+    """피처를 만들기 전에 원자료의 이상치를 직전 값으로 바꾼 사본(모듈 docstring의 '이상치')."""
+    cleaned = dict(sources)
+    for name, (column, log, history) in SPIKE_SERIES.items():
+        frame = sources[name].sort_values("date")
+        cleaned[name] = frame.assign(**{column: replace_spikes(frame[column], log=log, history=history)})
+    for region in REGIONS:
+        name = f"weather_{region['id']}"
+        frame = sources[name].sort_values("date")
+        columns = {column: replace_spikes(frame[column], history=365) for column in WEATHER_SPIKES}
+        rain = frame["PRECTOTCORR"]
+        negative = rain < 0  # 음수 강수는 있을 수 없는 값
+        columns["PRECTOTCORR"] = rain.where(~negative, rain.mask(negative).ffill())
+        cleaned[name] = frame.assign(**columns)
+    return cleaned
 
 
 def _series(sources: dict, name: str, sessions, lag_days: int, max_age: str, column: str = "value",
@@ -324,9 +393,20 @@ def targets(close: pd.Series) -> pd.DataFrame:
 
 def build_dataset(sources: dict) -> pd.DataFrame:
     """거래일 하나가 한 행인 표: 종가, 모든 피처, 지평별 타깃과 목표일."""
+    sources = clean_sources(sources)
     prices = sources["prices"].dropna(subset=["close"])
     sessions = trading_sessions(prices["date"].min(), prices["date"].max())
     data = price_features(prices, sessions)
     data = data.join(macro_features(sources, sessions)).join(climate_features(sources, sessions))
     data = data.join(climate_summary(sources, sessions)).join(cycle_features(sessions))
     return data.join(targets(data["close"]))
+
+
+def add_news(data: pd.DataFrame, articles: pd.DataFrame | None, mode: str) -> pd.DataFrame:
+    """뉴스 점수(news.daily_news)를 news_score 열로 붙인다. 기사가 없는 날은 0(중립)이다.
+
+    mode는 daily_news와 같다. 서비스의 실시간 예측은 live, 소급 분류한 보관 기사로 학습·평가할 때는 research.
+    """
+    if articles is None or articles.empty:
+        return data.assign(news_score=0.0)
+    return data.assign(news_score=daily_news(articles, data.index, mode)["news_score"].fillna(0.0))

@@ -951,14 +951,12 @@
     "60": {
       "adopted": true,
       "final": {
-        "candidate": "LightGBM(n_estimators=300, num_leaves=7, min_child_samples=200) | 가격+기후 요약 | vol_60",
-        "model": "LightGBM",
+        "candidate": "Ridge(alpha=1000) | 가격+기후 요약+거시 장기 | har",
+        "model": "Ridge",
         "params": {
-          "n_estimators": 300,
-          "num_leaves": 7,
-          "min_child_samples": 200
+          "alpha": 1000
         },
-        "feature_set": "가격+기후 요약",
+        "feature_set": "가격+기후 요약+거시 장기",
         "features": [
           "ret_1",
           "ret_5",
@@ -981,10 +979,16 @@
           "br_tmin7_z_frost",
           "br_rain30_z_flowering",
           "enso",
-          "enso_chg_3m"
+          "enso_chg_3m",
+          "brl_chg_60",
+          "brl_chg_120",
+          "cop_chg_60",
+          "rate_chg_60",
+          "oil_chg_60",
+          "freight_chg_120"
         ],
-        "scale": "vol_60",
-        "weight": 0.07211460808653264
+        "scale": "har",
+        "weight": 0.10494708450622284
       },
       "by_year": {
         "2012": {
@@ -1220,14 +1224,12 @@
           "weight": 0.0767792913818489
         },
         "2026": {
-          "candidate": "LightGBM(n_estimators=300, num_leaves=7, min_child_samples=200) | 가격+기후 요약 | vol_60",
-          "model": "LightGBM",
+          "candidate": "Ridge(alpha=1000) | 가격+기후 요약+거시 장기 | har",
+          "model": "Ridge",
           "params": {
-            "n_estimators": 300,
-            "num_leaves": 7,
-            "min_child_samples": 200
+            "alpha": 1000
           },
-          "feature_set": "가격+기후 요약",
+          "feature_set": "가격+기후 요약+거시 장기",
           "features": [
             "ret_1",
             "ret_5",
@@ -1250,10 +1252,16 @@
             "br_tmin7_z_frost",
             "br_rain30_z_flowering",
             "enso",
-            "enso_chg_3m"
+            "enso_chg_3m",
+            "brl_chg_60",
+            "brl_chg_120",
+            "cop_chg_60",
+            "rate_chg_60",
+            "oil_chg_60",
+            "freight_chg_120"
           ],
-          "scale": "vol_60",
-          "weight": 0.07211460808653264
+          "scale": "har",
+          "weight": 0.10494708450622284
         }
       },
       "new": {
@@ -1274,10 +1282,10 @@
           "rows": 816
         },
         "forward": {
-          "rmse_vs_naive_pct": -0.28016542272246703,
-          "ci_low_pct": -0.7327645653925526,
-          "ci_high_pct": 0.2754367765358493,
-          "direction_acc": 0.4496124031007752,
+          "rmse_vs_naive_pct": -1.4519823986033242,
+          "ci_low_pct": -3.2772634305640276,
+          "ci_high_pct": 0.957102178749292,
+          "direction_acc": 0.5426356589147286,
           "zero_share": 0.0,
           "rows": 129
         }
@@ -1471,7 +1479,7 @@
       "개발 95% 구간": "[+0.86, +6.48]",
       "개발 예측 0 비율": 0.7017,
       "재사용 확인 RMSE%": -0.1691,
-      "2026년 RMSE%": -0.2802
+      "2026년 RMSE%": -1.452
     }
   ],
   "climate_steps": [
