@@ -17,7 +17,7 @@ const emit = defineEmits(['update:horizon'])
       <span class="hz-price">{{ formatNumber(item.predicted_price) }}<small>{{ formatReturn(item.predicted_return) }}</small></span>
       <span class="hz-rows">
         <span><span>상승 확률</span><span class="num">{{ formatPercent(item.prob_up, 1) }}</span></span>
-        <span><span>예측 변동성</span><span class="num">{{ formatPercent(item.predicted_vol) }}</span></span>
+        <span><span>예측 변동성(연율)</span><span class="num">{{ formatPercent(item.predicted_vol) }}</span></span>
         <span><span>위험 수준</span><span class="risk"><span class="scale" aria-hidden="true"><i :style="{ '--p': item.vol_percentile ?? 0.5 }" /></span>{{ riskLevel(item.vol_percentile) }}</span></span>
         <span><span>뉴스 예측</span><span class="soon">준비 중</span></span>
       </span>
