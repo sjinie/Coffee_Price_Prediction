@@ -171,6 +171,13 @@ def read_news(conn, since: date) -> dict:
     return {"articles": articles, "daily": daily}
 
 
+def read_news_inputs(conn, since: date) -> list[dict]:
+    """분포 모델의 뉴스 입력. 분석이 끝난 시각(available_at)을 함께 읽어 news.daily_news(mode="live")가 쓴다."""
+    return conn.execute(
+        "SELECT event_at, available_at, p_bullish, p_bearish, relevance FROM news_articles WHERE available_at >= %s",
+        (since,)).fetchall()
+
+
 def read_active_model(conn) -> dict | None:
     return conn.execute("SELECT model_version, train_end, metadata, created_at FROM models WHERE is_active").fetchone()
 

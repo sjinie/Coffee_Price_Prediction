@@ -7,33 +7,25 @@ import pytest
 from coffee import db, jev, pipeline
 from coffee.config import HORIZONS
 from coffee.evaluate import usable_rows
-from coffee.features import FEATURE_GROUPS, build_dataset
-from coffee.models import LightGBMClassifier, RidgeModel, ScaledReturn, ShrunkProbability, ShrunkReturn, return_model
+from coffee.features import FEATURE_GROUPS, add_news, build_dataset
+from coffee.models import DistributionModel
 from coffee.pipeline import (EXIT_OK, EXIT_WARNING, RISK_WINDOW, _rolling_percentile, closed_prices, make_forecasts,
                              update_news)
-
-HAR = ["log_vol_5", "log_vol_20", "log_vol_60"]
 
 
 @pytest.fixture
 def small_models(sources):
-    data = build_dataset(sources)
-    price = FEATURE_GROUPS["price"]
-    direction, returns, volatility = {}, {}, {}
+    data = add_news(build_dataset(sources), None, "live")
+    price = FEATURE_GROUPS["price"] + ["news_score"]
+    models = {}
     for h in HORIZONS:
         fit = usable_rows(data, price, h, "2015-01-01", "2015-12-31", fit_end="2015-12-31")
-        y = data[f"y_{h}"].to_numpy()[fit]
-        direction[h] = ShrunkProbability(LightGBMClassifier(price, n_estimators=10), 0.25).fit(data, fit, y)
-        returns[h] = ScaledReturn(RidgeModel(price, alpha=100), h).fit(data, fit, y)
-        fit = usable_rows(data, price, h, "2015-01-01", "2015-12-31", fit_end="2015-12-31", target=f"v_{h}")
-        volatility[h] = RidgeModel(HAR, alpha=1).fit(data, fit, data[f"v_{h}"].to_numpy()[fit])
-    models = {"version": "test", "direction": direction, "return": returns, "volatility": volatility,
-              "direction_meta": {"train_end": "2015-12-31",
-                                 "horizons": {str(h): {"features": price, "threshold": 0.52} for h in HORIZONS}},
-              "return_meta": {"horizons": {str(h): {"features": price} for h in HORIZONS}},
-              "volatility_meta": {"horizons": {str(h): {"features": HAR, "interval_multiplier": 1.0}
-                                               for h in HORIZONS}}}
-    return data, models
+        models[h] = DistributionModel(price, price, alpha_mean=100, alpha_scale=100).fit(
+            data, fit, data[f"y_{h}"].to_numpy()[fit])
+    thresholds = {5: 0.52, 20: None, 60: None}  # None: 근거 있는 기준이 없어 신호를 내지 않는다
+    meta = {"train_end": "2015-12-31",
+            "horizons": {str(h): {"features": models[h].features, "threshold": thresholds[h]} for h in HORIZONS}}
+    return data, {"version": "test", "distribution": models, "distribution_meta": meta}
 
 
 def test_forecast_rows_follow_the_serving_contract(small_models):
@@ -44,30 +36,23 @@ def test_forecast_rows_follow_the_serving_contract(small_models):
     assert rows["prob_up"].between(0, 1).all() and rows["signal"].isin(["buy", "wait", "hold"]).all()
     assert (rows["target_date"] > rows["origin_date"]).all()
     assert np.allclose(rows["predicted_price"], rows["origin_close"] * np.exp(rows["predicted_return"]))
-    # 세 지평 모두 범위가 있고, 범위는 예측 가격을 가운데(로그 척도)에 둔다
+    # 범위·가운데·상승 확률이 같은 분포에서 나온다: 가운데가 현재가보다 높으면 상승 확률이 50%를 넘는다
     assert ((rows["price_low"] < rows["predicted_price"]) & (rows["predicted_price"] < rows["price_high"])).all()
-    assert np.allclose(np.sqrt(rows["price_low"] * rows["price_high"]), rows["predicted_price"])
-    assert rows["vol_percentile"].between(0, 1).all()
+    decided = rows["prob_up"] != 0.5
+    assert ((rows["prob_up"] > 0.5) == (rows["predicted_price"] > rows["origin_close"]))[decided].all()
+    assert (rows.loc[rows["horizon"] != 5, "signal"] == "hold").all()  # 기준이 없는 지평은 늘 보류
+    assert rows["vol_percentile"].between(0, 1).all() and (rows["predicted_vol"] > 0).all()
     last = rows[(rows["horizon"] == 60) & (rows["origin_date"] == data.index[-1].date())]
     assert last["target_date"].iloc[0] > data.index[-1].date()
 
 
-def test_forecasts_accept_shrunk_har_return_model(small_models):
-    # 03b 서비스 모델: HAR 척도로 학습한 수익률 예측에 λ를 곱한다
+def test_forecast_survives_a_feature_published_late(small_models):
     data, models = small_models
-    price = FEATURE_GROUPS["price"]
-    plain, shrunk = {}, {}
-    for h in HORIZONS:
-        fit = usable_rows(data, price, h, "2015-01-01", "2015-12-31", fit_end="2015-12-31")
-        y = data[f"y_{h}"].to_numpy()[fit]
-        plain[h] = return_model("Ridge", price, h, scale="har").fit(data, fit, y)
-        shrunk[h] = ShrunkReturn(return_model("Ridge", price, h, scale="har"), 0.4).fit(data, fit, y)
-    origins = np.arange(len(data) - 3, len(data))
-    base = pd.DataFrame(make_forecasts(data, origins, {**models, "return": plain}, "live"))
-    rows = pd.DataFrame(make_forecasts(data, origins, {**models, "return": shrunk}, "live"))
-    assert np.isfinite(rows["predicted_return"]).all()
-    assert np.allclose(rows["predicted_return"], 0.4 * base["predicted_return"])
-    assert np.allclose(np.sqrt(rows["price_low"] * rows["price_high"]), rows["predicted_price"])
+    late = data.copy()
+    late.loc[late.index[-1], "ret_20"] = np.nan  # 기준일에 공개가 늦은 피처
+    origin = [len(data) - 1]
+    rows = pd.DataFrame(make_forecasts(late, origin, models, "live"))
+    assert rows[["predicted_price", "price_low", "price_high", "prob_up"]].notna().all().all()
 
 
 def test_rolling_percentile_ranks_against_recent_three_years():
@@ -164,6 +149,7 @@ def test_daily_stores_the_forecast_even_when_news_fails(monkeypatch, sources, sm
     monkeypatch.setattr(db, "upsert_prices", lambda conn, prices: len(prices))
     monkeypatch.setattr(db, "upsert_weather", lambda conn, region, frame: len(frame))
     monkeypatch.setattr(db, "activate_model", lambda *args: None)
+    monkeypatch.setattr(db, "read_news_inputs", lambda conn, since: [])
     monkeypatch.setattr(db, "insert_forecasts", lambda conn, rows: saved.extend(rows) or len(rows))
 
     def news(conn, now):
