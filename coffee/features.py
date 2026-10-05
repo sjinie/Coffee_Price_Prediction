@@ -18,6 +18,11 @@ from .config import HORIZONS, REGIONS, SETTINGS
 WEATHER_LAG = pd.Timedelta(days=SETTINGS["weather"]["availability_lag_days"])
 HEAT_C = SETTINGS["weather"]["heat_threshold_c"]
 CLIMATOLOGY_YEARS = SETTINGS["weather"]["climatology_years"]
+CLIMATE_HALF_WINDOW = 15  # 날짜 단위 평년값: 같은 날짜 앞뒤 15일
+# z를 만들 때 표준편차의 하한. 7월처럼 고온일이 한 번도 없던 시기에 0으로 나누지 않게 한다.
+Z_FLOOR = {"rain30": 1.0, "rain90": 1.0, "temp30": 0.1, "heat30": 1.0, "tmin7": 0.1}
+# 브라질 서리철(6–8월)과 아라비카 개화기(9–10월). 출처는 노트북 03b 사전 등록.
+SEASON_MONTHS = {"frost": (6, 7, 8), "flowering": (9, 10)}
 # 이보다 오래된 값은 결측으로 둔다. 월별 지표는 공개 주기가 길어 여유를 더 둔다.
 MAX_AGE = {"daily": pd.Timedelta(days=14), "monthly": pd.Timedelta(days=80), "weather": pd.Timedelta(days=4)}
 
@@ -36,6 +41,16 @@ FEATURE_GROUPS = {
     "cycle": ["month_sin", "month_cos", "biennial_sin", "biennial_cos"],
 }
 ALL_FEATURES = [name for group in FEATURE_GROUPS.values() for name in group]
+
+# 수익률 모델 재설계(노트북 03b)에서 더한 묶음. 위의 묶음과 ALL_FEATURES는 바꾸지 않는다(방향 모델 입력 유지).
+EXTRA_GROUPS = {
+    "short": ["vol_ratio_5_60", "vol_ratio_20_60"],
+    "climate_summary": ["br_rain90_z", "br_temp30_z", "br_heat30_z", "br_tmin7_z", "co_rain90_z", "co_temp30_z",
+                        "br_drought_days90", "co_wet_days90", "br_cold_days30", "enso_state",
+                        "br_tmin7_z_frost", "br_rain30_z_flowering"],
+    "macro_long": ["brl_chg_60", "brl_chg_120", "cop_chg_60", "rate_chg_60", "oil_chg_60", "freight_chg_120"],
+}
+EXTRA_FEATURES = [name for group in EXTRA_GROUPS.values() for name in group]
 
 
 def trading_sessions(start, end) -> pd.DatetimeIndex:
@@ -85,6 +100,9 @@ def price_features(prices: pd.DataFrame, sessions: pd.DatetimeIndex) -> pd.DataF
         features[f"vol_{days}"] = daily.rolling(days, min_periods=days).std()
         features[f"log_vol_{days}"] = np.log(features[f"vol_{days}"])  # 변동성 모델(HAR)용
     features["ma_gap_60"] = log_price - np.log(known.rolling(60, min_periods=60).mean())
+    # 단기 위험: 최근 변동성이 평소(60일)보다 얼마나 큰가
+    features["vol_ratio_5_60"] = features["vol_5"] / features["vol_60"]
+    features["vol_ratio_20_60"] = features["vol_20"] / features["vol_60"]
     return features
 
 
@@ -109,6 +127,13 @@ def macro_features(sources: dict, sessions: pd.DatetimeIndex) -> pd.DataFrame:
         "rate_chg_20": rate.diff(20),
         "oil_chg_20": oil.diff(20),
         "freight_chg_60": np.log(freight).diff(60),
+        # 거시 장기(03b): 긴 지평은 느린 변화에 반응한다는 가설
+        "brl_chg_60": np.log(brl).diff(60),
+        "brl_chg_120": np.log(brl).diff(120),
+        "cop_chg_60": np.log(cop).diff(60),
+        "rate_chg_60": rate.diff(60),
+        "oil_chg_60": oil.diff(60),
+        "freight_chg_120": np.log(freight).diff(120),
     }, index=sessions)
 
 
@@ -174,6 +199,101 @@ def climate_features(sources: dict, sessions: pd.DatetimeIndex) -> pd.DataFrame:
     return features
 
 
+def daily_climatology(rolled: pd.DataFrame, years: int = CLIMATOLOGY_YEARS,
+                      half_window: int = CLIMATE_HALF_WINDOW) -> tuple[pd.DataFrame, pd.DataFrame]:
+    """각 날짜에 '직전 10년의 같은 날짜 ±15일' 평균과 표준편차를 붙인다. 그해 자료는 쓰지 않는다.
+
+    같은 달 평균(trailing_climatology)은 달이 바뀌는 날 기준이 한 번에 뛰어서, 날씨가 그대로여도 편차가
+    바뀐다(2021-08-01 남미나스 한파 편차 −5.94 → −6.66). 날짜 단위로 앞뒤 15일을 묶으면 기준이 매일
+    조금씩만 움직인다. 날짜 축은 원형으로 잇고(12월 말과 1월 초가 이웃), 2월 29일은 2월 28일로 본다.
+    """
+    index = rolled.index
+    doy = np.asarray(index.dayofyear - (index.is_leap_year & (index.dayofyear >= 60)))  # 1–365
+    year = np.asarray(index.year)
+    all_years = np.arange(year.min(), year.max() + 1)
+    width = 2 * half_window + 1
+
+    def window_sum(a):  # 날짜 축의 원형 이동합(앞뒤 half_window일)
+        padded = np.concatenate([a[:, -half_window:], a, a[:, :half_window]], axis=1)
+        cumsum = np.concatenate([np.zeros((len(a), 1)), np.cumsum(padded, axis=1)], axis=1)
+        return cumsum[:, width:] - cumsum[:, :-width]
+
+    def previous_years(a):  # 직전 years년의 합. 그해는 뺀다
+        return pd.DataFrame(a).rolling(years, min_periods=1).sum().shift(1).to_numpy()
+
+    means, stds = {}, {}
+    for column in rolled.columns:
+        table = (rolled[column].groupby([year, doy]).mean().unstack()
+                 .reindex(index=all_years, columns=range(1, 366)).to_numpy())
+        present = ~np.isnan(table)
+        filled = np.where(present, table, 0.0)
+        days = window_sum(present.astype(float))
+        count = previous_years(days)
+        with np.errstate(invalid="ignore", divide="ignore"):  # 자료가 없는 칸은 아래에서 결측으로 둔다
+            mean = previous_years(window_sum(filled)) / count
+            variance = previous_years(window_sum(filled ** 2)) / count - mean ** 2
+        enough = previous_years((days > 0).astype(float)) >= years - 2  # 자료 있는 해가 8년 이상
+        mean, std = np.where(enough, mean, np.nan), np.where(enough, np.sqrt(np.clip(variance, 0, None)), np.nan)
+        position = (year - all_years[0], doy - 1)
+        means[column], stds[column] = mean[position], std[position]
+    return pd.DataFrame(means, index=index), pd.DataFrame(stds, index=index)
+
+
+def _region_anomalies(sources: dict, region_id: str, normal: str, standardize: bool) -> pd.DataFrame:
+    rolled = weather_rolling(sources[f"weather_{region_id}"].set_index("date"))
+    if normal == "monthly":  # 기존 피처와 같은 '같은 달' 평년값(03b 비교용)
+        return rolled - trailing_climatology(rolled)[rolled.columns]
+    mean, std = daily_climatology(rolled)
+    anomaly = rolled - mean
+    return anomaly / std.clip(lower=pd.Series(Z_FLOOR), axis=1) if standardize else anomaly
+
+
+def _days(condition: pd.Series, known: pd.Series, window: int) -> pd.Series:
+    """최근 window일 가운데 condition이 참인 날 수. 그 사이 값이 하나라도 없으면 결측이다."""
+    return condition.astype(float).where(known.notna()).rolling(window, min_periods=window).sum()
+
+
+def climate_summary(sources: dict, sessions: pd.DatetimeIndex, normal: str = "daily", standardize: bool = True,
+                    events: bool = True, season: bool = True) -> pd.DataFrame:
+    """수익률 모델용 기후 요약(노트북 03b). 산지별 이상 정도를 나라별로 묶는다.
+
+    - normal: 'daily'는 직전 10년 같은 날짜 ±15일, 'monthly'는 기존 피처와 같은 직전 10년 같은 달
+    - standardize: 그 시기의 표준편차로 나눈 z. 산지·계절이 달라도 '얼마나 드문가'를 같은 눈금으로 본다
+    - events: 표준 기준을 넘은 날 수(SPI ±1.5, 기온 z −2)와 ENSO 상태(ONI ±0.5)
+    - season: 브라질 서리철에만 켜지는 한파 z, 개화기에만 켜지는 30일 강수 z
+    브라질 3곳은 평균(한파는 가장 추운 곳), 콜롬비아 3곳은 평균이다. 한 산지라도 없으면 결측이다.
+    관측일 + 4일에 쓸 수 있다고 보는 것은 기존 기후 피처와 같다.
+    """
+    if (events or season) and not standardize:
+        raise ValueError("사건·생육기 피처는 z(standardize=True)로만 만든다")
+    anomalies = {r["id"]: _region_anomalies(sources, r["id"], normal, standardize) for r in REGIONS}
+
+    def country(name, column, how="mean"):
+        frame = pd.concat([anomalies[r["id"]][column] for r in REGIONS if r["country"] == name], axis=1)
+        return frame.min(axis=1, skipna=False) if how == "min" else frame.mean(axis=1, skipna=False)
+
+    daily = pd.DataFrame({
+        "br_rain90_z": country("Brazil", "rain90"), "br_temp30_z": country("Brazil", "temp30"),
+        "br_heat30_z": country("Brazil", "heat30"), "br_tmin7_z": country("Brazil", "tmin7", "min"),
+        "co_rain90_z": country("Colombia", "rain90"), "co_temp30_z": country("Colombia", "temp30"),
+    })
+    if events:
+        daily["br_drought_days90"] = _days(daily["br_rain90_z"] <= -1.5, daily["br_rain90_z"], 90)
+        daily["co_wet_days90"] = _days(daily["co_rain90_z"] >= 1.5, daily["co_rain90_z"], 90)
+        daily["br_cold_days30"] = _days(daily["br_tmin7_z"] <= -2, daily["br_tmin7_z"], 30)
+    if season:
+        month = daily.index.month
+        daily["br_tmin7_z_frost"] = daily["br_tmin7_z"].where(month.isin(SEASON_MONTHS["frost"]), 0.0)
+        daily["br_rain30_z_flowering"] = country("Brazil", "rain30").where(month.isin(SEASON_MONTHS["flowering"]), 0.0)
+    columns = list(daily.columns)
+    daily["observed_at"], daily["available_at"] = daily.index, daily.index + WEATHER_LAG
+    features = asof(daily, sessions, MAX_AGE["weather"])[columns]
+    if events:
+        enso = _series(sources, "enso", sessions, 0, "monthly")
+        features["enso_state"] = np.sign(enso).where(enso.abs() >= 0.5, 0.0).where(enso.notna())
+    return features
+
+
 def cycle_features(sessions: pd.DatetimeIndex) -> pd.DataFrame:
     """계절(12개월)과 해거리(24개월) 주기.
 
@@ -208,5 +328,5 @@ def build_dataset(sources: dict) -> pd.DataFrame:
     sessions = trading_sessions(prices["date"].min(), prices["date"].max())
     data = price_features(prices, sessions)
     data = data.join(macro_features(sources, sessions)).join(climate_features(sources, sessions))
-    data = data.join(cycle_features(sessions))
+    data = data.join(climate_summary(sources, sessions)).join(cycle_features(sessions))
     return data.join(targets(data["close"]))

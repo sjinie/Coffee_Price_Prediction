@@ -2,8 +2,8 @@ import numpy as np
 import pandas as pd
 
 from coffee.evaluate import fold_rows, usable_rows
-from coffee.features import (ALL_FEATURES, build_dataset, future_session, trading_sessions,
-                             trailing_climatology, weather_rolling)
+from coffee.features import (ALL_FEATURES, EXTRA_FEATURES, build_dataset, daily_climatology, future_session,
+                             trading_sessions, trailing_climatology, weather_rolling)
 
 
 def test_trading_sessions_add_coffee_only_day_and_skip_weekends():
@@ -23,7 +23,8 @@ def test_future_data_never_changes_past_features(sources):
         numeric = frame.select_dtypes("number").columns
         frame.loc[later, numeric] = frame.loc[later, numeric] * 1.7 + 3
     after = build_dataset(changed)
-    pd.testing.assert_frame_equal(before.loc[:cutoff, ALL_FEATURES], after.loc[:cutoff, ALL_FEATURES])
+    columns = ALL_FEATURES + EXTRA_FEATURES
+    pd.testing.assert_frame_equal(before.loc[:cutoff, columns], after.loc[:cutoff, columns])
 
 
 def test_macro_value_is_used_only_after_release(sources):
@@ -39,8 +40,11 @@ def test_macro_value_is_used_only_after_release(sources):
 def test_weather_change_appears_four_days_later(sources):
     weather = sources["weather_br_cerrado"]
     weather.loc[weather["date"] >= "2016-05-02", "T2M_MIN"] = -30.0  # 갑작스러운 한파
-    cold = build_dataset(sources)["br_cerrado_cold_anom"]
+    data = build_dataset(sources)
+    cold = data["br_cerrado_cold_anom"]
     assert cold.loc["2016-05-05"] > -20 and cold.loc["2016-05-06"] < -30  # 관측 + 4일
+    z = data["br_tmin7_z"]  # 브라질 요약(가장 추운 산지)도 같은 날 반영된다
+    assert z.loc["2016-05-05"] > -5 and z.loc["2016-05-06"] < -5
 
 
 def test_climatology_uses_only_previous_years():
@@ -50,6 +54,38 @@ def test_climatology_uses_only_previous_years():
     normal = trailing_climatology(weather_rolling(daily))
     assert normal.loc["2015-07-15", "temp30"] == 20.0  # 그해 자료는 쓰지 않는다
     assert np.isclose(normal.loc["2016-07-15", "temp30"], 21.0)  # 다음 해부터 10년 평균에 포함
+
+
+def test_daily_climatology_uses_only_previous_years():
+    days = pd.date_range("2000-01-01", "2016-12-31")
+    rolled = pd.DataFrame({"temp30": 20.0}, index=days)
+    rolled.loc["2015", "temp30"] = 30.0  # 2015년만 매우 더움
+    mean, std = daily_climatology(rolled)
+    assert mean.loc["2015-07-15", "temp30"] == 20.0 and std.loc["2015-07-15", "temp30"] == 0.0
+    assert np.isclose(mean.loc["2016-07-15", "temp30"], 21.0)
+    changed = rolled.copy()
+    changed.loc["2016", "temp30"] = -50.0  # 그해 값이 바뀌어도 그해 평년값은 그대로
+    pd.testing.assert_frame_equal(daily_climatology(changed)[0], mean)
+
+
+def test_daily_climatology_moves_smoothly_across_month_ends():
+    days = pd.date_range("2000-01-01", "2016-12-31")
+    rolled = pd.DataFrame({"temp30": 20 + 5 * np.sin(2 * np.pi * days.dayofyear / 365), "rain90": 100.0}, index=days)
+    daily_step = daily_climatology(rolled)[0].loc["2015", "temp30"].diff().abs().max()
+    monthly_step = trailing_climatology(rolled).loc["2015", "temp30"].diff().abs().max()
+    assert daily_step < 0.1 and monthly_step > 1  # 같은 달 평년값은 달이 바뀔 때 한 번에 뛴다
+
+
+def test_climate_summary_counts_cold_days_and_keeps_frost_feature_in_winter(sources):
+    for region in ("br_sul_minas", "br_cerrado", "br_alta_mogiana"):
+        weather = sources[f"weather_{region}"]
+        weather.loc[weather["date"].between("2016-07-01", "2016-07-05"), "T2M_MIN"] = -30.0  # 서리철 한파
+        weather.loc[weather["date"].between("2016-11-01", "2016-11-05"), "T2M_MIN"] = -30.0  # 서리철 밖 한파
+    data = build_dataset(sources)
+    july, november = data.loc["2016-07-11"], data.loc["2016-11-10"]  # 관측 + 4일 뒤의 거래일
+    assert july["br_tmin7_z"] < -5 and july["br_tmin7_z_frost"] == july["br_tmin7_z"]
+    assert july["br_cold_days30"] >= 3
+    assert november["br_tmin7_z"] < -5 and november["br_tmin7_z_frost"] == 0.0
 
 
 def test_targets_use_actual_prices_and_skip_missing(sources):
