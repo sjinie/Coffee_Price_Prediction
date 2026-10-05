@@ -127,21 +127,34 @@ class DLinearModel:
         return self.pipeline_.predict(self._x(data, rows))
 
 
+HAR_FEATURES = ["log_vol_5", "log_vol_20", "log_vol_60"]  # 04의 HAR 입력
+
+
 class ScaledReturn:
-    """수익률을 최근 변동성으로 나눠 학습하고, 예측은 다시 곱해 돌려준다.
+    """수익률을 변동성 척도로 나눠 학습하고, 예측은 다시 곱해 돌려준다.
 
     변동성이 두 배로 커진 국면(예: 2024–2025)에서도 '평소 변동 폭의 몇 배'라는 같은 척도로
-    배우게 하려는 장치다. 척도는 그날 알려진 60일 변동성 × √h다.
+    배우게 하려는 장치다. 척도 × √h에서 척도는 둘 중 하나다.
+    - 'vol_60': 그날 알려진 60일 변동성
+    - 'har': 학습 구간에서 다시 맞춘 HAR(5·20·60일 로그 변동성 → 앞으로 h일 로그 변동성)의 예측.
+      04에서 HAR이 직전 변동성보다 앞으로의 변동성을 잘 맞혔다(03b 후보).
     """
 
-    def __init__(self, model, horizon: int):
-        self.model, self.horizon = model, horizon
-        self.name, self.features = model.name, model.features
+    def __init__(self, model, horizon: int, scale: str = "vol_60"):
+        self.model, self.horizon, self.scale = model, horizon, scale
+        self.name = model.name
+        self.features = list(dict.fromkeys(model.features + (HAR_FEATURES if scale == "har" else ["vol_60"])))
 
     def _scale(self, data, rows):
+        if getattr(self, "scale", "vol_60") == "har":  # 03b 이전 artifact에는 scale 속성이 없다
+            return np.exp(self.har_.predict(data, rows)) * np.sqrt(self.horizon)
         return data["vol_60"].to_numpy(float)[rows] * np.sqrt(self.horizon)
 
     def fit(self, data, rows, y):
+        if self.scale == "har":  # 학습 행 가운데 앞으로의 변동성이 확인된 행으로만 맞춘다
+            target = data[f"v_{self.horizon}"].to_numpy(float)
+            known = np.asarray(rows)[~np.isnan(target[rows])]
+            self.har_ = RidgeModel(HAR_FEATURES, alpha=1).fit(data, known, target[known])
         self.model.fit(data, rows, y / self._scale(data, rows))
         return self
 
@@ -149,21 +162,49 @@ class ScaledReturn:
         return self.model.predict(data, rows) * self._scale(data, rows)
 
 
+class ShrunkReturn:
+    """예측 로그수익률에 weight(0–1)를 곱해 현재가 유지(0) 쪽으로 줄인다.
+
+    신호가 약할 때 예측을 크게 내면 RMSE가 Naive보다 커진다(MSE(p) − MSE(0) = E[p²] − 2E[p·y]).
+    weight는 03b의 안쪽 검증 예측으로 정한다(evaluate.shrink_weight). 0이면 Naive와 같다.
+    """
+
+    def __init__(self, model, weight: float):
+        self.model, self.weight = model, weight
+        self.name, self.features = model.name, model.features
+
+    def fit(self, data, rows, y):
+        self.model.fit(data, rows, y)
+        return self
+
+    def predict(self, data, rows):
+        return self.weight * self.model.predict(data, rows)
+
+
 RETURN_ALGORITHMS = {  # 대시보드에 보여 줄 이름
     "Ridge": "Ridge 회귀 (변동성 정규화)",
     "LightGBM": "LightGBM 회귀 (변동성 정규화)",
     "DLinear": "DLinear (변동성 정규화)",
 }
+RETURN_DEFAULTS = {  # 03에서 정한 설정. 03b는 후보마다 params로 바꿔 넘긴다
+    "Ridge": {"alpha": 100},
+    "LightGBM": {"n_estimators": 150, "num_leaves": 7, "min_child_samples": 100},
+    "DLinear": {"alpha": 1000},
+}
 
 
-def return_model(name: str, features, horizon: int) -> ScaledReturn:
-    """03에서 비교한 수익률 회귀 모델. 04·06·파이프라인이 같은 설정을 쓰도록 한곳에 둔다."""
-    make = {
-        "Ridge": lambda: RidgeModel(features, alpha=100),
-        "LightGBM": lambda: LightGBMModel(features, n_estimators=150, num_leaves=7, min_child_samples=100),
-        "DLinear": lambda: DLinearModel(features, alpha=1000),
-    }[name]
-    return ScaledReturn(make(), horizon)
+def return_model(name: str, features, horizon: int, params: dict | None = None,
+                 scale: str = "vol_60") -> ScaledReturn:
+    """수익률 회귀 모델. 03·03b·04·06·파이프라인이 같은 설정을 쓰도록 한곳에 둔다."""
+    make = {"Ridge": RidgeModel, "LightGBM": LightGBMModel, "DLinear": DLinearModel}[name]
+    return ScaledReturn(make(features, **{**RETURN_DEFAULTS[name], **(params or {})}), horizon, scale)
+
+
+def describe_return(name: str, params: dict, scale: str, weight: float) -> str:
+    """대시보드에 보여 줄 수익률 모델 이름. 예: 'Ridge 회귀 (alpha=1000, HAR 정규화, 0.31배로 축소)'."""
+    settings = ", ".join(f"{key}={value}" for key, value in params.items())
+    model = {"Ridge": "Ridge 회귀", "LightGBM": "LightGBM 회귀", "DLinear": "DLinear"}[name]
+    return f"{model} ({settings}, {'HAR' if scale == 'har' else '60일 변동성'} 정규화, {weight:.2f}배로 축소)"
 
 
 class LogisticModel:

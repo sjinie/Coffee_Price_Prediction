@@ -8,7 +8,7 @@ from coffee import db, jev, pipeline
 from coffee.config import HORIZONS
 from coffee.evaluate import usable_rows
 from coffee.features import FEATURE_GROUPS, build_dataset
-from coffee.models import LightGBMClassifier, RidgeModel, ScaledReturn, ShrunkProbability
+from coffee.models import LightGBMClassifier, RidgeModel, ScaledReturn, ShrunkProbability, ShrunkReturn, return_model
 from coffee.pipeline import (EXIT_OK, EXIT_WARNING, RISK_WINDOW, _rolling_percentile, closed_prices, make_forecasts,
                              update_news)
 
@@ -50,6 +50,24 @@ def test_forecast_rows_follow_the_serving_contract(small_models):
     assert rows["vol_percentile"].between(0, 1).all()
     last = rows[(rows["horizon"] == 60) & (rows["origin_date"] == data.index[-1].date())]
     assert last["target_date"].iloc[0] > data.index[-1].date()
+
+
+def test_forecasts_accept_shrunk_har_return_model(small_models):
+    # 03b 서비스 모델: HAR 척도로 학습한 수익률 예측에 λ를 곱한다
+    data, models = small_models
+    price = FEATURE_GROUPS["price"]
+    plain, shrunk = {}, {}
+    for h in HORIZONS:
+        fit = usable_rows(data, price, h, "2015-01-01", "2015-12-31", fit_end="2015-12-31")
+        y = data[f"y_{h}"].to_numpy()[fit]
+        plain[h] = return_model("Ridge", price, h, scale="har").fit(data, fit, y)
+        shrunk[h] = ShrunkReturn(return_model("Ridge", price, h, scale="har"), 0.4).fit(data, fit, y)
+    origins = np.arange(len(data) - 3, len(data))
+    base = pd.DataFrame(make_forecasts(data, origins, {**models, "return": plain}, "live"))
+    rows = pd.DataFrame(make_forecasts(data, origins, {**models, "return": shrunk}, "live"))
+    assert np.isfinite(rows["predicted_return"]).all()
+    assert np.allclose(rows["predicted_return"], 0.4 * base["predicted_return"])
+    assert np.allclose(np.sqrt(rows["price_low"] * rows["price_high"]), rows["predicted_price"])
 
 
 def test_rolling_percentile_ranks_against_recent_three_years():

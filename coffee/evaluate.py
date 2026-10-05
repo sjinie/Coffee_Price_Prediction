@@ -1,4 +1,4 @@
-"""시간순 분할, 평가 지표, 블록 bootstrap."""
+"""시간순 분할, 평가 지표, 블록 bootstrap, 해마다 후보를 고르는 중첩 검증."""
 import numpy as np
 import pandas as pd
 from sklearn.metrics import roc_auc_score
@@ -6,6 +6,7 @@ from sklearn.metrics import roc_auc_score
 from .config import TRAIN_START
 
 LOOKBACK = 60  # 창 입력 모델(DLinear·LSTM)이 쓰는 과거 거래일 수. 모든 모델을 같은 행으로 비교한다.
+FIRST_INNER_YEAR = 2009  # 안쪽 검증의 첫해. 2006–2008년(3년)으로 학습한 예측부터 쓴다.
 
 
 def usable_rows(data: pd.DataFrame, features: list[str], horizon: int, start, end, fit_end=None,
@@ -39,6 +40,64 @@ def fold_rows(data, features, horizon, year, last_year, target=None):
     test = usable_rows(data, features, horizon, f"{year}-01-01", f"{year}-12-31", fit_end=f"{last_year}-12-31",
                        target=target)
     return fit, test
+
+
+def walk_forward_predictions(data, make, row_features, horizon, years, last_year) -> pd.Series:
+    """years마다 그 전까지의 자료로 학습해 그해를 예측한다(행 번호 → 예측, fold_rows와 같은 embargo).
+
+    행은 row_features로 정하므로 후보마다 피처가 달라도 같은 행에서 비교한다.
+    """
+    y = data[f"y_{horizon}"].to_numpy()
+    parts = []
+    for year in years:
+        fit, test = fold_rows(data, row_features, horizon, year, last_year)
+        parts.append(pd.Series(make().fit(data, fit, y[fit]).predict(data, test), index=test))
+    return pd.concat(parts)
+
+
+def shrink_weight(y_true, pred) -> float:
+    """예측을 0(현재가 유지) 쪽으로 줄이는 비율 λ = Σpy / Σp²(최소제곱)를 [0, 1]로 자른 값."""
+    y_true, pred = np.asarray(y_true, float), np.asarray(pred, float)
+    denominator = float(np.sum(pred ** 2))
+    return 0.0 if denominator == 0 else float(np.clip(np.sum(pred * y_true) / denominator, 0.0, 1.0))
+
+
+def select_by_year(data, horizon, predictions: dict, years, first_inner_year=FIRST_INNER_YEAR) -> pd.DataFrame:
+    """평가 연도 Y마다 first_inner_year … Y−1년의 walk-forward 예측(안쪽 검증)으로 후보와 λ를 고른다.
+
+    predictions는 후보 이름 → walk_forward_predictions 결과이며 모든 후보의 행이 같아야 한다. 안쪽 검증 행은
+    목표일이 Y−1년 말을 넘지 않는다. 각 후보는 자기 λ를 적용한 RMSE로 겨루고, 어떤 후보도 Naive(예측 0)보다
+    작지 않으면 'Naive'를 고른다. 같으면 먼저 넣은 후보가 이긴다.
+    """
+    rows = next(iter(predictions.values())).index
+    if not all(pred.index.equals(rows) for pred in predictions.values()):
+        raise ValueError("후보마다 평가 행이 다르다")
+    origin = data.index[rows]
+    target_date = data[f"target_date_{horizon}"].to_numpy()[rows]
+    y = data[f"y_{horizon}"].to_numpy()[rows]
+    records = []
+    for year in years:
+        inner = (origin.year >= first_inner_year) & (origin.year < year) & (target_date <= pd.Timestamp(f"{year - 1}-12-31"))
+        best = {"year": year, "candidate": "Naive", "weight": 0.0, "inner_rmse": float(np.sqrt(np.mean(y[inner] ** 2)))}
+        for name, pred in predictions.items():
+            p = pred.to_numpy()[inner]
+            weight = shrink_weight(y[inner], p)
+            score = float(np.sqrt(np.mean((y[inner] - weight * p) ** 2)))
+            if score < best["inner_rmse"]:
+                best = {"year": year, "candidate": name, "weight": weight, "inner_rmse": score}
+        records.append({**best, "inner_rows": int(inner.sum())})
+    return pd.DataFrame(records).set_index("year")
+
+
+def apply_selection(data, predictions: dict, selection: pd.DataFrame) -> pd.Series:
+    """select_by_year의 연도별 선택을 적용한 예측(행 번호 → λ × 고른 후보의 예측, Naive면 0)."""
+    rows = next(iter(predictions.values())).index
+    year = data.index[rows].year
+    out = pd.Series(np.nan, index=rows)
+    for y, choice in selection.iterrows():
+        mask = np.asarray(year == y)
+        out[mask] = 0.0 if choice["candidate"] == "Naive" else choice["weight"] * predictions[choice["candidate"]].to_numpy()[mask]
+    return out
 
 
 def metrics(y_true, y_pred) -> dict:

@@ -3,9 +3,9 @@ import pytest
 
 from coffee.evaluate import usable_rows
 from coffee.features import ALL_FEATURES, FEATURE_GROUPS, build_dataset
-from coffee.models import (DLinearModel, LightGBMClassifier, LightGBMModel, LogisticModel, Momentum, Naive,
-                           RidgeModel, ScaledReturn, ShrunkProbability, _moving_average, buy_signal, load_bundle,
-                           price_range, save_bundle)
+from coffee.models import (HAR_FEATURES, DLinearModel, LightGBMClassifier, LightGBMModel, LogisticModel, Momentum,
+                           Naive, RidgeModel, ScaledReturn, ShrunkProbability, ShrunkReturn, _moving_average,
+                           buy_signal, load_bundle, price_range, return_model, save_bundle)
 
 
 @pytest.fixture
@@ -41,6 +41,29 @@ def test_scaled_return_restores_original_units(dataset):
     inner = RidgeModel(FEATURE_GROUPS["price"]).fit(data, train, y / (data["vol_60"].to_numpy()[train] * np.sqrt(5)))
     wrapped = ScaledReturn(RidgeModel(FEATURE_GROUPS["price"]), 5).fit(data, train, y)
     assert np.allclose(wrapped.predict(data, test), inner.predict(data, test) * scale)
+
+
+def test_har_scale_is_fitted_on_training_rows(dataset):
+    data, train, test = dataset
+    y = data["y_5"].to_numpy()[train]
+    model = return_model("Ridge", FEATURE_GROUPS["price"], 5, scale="har").fit(data, train, y)
+    target = data["v_5"].to_numpy()
+    known = train[~np.isnan(target[train])]
+    har = RidgeModel(HAR_FEATURES, alpha=1).fit(data, known, target[known])  # 학습 행의 앞으로 5일 변동성
+    expected = model.model.predict(data, test) * np.exp(har.predict(data, test)) * np.sqrt(5)
+    assert np.allclose(model.predict(data, test), expected)
+    assert set(HAR_FEATURES) <= set(model.features)  # 파이프라인이 HAR 입력이 있는 행만 예측하도록
+
+
+def test_shrunk_return_and_tuned_settings(dataset):
+    data, train, test = dataset
+    y = data["y_5"].to_numpy()[train]
+    base = return_model("Ridge", FEATURE_GROUPS["price"], 5).fit(data, train, y)
+    assert base.model.alpha == 100  # 인자가 없으면 03의 설정 그대로
+    shrunk = ShrunkReturn(return_model("Ridge", FEATURE_GROUPS["price"], 5), 0.3).fit(data, train, y)
+    assert np.allclose(shrunk.predict(data, test), 0.3 * base.predict(data, test))
+    tuned = return_model("LightGBM", FEATURE_GROUPS["price"], 5, params={"num_leaves": 3})
+    assert tuned.model.params["num_leaves"] == 3 and tuned.model.params["n_estimators"] == 150
 
 
 def test_moving_average_keeps_length_and_trend_plus_rest_restores_window():
