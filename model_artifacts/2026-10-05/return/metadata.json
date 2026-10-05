@@ -2,7 +2,7 @@
   "version": "2026-10-05",
   "train_end": "2025-12-31",
   "data_end": "2026-10-02 00:00:00",
-  "code_commit": "45f9ac3-dirty",
+  "code_commit": "8bea235",
   "train_rows": {
     "방향_5": 4844,
     "수익률(Ridge)_5": 4764,
