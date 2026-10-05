@@ -112,19 +112,21 @@ const evaluationNotes = {
             <p v-if="weatherState === 'ready'" class="big">{{ consistency(rainGrid) }}</p>
             <figcaption class="cap">브라질 남미나스 산지의 주간 강수(7일 기준). 숫자는 한 해의 모양이 나머지 해들의 평균과 얼마나 닮았는지(상관의 중앙값)다.</figcaption>
           </figure>
-          <figure class="clock-figure">
-            <YearClock v-if="priceState === 'ready' && hasValues(returnGrid)" :grid="returnGrid" :years="years" kind="return" label="KC=F 주간 로그수익률 연간 시계" />
-            <p v-else class="clock-empty cap" role="status"><span>{{ PRICE_TEXT[priceState === 'ready' ? 'empty' : priceState] }} <button v-if="priceState === 'error'" class="text-button" type="button" @click="emit('retry-prices')">다시 시도</button></span></p>
-            <div class="ramp"><span>하락</span><i class="ramp-return" /><span>상승</span></div>
-            <p v-if="priceState === 'ready' && hasValues(returnGrid)" class="big">{{ consistency(returnGrid) }}</p>
-            <figcaption class="cap">KC=F 주간 로그수익률. 같은 방법으로 잰 해마다의 닮은 정도다.</figcaption>
-          </figure>
           <figure v-for="t in temps" :key="t.kind" class="clock-figure">
             <YearClock v-if="weatherState === 'ready' && hasValues(t.grid)" :grid="t.grid" :years="years" :kind="t.kind" :label="`브라질 남미나스 산지의 주간 ${t.name} 편차 연간 시계`" />
             <p v-else class="clock-empty cap" role="status"><span>{{ WEATHER_TEXT[weatherState === 'ready' ? 'empty' : weatherState] }} <button v-if="weatherState === 'error'" class="text-button" type="button" @click="emit('retry-weather')">다시 시도</button></span></p>
             <div class="ramp"><span>평년보다 추움</span><i class="ramp-return" /><span>더움</span></div>
             <p v-if="t.extreme" class="big">{{ formatSigned(t.extreme.value, 1) }}℃</p>
             <figcaption class="cap">{{ t.name }}이 같은 주 평년({{ years[0] }}–{{ years.at(-1) }}년 평균)보다 얼마나 높거나 낮았는지. {{ t.note }} 드러난다. 숫자는 평년에서 가장 크게 벗어난 주({{ t.when }})의 값이다.</figcaption>
+          </figure>
+        </div>
+        <div class="clocks">
+          <figure class="clock-figure">
+            <YearClock v-if="priceState === 'ready' && hasValues(returnGrid)" :grid="returnGrid" :years="years" kind="return" label="KC=F 주간 로그수익률 연간 시계" />
+            <p v-else class="clock-empty cap" role="status"><span>{{ PRICE_TEXT[priceState === 'ready' ? 'empty' : priceState] }} <button v-if="priceState === 'error'" class="text-button" type="button" @click="emit('retry-prices')">다시 시도</button></span></p>
+            <div class="ramp"><span>하락</span><i class="ramp-return" /><span>상승</span></div>
+            <p v-if="priceState === 'ready' && hasValues(returnGrid)" class="big">{{ consistency(returnGrid) }}</p>
+            <figcaption class="cap">KC=F 주간 로그수익률. 숫자는 강수와 같은 방법으로 잰 해마다의 닮은 정도다.</figcaption>
           </figure>
         </div>
         <p class="cap">고리 하나가 한 해다. 안쪽이 {{ years[0] }}년, 바깥이 {{ years.at(-1) }}년이고 12시 방향에서 1월이 시작한다.</p>

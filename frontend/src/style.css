@@ -167,7 +167,8 @@ svg text { font-family: var(--mono); font-size: 11px; fill: var(--muted); }
 .chapter { display: grid; grid-template-columns: minmax(0, 2fr) minmax(0, 10fr); gap: 14px 48px; padding-top: clamp(96px, 12vw, 150px); }
 .side { font: 500 13px/1.5 var(--mono); color: var(--muted); padding-top: .55em; }
 .body { display: grid; gap: 32px; min-width: 0; }
-.clocks { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 40px clamp(32px, 5vw, 72px); }
+.clocks { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 40px clamp(32px, 5vw, 72px); }  /* 기후 셋(강수·서리·폭염)을 한 줄에, 가격은 아래 줄 */
+@media (max-width: 1100px) { .clocks { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
 .clock-figure { display: grid; gap: 14px; align-content: start; }
 .clock { display: block; width: 100%; max-width: 440px; height: auto; overflow: visible; }
 .clock .cell:hover { stroke: var(--ink); stroke-width: 1; }
