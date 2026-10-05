@@ -141,3 +141,14 @@ test('강수: 관측일이 7일보다 적은 주는 늘려 그리지 않는다(�
   assert.equal(rain[0][0], null)   // 3일 30mm를 70mm로 부풀리지 않는다
   assert.equal(rain[0][1], 21)
 })
+
+test('좁은 화면의 현재 단계는 고정 차트 바로 아래에서 온전히 보이는 첫 문단이다', () => {
+  const paragraphs = [
+    { step: 2, top: 300, bottom: 380 },   // 일부가 차트(아래 끝 341) 밑에 있다
+    { step: 3, top: 450, bottom: 530 },   // 온전히 보인다
+    { step: 4, top: 780, bottom: 860 },   // 화면 아래로 잘린다
+  ]
+  assert.equal(lib.activeStep(paragraphs, 341, 812), 3)
+  assert.equal(lib.activeStep([{ step: 5, top: 360, bottom: 440 }, { step: 4, top: 100, bottom: 180 }], 341, 812), 5)
+  assert.equal(lib.activeStep([{ step: 2, top: 200, bottom: 400 }], 341, 812), null)   // 온전한 문단이 없으면 단계를 바꾸지 않는다
+})
