@@ -200,10 +200,15 @@ sha256sum ~/coffee-app-<커밋>.tar.gz
 sudo bash -s <<'EOF'
 set -euo pipefail; umask 077
 b=<백업>; sha=<SHA>
+# 재시도로 남은 폴더가 있으면 멈춘다. 새 백업 폴더(2)부터 다시 한다
+test ! -e /srv/coffee/app.new
+test ! -e "$b/app"
 install -d -m 0700 /srv/coffee/app.new
 tar -xzf /home/<관리자>/coffee-app-<커밋>.tar.gz -C /srv/coffee/app.new
 printf '%s\n' "$sha" > /srv/coffee/app.new/.source-commit
-mv -T /srv/coffee/app "$b/app" && mv -T /srv/coffee/app.new /srv/coffee/app
+# 따로 실행해야 set -e가 각각의 실패에서 멈춘다(&& 왼쪽 실패는 멈추지 않는다)
+mv -T /srv/coffee/app "$b/app"
+mv -T /srv/coffee/app.new /srv/coffee/app
 sed -i "s/^COFFEE_SOURCE_SHA=.*/COFFEE_SOURCE_SHA=$sha/" /srv/coffee/.env
 setsid nohup bash -c "COFFEE_SOURCE_SHA=$sha /srv/coffee/app/deploy/setup-db.sh /srv/coffee/.env; echo SETUP_DB_EXIT=\$?" > "$b/setup-db.log" 2>&1 < /dev/null &
 EOF
