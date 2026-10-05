@@ -13,8 +13,12 @@ export function formatNumber(value, digits = 1) {
 
 export const formatPercent = (value, digits = 0) => (isNumber(value) ? `${(value * 100).toFixed(digits)}%` : '-')
 
-export const formatSigned = (value, digits = 1) =>
-  (isNumber(value) ? `${value < 0 ? '−' : '+'}${Math.abs(value).toFixed(digits)}` : '-')
+// 반올림해서 0이 되면 부호를 붙이지 않는다(−0.014 → '0.0', '−0.0'이 아니다).
+export const formatSigned = (value, digits = 1) => {
+  if (!isNumber(value)) return '-'
+  const text = Math.abs(value).toFixed(digits)
+  return Number(text) === 0 ? text : `${value < 0 ? '−' : '+'}${text}`
+}
 
 // 로그수익률을 '+2.1%' 같은 가격 변화율로 바꾼다.
 export const formatReturn = (logReturn, digits = 1) =>

@@ -66,6 +66,7 @@ test('적중 기록은 목표일 가격이 확인된 예측만 센다', () => {
   assert.equal(trackRecord([]).maeModel, null)
   assert.equal(formatReturn(Math.log(1.021)), '+2.1%')
   assert.equal(formatReturn(Math.log(0.996)), '−0.4%')
+  assert.equal(formatReturn(Math.log(0.9999)), '0.0%')  // 반올림해서 0이면 부호가 없다
   assert.equal(formatReturn(null), '-')
   assert.equal(riskLevel(0.2), '낮음')
   assert.equal(riskLevel(0.5), '보통')

@@ -13,29 +13,33 @@ const groups = computed(() => HORIZONS.map(h => {
   const item = props.metadata?.return?.horizons?.[h]
   return { h, dev: item?.dev?.rmse_vs_naive_pct, holdout: item?.holdout?.rmse_vs_naive_pct }
 }))
-const maxValue = computed(() => Math.max(LSTM_RMSE_VS_NAIVE + 1, ...groups.value.flatMap(g => [g.dev, g.holdout]).filter(isNumber)))
-const x = computed(() => linearScale([0, maxValue.value], [M.left, width.value - M.right]))
+const values = computed(() => groups.value.flatMap(g => [g.dev, g.holdout]).filter(isNumber))
+const maxValue = computed(() => Math.max(LSTM_RMSE_VS_NAIVE + 1, ...values.value))
+// 03b부터 현재가 유지보다 오차가 작은 지평(음수)이 있다. 0 왼쪽도 그린다.
+const minValue = computed(() => Math.min(0, Math.floor(Math.min(0, ...values.value))))
+const x = computed(() => linearScale([minValue.value, maxValue.value], [M.left, width.value - M.right]))
 const groupY = i => M.top + i * (BH * 2 + INNER + GROUP)
 const lstmY = computed(() => groupY(groups.value.length) + 4)
 const height = computed(() => lstmY.value + BH + 18 + M.bottom)
 const gridValues = computed(() => [0, 5, 10, 15, 20].filter(v => v <= maxValue.value))
-// 0에서 오른쪽으로 가는 막대. 값 쪽 끝만 둥글다.
+// 0에서 값 쪽으로 가는 막대(음수면 왼쪽). 값 쪽 끝만 둥글다.
 function hbar(value, top) {
-  const w = Math.max(3, x.value(value) - x.value(0)), r = Math.min(4, w / 2, BH / 2), x0 = x.value(0)
+  const x0 = x.value(0), w = Math.max(3, Math.abs(x.value(value) - x0)), r = Math.min(4, w / 2, BH / 2)
+  if (value < 0) return `M${x0},${top} h-${w - r} a${r},${r} 0 0 0 -${r},${r} v${BH - 2 * r} a${r},${r} 0 0 0 ${r},${r} h${w - r} Z`
   return `M${x0},${top} h${w - r} a${r},${r} 0 0 1 ${r},${r} v${BH - 2 * r} a${r},${r} 0 0 1 -${r},${r} h-${w - r} Z`
 }
 </script>
 
 <template>
   <div ref="box" class="chart-box">
-    <svg :width="width" :height="height" role="img" aria-label="지평별 현재가 유지 대비 RMSE. 오른쪽일수록 오차가 크다.">
+    <svg :width="width" :height="height" role="img" aria-label="지평별 현재가 유지 대비 RMSE. 0보다 오른쪽이면 오차가 크고 왼쪽이면 작다.">
       <g class="grid"><line v-for="v in gridValues" :key="v" :x1="x(v)" :x2="x(v)" :y1="M.top" :y2="height - M.bottom" /></g>
       <g class="axis-label"><text v-for="v in gridValues" :key="`t${v}`" :x="x(v)" :y="height - 6" text-anchor="middle">{{ v ? `+${v}%` : '0' }}</text></g>
       <g v-for="(g, i) in groups" :key="g.h">
         <text class="direct-label strong" :x="M.left - 12" :y="groupY(i) + BH + 4" text-anchor="end">{{ g.h }}일</text>
         <template v-for="(item, j) in [['dev', g.dev], ['holdout', g.holdout]]" :key="item[0]">
           <path v-if="isNumber(item[1])" :class="['hbar', item[0]]" :d="hbar(item[1], groupY(i) + j * (BH + INNER))" />
-          <text class="direct-label" :x="x(isNumber(item[1]) ? item[1] : 0) + 8" :y="groupY(i) + j * (BH + INNER) + BH / 2 + 4">{{ isNumber(item[1]) ? `${formatSigned(item[1])}%` : '확인 불가' }}</text>
+          <text class="direct-label" :x="x(isNumber(item[1]) ? Math.max(0, item[1]) : 0) + 8" :y="groupY(i) + j * (BH + INNER) + BH / 2 + 4">{{ isNumber(item[1]) ? `${formatSigned(item[1])}%` : '확인 불가' }}</text>
         </template>
       </g>
       <text class="direct-label strong" :x="M.left - 12" :y="lstmY + BH / 2 + 4" text-anchor="end">LSTM</text>
