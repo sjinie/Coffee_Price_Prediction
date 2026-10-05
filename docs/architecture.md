@@ -167,60 +167,64 @@ Azure VM (deploy/compose.azure.yaml)
 - 이미지는 digest로 고정하고 VM에서는 커밋 SHA를 태그로 붙여 빌드한다.
 - CI(`ci.yml`)는 PostgreSQL 서비스와 함께 pytest, 프론트 테스트·빌드, Docker 빌드를 돌린다.
 
-## 운영 전환 절차
+## 배포와 되돌리기
 
-기존 운영(이전 코드, database `coffee_price`)은 그대로 두고 같은 PostgreSQL 클러스터에 새 database `coffee_v2`를 만든다. VM에서 실행하는 단계마다 사용자 승인을 받는다. PR #7은 전환보다 먼저 병합됐고(2026-10-04), 이때 이전 `daily-pipeline.yml`이 사라져 이전 화면은 2026-10-02 종가에서 멈췄다.
+운영은 2026-10-04에 이전 database `coffee_price`에서 같은 클러스터의 `coffee_v2`로 전환했다(개발 기록 19). 이전 database와 이미지는 지우지 않았지만 이전 코드로 돌아가는 절차는 더 쓰지 않는다. 새 커밋은 아래 순서로 배포하고, VM에서 실행하는 단계마다 사용자 승인을 받는다.
 
-1. VM 점검: compose 프로젝트가 `coffee`, 볼륨이 `coffee_postgres-data`인지 확인한다. 다르면 멈춘다. 새 구성이 빈 볼륨을 만들고 포트가 겹친다.
-2. 백업: `coffee_price`를 `pg_dump -Fc`로 받고 `pg_restore -l`로 목록(TOC)이 읽히는지 확인한다. `.env`도 복사한다. compose를 거치면 이전 compose 파일의 필수 변수(`COFFEE_SOURCE_SHA`) 검사에 걸릴 수 있어 `docker exec`를 쓴다. 파이프의 종료 코드는 마지막 명령의 것이라 `pg_dump | tee`나 `pg_restore -l | head`는 실패해도 성공처럼 보인다. 그래서 dump는 리다이렉트로 저장하고, 목록은 변수에 먼저 받은 뒤 일부만 출력한다. 백업(dump·`.env`·3의 app 폴더)은 실행마다 새로 만드는 폴더 하나에 모은다. `mkdir`는 폴더가 이미 있으면 실패하므로, 같은 이름으로 다시 실행해도 전환 전 원본을 새 설정으로 덮지 않는다(`cp`와 `>`는 기존 파일을 덮어쓴다). 전환 도중 재시도할 때는 백업을 다시 하지 않고 첫 폴더를 쓴다. 백업 단계 자체가 중간에 실패했다면 아직 아무것도 바꾸지 않았으므로 그 폴더를 지우고 다시 한다.
-3. VM 코드와 `.env`: `/srv/coffee/app`은 git 저장소가 아니고 root 전용 폴더다. Mac에서 병합 커밋을 `git archive`로 묶어 보내고 SHA-256을 양쪽에서 대조한다. 압축을 새 폴더에 푼 뒤, 이전 폴더는 백업 폴더로 옮기고 새 폴더로 바꾼다. VM 명령은 `cd` 없이 절대 경로에 `sudo`로 실행한다. `.env`에는 `COFFEE_DB_NAME=coffee_v2`와 `COFFEE_SOURCE_SHA`를 넣는다. DB 이름을 `coffee_price`로 잘못 적으면 새 스키마가 이전 database에 들어가므로 `grep`으로 확인한다.
-4. `setup-db.sh`로 database·권한·스키마를 만들고 API·대시보드를 새 이미지로 바꾼다. 명령에서 넘긴 커밋이 `.env`의 값보다 우선한다. 여기부터 6까지 대시보드가 비어 있다.
-5. 소스 업로드: Mac의 `data/sources/`를 VM 임시 폴더로 올린 뒤 VM에서 `coffee-actions` 소유로 넣는다. Mac의 openrsync에는 `--chown`이 없고, 소유자가 다르면 일일 실행의 rsync가 실패한다.
-6. backfill: Mac에서 SSH 터널을 열고 외부 venv의 Python으로 실행한다(보관 뉴스 `data/jev/`가 Mac에만 있다). 비밀번호는 `read -s`로 받아 셸 기록에 남기지 않는다. 비밀번호를 지우기 전에 종료 코드를 `rc`에 저장한다. `backfill; unset ...`이면 전체 종료 코드가 `unset`의 0이 되기 때문이다. zsh에서는 `status`가 읽기 전용 변수라 쓰지 않는다. 0이면 다음으로 간다. 3(경고)이면 로그를 확인하고 진행 여부를 정한다. 1이면 멈춘다. 이어서 `/health`, `/api/status`, `/api/forecasts/latest`와 브라우저로 확인한다.
-7. `daily.yml`을 수동 실행한다. 새 종가가 없는 날이면 예측 0건이 정상이다(같은 기준일의 backfill이 있으면 live는 저장하지 않는다).
-8. 7이 성공한 뒤 schedule을 추가한 브랜치를 병합한다. 먼저 병합하면 빈 `coffee_v2`로 예약 실행이 돈다.
+1. 점검: compose 프로젝트 `coffee`, 볼륨 `coffee_postgres-data`, `/srv/coffee/.env`의 `COFFEE_DB_NAME=coffee_v2`를 확인하고 일일 workflow가 돌고 있지 않은지 본다.
+2. 백업: 실행마다 `mktemp -d`로 새 폴더를 만들어 `coffee_v2` dump, `.env`, 이미지 이름, `/srv/coffee/v2/sources`를 모은다. 기존 백업을 덮지 않는다. dump는 리다이렉트로 저장하고 `pg_restore -l` 결과는 변수에 먼저 받는다. 파이프를 쓰면 실패한 종료 코드가 가려진다.
+3. 소스: `/srv/coffee/app`은 git 저장소가 아닌 root 전용 폴더다. 이미지에 필요한 경로만 `git archive`로 묶어 보내고 SHA-256을 양쪽에서 대조한다. 새 폴더에 풀고 `.source-commit`에 커밋을 적는다. 이전 폴더는 백업 폴더로 옮긴 뒤 바꾼다. `.env`에서는 `COFFEE_SOURCE_SHA`만 바꾼다.
+4. 적용: `setup-db.sh`가 API·웹 이미지를 하나씩 빌드하고 스키마(`IF NOT EXISTS`)와 권한을 적용한 뒤 api·web만 바꾼다. SSH가 끊겨도 계속되도록 분리해 실행하고 로그 끝의 종료 코드를 본다.
+5. 자료: 새 표를 채울 때만 적재한다. 가격·예측이 있는 DB에 `backfill`을 돌리면 로컬 가격이 운영 가격을 덮으므로 쓰지 않는다. 기상은 `weather` 명령으로 적재하고, VM 보관본과 로컬 원자료의 날짜 범위를 비교해 더 최신인 쪽을 읽는다. 오래된 파일을 VM에 올리지 않는다.
+6. 확인: API 응답을 DB 건수와 대조하고 `daily.yml`을 수동 실행한다. `run-daily.sh`는 종료 코드 3을 성공으로 바꾸므로 Actions가 녹색이어도 `pipeline_runs.status`를 본다.
 
 ```
-# 1–2 VM: 점검·백업. 이미지 태그는 되돌릴 때 쓴다
-sudo docker compose ls && sudo docker volume ls | grep postgres && sudo docker ps --format '{{.Names}} {{.Image}}'
+# 1–2 VM: 점검·백업. 출력된 폴더가 이번 배포의 백업이다
+sudo docker compose ls && sudo docker ps --format '{{.Names}} {{.Image}}' && sudo grep -E '^(COFFEE_DB_NAME|COFFEE_SOURCE_SHA)=' /srv/coffee/.env
 sudo bash -s <<'EOF'
-set -e
-b=/srv/coffee/backups/cutover-YYYYMMDD
-mkdir -m 0700 "$b"   # 이미 있으면 여기서 멈춘다. 첫 백업이 전환 전 원본이다
-docker exec coffee-postgres-1 pg_dump -U postgres -Fc coffee_price > "$b/coffee_price.dump"
-toc=$(docker exec -i coffee-postgres-1 pg_restore -l < "$b/coffee_price.dump")
-printf '%s\n' "$toc" | head -5
+set -euo pipefail; umask 077
+b=$(mktemp -d /srv/coffee/backups/deploy-<커밋>-XXXXXX); echo "$b"
+docker exec coffee-postgres-1 pg_dump -U postgres -Fc coffee_v2 > "$b/coffee_v2.dump"
+toc=$(docker exec -i coffee-postgres-1 pg_restore -l < "$b/coffee_v2.dump"); printf '%s\n' "$toc" > "$b/dump-toc.txt"
 cp -p /srv/coffee/.env "$b/env"
+docker ps --format '{{.Names}} {{.Image}}' > "$b/images.txt"
+tar -C /srv/coffee/v2 -czpf "$b/v2-sources.tar.gz" sources
 EOF
 
-# 3 Mac: <커밋>은 병합 커밋의 짧은 SHA
-git archive --format=tar.gz -o /tmp/coffee-<커밋>.tar.gz <커밋> && shasum -a 256 /tmp/coffee-<커밋>.tar.gz
-scp /tmp/coffee-<커밋>.tar.gz <관리자>@<VM>:/tmp/
+# 3 Mac: 이미지에 필요한 경로만 묶는다
+git archive --format=tar.gz -o /tmp/coffee-app-<커밋>.tar.gz <커밋> -- Dockerfile .dockerignore coffee configs deploy frontend model_artifacts requirements-api.txt requirements-pipeline.txt
+shasum -a 256 /tmp/coffee-app-<커밋>.tar.gz && scp /tmp/coffee-app-<커밋>.tar.gz <관리자>@<VM>:~/
 
-# 3–4 VM: 해시가 Mac과 같은지 본 뒤 폴더를 바꾼다. 이전 폴더는 지우지 않고 백업으로 옮긴다
-sha256sum /tmp/coffee-<커밋>.tar.gz
-sudo bash -c 'set -e; install -d -m 0700 /srv/coffee/app.new; tar -xzf /tmp/coffee-<커밋>.tar.gz -C /srv/coffee/app.new; mv -T /srv/coffee/app /srv/coffee/backups/cutover-YYYYMMDD/app; mv -T /srv/coffee/app.new /srv/coffee/app' && rm /tmp/coffee-<커밋>.tar.gz
-sudo sed -i -e '/^COFFEE_DB_NAME=/d' -e '/^COFFEE_SOURCE_SHA=/d' /srv/coffee/.env
-printf 'COFFEE_DB_NAME=coffee_v2\nCOFFEE_SOURCE_SHA=<커밋>\n' | sudo tee -a /srv/coffee/.env >/dev/null
-sudo grep -E '^(COFFEE_DB_NAME|COFFEE_SOURCE_SHA)=' /srv/coffee/.env
-sudo COFFEE_SOURCE_SHA=<커밋> /srv/coffee/app/deploy/setup-db.sh /srv/coffee/.env
+# 3–4 VM: 해시가 Mac과 같은지 본 뒤 바꾸고 적용한다. <백업>은 2에서 출력된 폴더, <SHA>는 전체 커밋 SHA
+sha256sum ~/coffee-app-<커밋>.tar.gz
+sudo bash -s <<'EOF'
+set -euo pipefail; umask 077
+b=<백업>; sha=<SHA>
+# 재시도로 남은 폴더가 있으면 멈춘다. 새 백업 폴더(2)부터 다시 한다
+test ! -e /srv/coffee/app.new
+test ! -e "$b/app"
+install -d -m 0700 /srv/coffee/app.new
+tar -xzf /home/<관리자>/coffee-app-<커밋>.tar.gz -C /srv/coffee/app.new
+printf '%s\n' "$sha" > /srv/coffee/app.new/.source-commit
+# 따로 실행해야 set -e가 각각의 실패에서 멈춘다(&& 왼쪽 실패는 멈추지 않는다)
+mv -T /srv/coffee/app "$b/app"
+mv -T /srv/coffee/app.new /srv/coffee/app
+sed -i "s/^COFFEE_SOURCE_SHA=.*/COFFEE_SOURCE_SHA=$sha/" /srv/coffee/.env
+setsid nohup bash -c "COFFEE_SOURCE_SHA=$sha /srv/coffee/app/deploy/setup-db.sh /srv/coffee/.env; echo SETUP_DB_EXIT=\$?" > "$b/setup-db.log" 2>&1 < /dev/null &
+EOF
+sudo tail -3 <백업>/setup-db.log   # SETUP_DB_EXIT=0이 나올 때까지 확인한다
 
-# 5 Mac → VM
-rsync -a data/sources/ <관리자>@<VM>:/tmp/coffee-sources/
-sudo rsync -a --chown=coffee-actions:coffee-actions /tmp/coffee-sources/ /srv/coffee/v2/sources/ && sudo rm -rf /tmp/coffee-sources   # VM에서
-
-# 6–7 Mac. 터널은 다른 터미널에 열어 둔다
+# 5 Mac: 기상만 적재할 때. 터널은 다른 터미널에 열어 둔다
 ssh -N -L 15432:127.0.0.1:15432 <관리자>@<VM>
 read -s PGPASSWORD && export PGPASSWORD PGHOST=127.0.0.1 PGPORT=15432 PGDATABASE=coffee_v2 PGUSER=coffee_pipeline DATABASE_URL=postgresql://
-$HOME/.virtualenvs/coffee-price-prediction/bin/python -m coffee.pipeline backfill; rc=$?; unset PGPASSWORD; echo "backfill exit=$rc"
-test "$rc" = 0 && gh workflow run daily.yml --ref main   # API·화면 확인 뒤. 3이면 로그 확인 후 직접 실행
+$HOME/.virtualenvs/coffee-price-prediction/bin/python -m coffee.pipeline weather; rc=$?; unset PGPASSWORD; echo "weather exit=$rc"
 ```
 
-되돌리기: 백업 폴더의 app과 `.env`를 되돌리고 이전 `deploy/start-azure.sh`를 실행한다. 이 스크립트는 실행 권한이 없어 `bash`로 부른다. 되돌린 뒤 다시 전환할 때는 새 이름의 백업 폴더를 쓴다.
+`weather`는 코드 위치의 `data/sources/weather_*.parquet`를 읽으므로 배포 커밋을 체크아웃한 폴더에서 실행한다. zsh에서는 `status`가 읽기 전용 변수라 종료 코드를 `rc`에 담는다.
+
+되돌리기: 이전 이미지는 VM에 남겨 두므로 다시 빌드하지 않는다. 백업 폴더의 app과 `.env`를 되돌리고 api·web을 이전 이미지로 띄운다. 스키마 변경이 표 추가뿐이면 이전 API가 새 표를 무시하므로 DB는 되돌리지 않는다. DB 복원이 꼭 필요하면 dump를 새 이름의 database에 먼저 복원해 비교한다.
 
 ```
-sudo bash -c 'set -e; b=/srv/coffee/backups/cutover-YYYYMMDD; mv -T /srv/coffee/app "$b/app_failed"; mv -T "$b/app" /srv/coffee/app; cp -p "$b/env" /srv/coffee/.env'
-sudo bash /srv/coffee/app/deploy/start-azure.sh /srv/coffee/.env
+sudo bash -c 'set -e; b=<백업>; mv -T /srv/coffee/app "$b/app_failed"; mv -T "$b/app" /srv/coffee/app; cp -p "$b/env" /srv/coffee/.env'
+sudo docker compose --project-name coffee --env-file /srv/coffee/.env -f /srv/coffee/app/deploy/compose.azure.yaml up -d --no-build --wait api web caddy
 ```
-
-이전 스크립트는 `.env`의 `COFFEE_SOURCE_SHA`를 이미지 태그로 쓰므로 `.env`를 먼저 되돌려야 한다. 이전 `.env`에 이 값이 없었다면 1단계에서 본 이전 이미지 태그를 `sudo COFFEE_SOURCE_SHA=<이전 태그> bash ...`로 넘긴다. 이전 database는 바꾸지 않았으므로 이전 화면이 돌아온다. 이전 일일 workflow는 main에 없어 자동 갱신은 돌아오지 않는다.
