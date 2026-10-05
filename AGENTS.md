@@ -34,7 +34,7 @@
 포트폴리오 화면(`frontend/`)은 예측 결과와 그 근거를 함께 보여 준다. 모델·피처·평가 구간·뉴스 처리·신호 규칙을 바꾸면 화면도 같은 변경에서 고친다.
 
 - API와 모델 metadata로 읽는 값(예측, 매수 기준, 분포 모델의 검증 성적, 모델 이름, 모델별 피처)은 화면이 저절로 따라간다. 새 지표를 화면에 보이려면 metadata에 넣는 쪽을 먼저 고려한다.
-- `python -m coffee.portfolio`를 다시 실행해 `frontend/src/research-data.json`(평가 구간, 피처 묶음, 뉴스 시차 상관, 스파크라인, 노트북 03b·07 결과, 환율 오류 시세)을 갱신한다.
+- `python -m coffee.portfolio`를 다시 실행해 `frontend/src/research-data.json`(평가 구간, 피처 묶음, 뉴스 시차 상관, 스파크라인, h거래일 가격 변화 분위, 노트북 03b·07 결과, 환율 오류 시세)을 갱신한다.
 - `frontend/src/research.js`의 문장과 숫자(장마다의 발견과 질문·방법·판단, 변동성 결과, 결론, 시행착오, 한계, Q&A)를 노트북 결과와 맞추고 `MODEL_VERSION`을 새 동결 모델로 바꾼다.
 - 출력 이름이나 의미가 바뀌면(예: 신호 종류, 범위 정의) `lib.js`와 해당 컴포넌트, `docs/architecture.md` '화면'을 함께 고친다.
 - `tests/test_portfolio.py`는 동결 모델·피처·평가 구간이 화면 자료와 다르면 실패한다. 테스트를 고쳐 통과시키지 말고 화면 자료를 갱신한다.

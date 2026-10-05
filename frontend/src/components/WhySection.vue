@@ -1,7 +1,7 @@
 <script setup>
 import { computed } from 'vue'
 import {
-  HORIZONS, extremeWeek, formatPercent, formatSigned, horizonMoves, isNumber, seasonality, weeklyAnomalyGrid, weeklyRainGrid,
+  HORIZONS, extremeWeek, formatPercent, formatSigned, isNumber, seasonality, weeklyAnomalyGrid, weeklyRainGrid,
   weeklyReturnGrid,
 } from '../lib.js'
 import { FINDINGS, FIXES, MODEL_VERSION, NEWS_FACTS, NOTES, RESEARCH, VOLATILITY, VOLATILITY_NOTE } from '../research.js'
@@ -62,9 +62,8 @@ const P = RESEARCH.periods
 const R = RESEARCH.results
 
 // 문제 정의: 2005년부터 h거래일 뒤 가격이 움직인 폭
-const moves = computed(() => (priceState.value === 'ready' ? horizonMoves(props.allPrices) : []))
-const moveRows = computed(() => moves.value.map(m => ({ label: `${m.h}일`, values: { q10: m.q10, q50: m.q50, q90: m.q90 } })))
-const big20 = computed(() => moves.value.find(m => m.h === 20)?.big)
+// coffee.portfolio가 모델 목표 y_h와 같은 거래 세션 달력으로 계산한다(종가가 없는 쌍은 빼고, 간격을 늘리지 않는다)
+const moveRows = HORIZONS.map(h => ({ label: `${h}일`, values: RESEARCH.moves[h] }))
 // 피처 선택: 07 단계별 기여(개발 구간)
 const ladderRows = R.ladder.steps.map((step, i) => ({ label: step, values: Object.fromEntries(HORIZONS.map(h => [`h${h}`, R.ladder.dev[h][i]])) }))
 // 결과·의사결정: 모델 metadata의 구간별 성적
@@ -93,14 +92,12 @@ const evaluationNotes = {
       <p v-if="stale" class="notice" role="status">아래 연구 결과는 모델 {{ MODEL_VERSION }} 기준입니다. 지금 서비스 중인 모델은 {{ model.model_version }}입니다.</p>
 
       <WhyChapter side="문제 정의" :finding="FINDINGS.problem" :notes="NOTES.problem">
-        <template v-if="priceState === 'ready'">
-          <figure><LongPrice :prices="allPrices" /><figcaption class="cap">KC=F 주간 종가(센트/파운드), 2005년부터.</figcaption></figure>
-          <DotPlot :rows="moveRows" :domain="[-20, 30]" :format="pct(0)" label="지평별 h거래일 뒤 가격 변화의 하위 10%, 중앙값, 상위 10%"
-            :series="[{ key: 'q10', name: '하위 10%', color: 'cyan' }, { key: 'q50', name: '중앙값', color: 'ink' }, { key: 'q90', name: '상위 10%', color: 'amber' }]">
-            2005년부터 모든 거래일에서 잰 h거래일 뒤 가격 변화. 20거래일 뒤에는 {{ formatPercent(big20) }}의 날에 가격이 10% 넘게 움직였다.
-          </DotPlot>
-        </template>
+        <figure v-if="priceState === 'ready'"><LongPrice :prices="allPrices" /><figcaption class="cap">KC=F 주간 종가(센트/파운드), 2005년부터.</figcaption></figure>
         <p v-else class="cap" role="status">{{ PRICE_TEXT[priceState] }} <button v-if="priceState === 'error'" class="text-button" type="button" @click="emit('retry-prices')">다시 시도</button></p>
+        <DotPlot :rows="moveRows" :domain="[-20, 30]" :format="pct(0)" label="지평별 h거래일 뒤 가격 변화의 하위 10%, 중앙값, 상위 10%"
+          :series="[{ key: 'q10', name: '하위 10%', color: 'cyan' }, { key: 'q50', name: '중앙값', color: 'ink' }, { key: 'q90', name: '상위 10%', color: 'amber' }]">
+          2005년부터 모든 거래일에서 잰 h거래일 뒤 가격 변화. 20거래일 뒤에는 {{ formatPercent(RESEARCH.moves[20].big) }}의 날에 가격이 10% 넘게 움직였다.
+        </DotPlot>
       </WhyChapter>
 
       <WhyChapter side="데이터 탐색" :finding="FINDINGS.seasons" :notes="NOTES.seasons">

@@ -154,16 +154,6 @@ test('좁은 화면의 현재 단계는 고정 차트 바로 아래에서 온전
   assert.equal(lib.activeStep([{ step: 2, top: 200, bottom: 400 }], 341, 812), null)   // 온전한 문단이 없으면 단계를 바꾸지 않는다
 })
 
-test('h거래일 뒤 가격 변화는 가격 표의 h행 뒤와 비교하고, 종가가 없는 쌍만 뺀다', () => {
-  const prices = [100, 105, null, 121, 100].map((close, i) => ({ date: `2026-01-0${i + 1}`, close }))
-  const [one] = lib.horizonMoves(prices, [1])
-  // 쌍: 100→105(+5%), 105→null(뺌), null→121(뺌), 121→100(−17.4%)
-  assert.equal(one.q10.toFixed(2), '-15.12')
-  assert.equal(one.q90.toFixed(2), '2.76')
-  assert.equal(one.big, 0.5)   // |변화| > 10%는 −17.4% 하나
-  assert.equal(lib.quantile([], 0.5), null)
-})
-
 test('기온 편차: 같은 주 평년과의 차이이고, 관측일이 7일보다 적은 주는 그리지 않는다', () => {
   const week = values => [...values, ...Array(50).fill(null)]
   const weather = { years: [2020, 2021], days: [week([7, 7]), week([7, 3])], t_min: [week([10, 8]), week([4, 2])] }

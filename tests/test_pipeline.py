@@ -177,3 +177,15 @@ def test_main_records_a_short_failure_message_and_exits_1(monkeypatch):
     monkeypatch.setattr(pipeline, "daily", broken)
     assert pipeline.main(["daily"]) == 1
     assert finished == {"status": "failed", "message": "RuntimeError: 첫 줄"}
+
+
+def test_backfill_stops_before_writing_without_news_archive(monkeypatch):
+    # 예측 행은 덮어쓰지 않으므로 뉴스 점수 0으로 계산한 소급 예측을 남기면 고칠 수 없다
+    def missing():
+        raise FileNotFoundError("/Users/someone/data/jev/responses.json")
+
+    monkeypatch.setattr(pipeline, "load_jev_archive", missing)
+    monkeypatch.setattr(pipeline, "load_sources", lambda: pytest.fail("보관 뉴스를 확인하기 전에 자료를 읽음"))
+    with pytest.raises(RuntimeError, match="보관 뉴스") as error:
+        pipeline.backfill(conn=None)
+    assert "/Users/" not in str(error.value)   # 실행 기록은 공개 API로 보이므로 로컬 절대 경로를 남기지 않는다

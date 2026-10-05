@@ -209,13 +209,14 @@ def daily(conn, now: datetime | None = None) -> tuple[int, list]:
 
 
 def backfill(conn, now: datetime | None = None) -> tuple[int, list]:
-    sources = load_sources()
-    sources["prices"] = closed_prices(sources["prices"], now or datetime.now(timezone.utc))
-    warnings = []
+    # 예측 행은 덮어쓰지 않으므로(ON CONFLICT DO NOTHING) 보관 뉴스 없이 계산한 소급 예측은 나중에 고칠 수 없다.
+    # 그래서 아무것도 쓰기 전에 멈추고 실행을 실패로 남긴다. 실행 기록은 공개되므로 경로는 상대 경로만 적는다.
     try:
         archive = load_jev_archive()
     except FileNotFoundError:
-        archive, warnings = None, ["보관 뉴스(data/jev/responses.json)가 없어 건너뜀(소급 예측의 뉴스 점수는 0)"]
+        raise RuntimeError("보관 뉴스(data/jev/responses.json)가 없어 소급 예측을 멈춤. 보관 뉴스가 있는 곳에서 다시 실행") from None
+    sources = load_sources()
+    sources["prices"] = closed_prices(sources["prices"], now or datetime.now(timezone.utc))
     # 소급 예측은 학습·평가와 같은 연구용 시점(발행 + 1일)으로 보관 기사의 점수를 붙인다
     data = add_news(build_dataset(sources), archive, "research")
     models = load_models()
@@ -225,14 +226,11 @@ def backfill(conn, now: datetime | None = None) -> tuple[int, list]:
     origins = np.flatnonzero((data.index >= FORWARD_START) & data["close"].notna().to_numpy())
     inserted = db.insert_forecasts(conn, make_forecasts(data, origins, models, "backfill"))
     steps.append({"step": "forecast", "origins": len(origins), "inserted": inserted})
-    if archive is not None:
-        rows = archive.assign(model=SETTINGS["jev"]["model"], prompt_version=SETTINGS["jev"]["prompt_version"],
-                              cost_usd=0.0).to_dict("records")
-        steps.append({"step": "news_archive", "articles": len(rows), "inserted": db.insert_news(conn, rows)})
+    rows = archive.assign(model=SETTINGS["jev"]["model"], prompt_version=SETTINGS["jev"]["prompt_version"],
+                          cost_usd=0.0).to_dict("records")
+    steps.append({"step": "news_archive", "articles": len(rows), "inserted": db.insert_news(conn, rows)})
     conn.commit()
-    if warnings:
-        steps.append({"step": "warnings", "messages": warnings})
-    return (EXIT_WARNING if warnings else EXIT_OK), steps
+    return EXIT_OK, steps
 
 
 def main(argv=None) -> int:

@@ -35,6 +35,18 @@ def _values(series: pd.Series, digits: int) -> list:
     return [None if pd.isna(v) else round(float(v), digits) for v in series]
 
 
+def horizon_moves(data: pd.DataFrame) -> dict:
+    """h거래일 뒤 가격 변화(%)의 10·50·90% 분위와 10% 넘게 움직인 비율. 모델의 목표 y_h와 같은 거래 세션 달력을
+    쓰고, 어느 쪽 종가라도 없는 쌍은 계산하지 않는다(결측을 채우거나 건너뛰어 간격을 늘리지 않는다)."""
+    out = {}
+    for h in HORIZONS:
+        move = np.expm1(data[f"y_{h}"].dropna()) * 100
+        q10, q50, q90 = np.percentile(move, [10, 50, 90])
+        out[str(h)] = {"q10": round(float(q10), 2), "q50": round(float(q50), 2), "q90": round(float(q90), 2),
+                       "big": round(float((move.abs() > 10).mean()), 3), "rows": int(len(move))}
+    return out
+
+
 def notebook_results() -> dict:
     """Why 섹션 그림 가운데 모델 metadata에 없는 노트북 결과. 숫자를 손으로 옮기지 않으려고 결과 파일에서 읽는다."""
     dist = json.loads((RESULTS / "distribution_model.json").read_text(encoding="utf-8"))
@@ -97,6 +109,7 @@ def build() -> dict:
             "rain": _values(rain["2005":].resample("MS").sum(min_count=1), 0),
             "news": _values(news["news_score"]["2022":].resample("W-FRI").mean(), 2),
         },
+        "moves": horizon_moves(data),
         "results": notebook_results(),
         "fx_cop": fx_spikes(sources),
     }
