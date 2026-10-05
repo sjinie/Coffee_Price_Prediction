@@ -1,6 +1,6 @@
 <script setup>
 import { onBeforeUnmount, onMounted, ref } from 'vue'
-import { extent, isNumber, linePath, linearScale } from '../lib.js'
+import { activeStep, extent, isNumber, linePath, linearScale } from '../lib.js'
 import { RESEARCH } from '../research.js'
 import PriceChart from './PriceChart.vue'
 
@@ -29,15 +29,38 @@ function sparkPath(values = []) {
 
 const step = ref(1)
 const stepList = ref(null)
-let observer
+const stage = ref(null)
+let observer, sizeObserver
+function watchSteps() {
+  observer?.disconnect()
+  const items = [...stepList.value.querySelectorAll('[data-step]')]
+  if (matchMedia('(max-width: 860px)').matches) {
+    // 좁은 화면: 차트가 위에 고정되므로 차트 바로 아래에서 온전히 보이는 첫 문단이 현재 단계다.
+    // 관찰은 문단이 차트 아래 영역에 들어오고 나가는 순간을 알려 주는 용도이고, 판정은 activeStep이 한다.
+    const paragraphs = items.map(li => li.querySelector('p'))
+    const update = () => {
+      const found = activeStep(paragraphs.map((p, i) => {
+        const r = p.getBoundingClientRect()
+        return { step: Number(items[i].dataset.step), top: r.top, bottom: r.bottom }
+      }), stage.value.getBoundingClientRect().bottom, innerHeight)
+      if (found) step.value = found
+    }
+    observer = new IntersectionObserver(update, { rootMargin: `-${stage.value.offsetHeight}px 0px 0px 0px`, threshold: [0, 1] })
+    paragraphs.forEach(p => observer.observe(p))
+  } else {
+    // 넓은 화면: 차트가 옆에 고정되므로 화면 가운데 띠를 지나는 문장이 현재 단계다
+    observer = new IntersectionObserver(entries => entries.forEach(entry => {
+      if (entry.isIntersecting) step.value = Number(entry.target.dataset.step)
+    }), { rootMargin: '-45% 0px -45% 0px' })
+    items.forEach(li => observer.observe(li))
+  }
+}
 onMounted(() => {
-  // 화면 가운데를 지나는 문장이 현재 단계다
-  observer = new IntersectionObserver(entries => entries.forEach(entry => {
-    if (entry.isIntersecting) step.value = Number(entry.target.dataset.step)
-  }), { rootMargin: '-45% 0px -45% 0px' })
-  stepList.value.querySelectorAll('[data-step]').forEach(node => observer.observe(node))
+  // 화면 폭이나 고정 차트 높이가 바뀌면(넓은↔좁은 배치 전환 포함) 관찰을 다시 건다
+  sizeObserver = new ResizeObserver(watchSteps)
+  sizeObserver.observe(stage.value)
 })
-onBeforeUnmount(() => observer?.disconnect())
+onBeforeUnmount(() => { observer?.disconnect(); sizeObserver?.disconnect() })
 </script>
 
 <template>
@@ -51,7 +74,7 @@ onBeforeUnmount(() => observer?.disconnect())
         </figure>
       </div>
       <div class="scrolly">
-        <div class="stage">
+        <div ref="stage" class="stage">
           <PriceChart mode="story" :step="step" :horizon="20" :prices="prices" :history="history" :latest="latest" />
         </div>
         <ol ref="stepList" class="steps">

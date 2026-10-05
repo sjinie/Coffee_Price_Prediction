@@ -228,6 +228,12 @@ export function seasonality(grid) {
   return values.length % 2 ? values[mid] : (values[mid - 1] + values[mid]) / 2
 }
 
+// 좁은 화면의 작동 방식 구간: 위에 고정된 차트 바로 아래에서 온전히 보이는 첫 문단의 단계. 없으면 null(단계를 바꾸지 않는다).
+export function activeStep(paragraphs, stageBottom, viewportHeight) {
+  const readable = paragraphs.filter(p => p.top >= stageBottom - 1 && p.bottom <= viewportHeight)
+  return readable.length ? readable.reduce((a, b) => (b.top < a.top ? b : a)).step : null
+}
+
 // 12시 방향에서 시계 방향으로 a0→a1(라디안)만큼의 고리 조각. 중심은 (0, 0)이다.
 export function arcPath(r0, r1, a0, a1) {
   const point = (r, a) => `${(r * Math.sin(a)).toFixed(2)},${(-r * Math.cos(a)).toFixed(2)}`
