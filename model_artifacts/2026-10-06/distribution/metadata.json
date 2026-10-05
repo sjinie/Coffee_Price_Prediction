@@ -2,7 +2,7 @@
   "version": "2026-10-06",
   "train_end": "2025-12-31",
   "data_end": "2026-10-02 00:00:00",
-  "code_commit": "2c8761a-dirty",
+  "code_commit": "36de24c",
   "kind": "distribution",
   "algorithm": "분포 모델: 중심 μ(x) + 폭 σ(x) × 모양 Z, CRPS 학습",
   "train_rows": {
