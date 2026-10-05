@@ -1,7 +1,7 @@
 {
   "5": {
     "model": "HAR",
-    "interval_multiplier": 1.2000000000000002,
+    "interval_multiplier": 1.19,
     "har_features": [
       "log_vol_5",
       "log_vol_20",
@@ -10,7 +10,7 @@
   },
   "20": {
     "model": "HAR",
-    "interval_multiplier": 1.06,
+    "interval_multiplier": 0.98,
     "har_features": [
       "log_vol_5",
       "log_vol_20",
@@ -19,7 +19,7 @@
   },
   "60": {
     "model": "HAR",
-    "interval_multiplier": 0.9500000000000001,
+    "interval_multiplier": 0.9,
     "har_features": [
       "log_vol_5",
       "log_vol_20",

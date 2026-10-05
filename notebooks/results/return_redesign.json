@@ -1,0 +1,1549 @@
+{
+  "row_features": "ALL_FEATURES + EXTRA_FEATURES",
+  "first_inner_year": 2009,
+  "horizons": {
+    "5": {
+      "adopted": true,
+      "final": {
+        "candidate": "Ridge(alpha=1) | 가격 | vol_60",
+        "model": "Ridge",
+        "params": {
+          "alpha": 1
+        },
+        "feature_set": "가격",
+        "features": [
+          "ret_1",
+          "ret_5",
+          "ret_20",
+          "ret_60",
+          "vol_5",
+          "vol_20",
+          "vol_60",
+          "ma_gap_60"
+        ],
+        "scale": "vol_60",
+        "weight": 0.2922642869462293
+      },
+      "by_year": {
+        "2012": {
+          "candidate": "LightGBM(n_estimators=300, num_leaves=7, min_child_samples=50) | 가격+단기 위험 | har",
+          "model": "LightGBM",
+          "params": {
+            "n_estimators": 300,
+            "num_leaves": 7,
+            "min_child_samples": 50
+          },
+          "feature_set": "가격+단기 위험",
+          "features": [
+            "ret_1",
+            "ret_5",
+            "ret_20",
+            "ret_60",
+            "vol_5",
+            "vol_20",
+            "vol_60",
+            "ma_gap_60",
+            "vol_ratio_5_60",
+            "vol_ratio_20_60"
+          ],
+          "scale": "har",
+          "weight": 0.08433441110587717
+        },
+        "2013": {
+          "candidate": "Ridge(alpha=1) | 가격 | har",
+          "model": "Ridge",
+          "params": {
+            "alpha": 1
+          },
+          "feature_set": "가격",
+          "features": [
+            "ret_1",
+            "ret_5",
+            "ret_20",
+            "ret_60",
+            "vol_5",
+            "vol_20",
+            "vol_60",
+            "ma_gap_60"
+          ],
+          "scale": "har",
+          "weight": 0.192628777178502
+        },
+        "2014": {
+          "candidate": "Ridge(alpha=1) | 가격 | har",
+          "model": "Ridge",
+          "params": {
+            "alpha": 1
+          },
+          "feature_set": "가격",
+          "features": [
+            "ret_1",
+            "ret_5",
+            "ret_20",
+            "ret_60",
+            "vol_5",
+            "vol_20",
+            "vol_60",
+            "ma_gap_60"
+          ],
+          "scale": "har",
+          "weight": 0.17200584580288183
+        },
+        "2015": {
+          "candidate": "Ridge(alpha=10) | 가격 | vol_60",
+          "model": "Ridge",
+          "params": {
+            "alpha": 10
+          },
+          "feature_set": "가격",
+          "features": [
+            "ret_1",
+            "ret_5",
+            "ret_20",
+            "ret_60",
+            "vol_5",
+            "vol_20",
+            "vol_60",
+            "ma_gap_60"
+          ],
+          "scale": "vol_60",
+          "weight": 0.31655622651784726
+        },
+        "2016": {
+          "candidate": "Ridge(alpha=1) | 가격 | har",
+          "model": "Ridge",
+          "params": {
+            "alpha": 1
+          },
+          "feature_set": "가격",
+          "features": [
+            "ret_1",
+            "ret_5",
+            "ret_20",
+            "ret_60",
+            "vol_5",
+            "vol_20",
+            "vol_60",
+            "ma_gap_60"
+          ],
+          "scale": "har",
+          "weight": 0.43450611375730414
+        },
+        "2017": {
+          "candidate": "Ridge(alpha=1) | 가격 | vol_60",
+          "model": "Ridge",
+          "params": {
+            "alpha": 1
+          },
+          "feature_set": "가격",
+          "features": [
+            "ret_1",
+            "ret_5",
+            "ret_20",
+            "ret_60",
+            "vol_5",
+            "vol_20",
+            "vol_60",
+            "ma_gap_60"
+          ],
+          "scale": "vol_60",
+          "weight": 0.42230463527656104
+        },
+        "2018": {
+          "candidate": "Ridge(alpha=1) | 가격 | vol_60",
+          "model": "Ridge",
+          "params": {
+            "alpha": 1
+          },
+          "feature_set": "가격",
+          "features": [
+            "ret_1",
+            "ret_5",
+            "ret_20",
+            "ret_60",
+            "vol_5",
+            "vol_20",
+            "vol_60",
+            "ma_gap_60"
+          ],
+          "scale": "vol_60",
+          "weight": 0.4399479252432932
+        },
+        "2019": {
+          "candidate": "Ridge(alpha=1) | 가격 | vol_60",
+          "model": "Ridge",
+          "params": {
+            "alpha": 1
+          },
+          "feature_set": "가격",
+          "features": [
+            "ret_1",
+            "ret_5",
+            "ret_20",
+            "ret_60",
+            "vol_5",
+            "vol_20",
+            "vol_60",
+            "ma_gap_60"
+          ],
+          "scale": "vol_60",
+          "weight": 0.4205839560572506
+        },
+        "2020": {
+          "candidate": "Ridge(alpha=1) | 가격 | vol_60",
+          "model": "Ridge",
+          "params": {
+            "alpha": 1
+          },
+          "feature_set": "가격",
+          "features": [
+            "ret_1",
+            "ret_5",
+            "ret_20",
+            "ret_60",
+            "vol_5",
+            "vol_20",
+            "vol_60",
+            "ma_gap_60"
+          ],
+          "scale": "vol_60",
+          "weight": 0.34341392235819257
+        },
+        "2021": {
+          "candidate": "Ridge(alpha=1) | 가격 | vol_60",
+          "model": "Ridge",
+          "params": {
+            "alpha": 1
+          },
+          "feature_set": "가격",
+          "features": [
+            "ret_1",
+            "ret_5",
+            "ret_20",
+            "ret_60",
+            "vol_5",
+            "vol_20",
+            "vol_60",
+            "ma_gap_60"
+          ],
+          "scale": "vol_60",
+          "weight": 0.24775637301746536
+        },
+        "2022": {
+          "candidate": "LightGBM(n_estimators=300, num_leaves=7, min_child_samples=50) | 가격 | vol_60",
+          "model": "LightGBM",
+          "params": {
+            "n_estimators": 300,
+            "num_leaves": 7,
+            "min_child_samples": 50
+          },
+          "feature_set": "가격",
+          "features": [
+            "ret_1",
+            "ret_5",
+            "ret_20",
+            "ret_60",
+            "vol_5",
+            "vol_20",
+            "vol_60",
+            "ma_gap_60"
+          ],
+          "scale": "vol_60",
+          "weight": 0.16468205542945766
+        },
+        "2023": {
+          "candidate": "LightGBM(n_estimators=300, num_leaves=7, min_child_samples=50) | 가격 | vol_60",
+          "model": "LightGBM",
+          "params": {
+            "n_estimators": 300,
+            "num_leaves": 7,
+            "min_child_samples": 50
+          },
+          "feature_set": "가격",
+          "features": [
+            "ret_1",
+            "ret_5",
+            "ret_20",
+            "ret_60",
+            "vol_5",
+            "vol_20",
+            "vol_60",
+            "ma_gap_60"
+          ],
+          "scale": "vol_60",
+          "weight": 0.15139584898946074
+        },
+        "2024": {
+          "candidate": "LightGBM(n_estimators=300, num_leaves=7, min_child_samples=50) | 가격 | vol_60",
+          "model": "LightGBM",
+          "params": {
+            "n_estimators": 300,
+            "num_leaves": 7,
+            "min_child_samples": 50
+          },
+          "feature_set": "가격",
+          "features": [
+            "ret_1",
+            "ret_5",
+            "ret_20",
+            "ret_60",
+            "vol_5",
+            "vol_20",
+            "vol_60",
+            "ma_gap_60"
+          ],
+          "scale": "vol_60",
+          "weight": 0.15379194489717354
+        },
+        "2025": {
+          "candidate": "LightGBM(n_estimators=300, num_leaves=7, min_child_samples=50) | 가격 | vol_60",
+          "model": "LightGBM",
+          "params": {
+            "n_estimators": 300,
+            "num_leaves": 7,
+            "min_child_samples": 50
+          },
+          "feature_set": "가격",
+          "features": [
+            "ret_1",
+            "ret_5",
+            "ret_20",
+            "ret_60",
+            "vol_5",
+            "vol_20",
+            "vol_60",
+            "ma_gap_60"
+          ],
+          "scale": "vol_60",
+          "weight": 0.18706176252305293
+        },
+        "2026": {
+          "candidate": "Ridge(alpha=1) | 가격 | vol_60",
+          "model": "Ridge",
+          "params": {
+            "alpha": 1
+          },
+          "feature_set": "가격",
+          "features": [
+            "ret_1",
+            "ret_5",
+            "ret_20",
+            "ret_60",
+            "vol_5",
+            "vol_20",
+            "vol_60",
+            "ma_gap_60"
+          ],
+          "scale": "vol_60",
+          "weight": 0.2922642869462293
+        }
+      },
+      "new": {
+        "dev": {
+          "rmse_vs_naive_pct": -0.014240204004689616,
+          "ci_low_pct": -0.47508698180615794,
+          "ci_high_pct": 0.48690849562875577,
+          "direction_acc": 0.5012636899747261,
+          "zero_share": 0.0,
+          "rows": 2385
+        },
+        "holdout": {
+          "rmse_vs_naive_pct": -0.17635874852497402,
+          "ci_low_pct": -0.9794629066107245,
+          "ci_high_pct": 0.6205991739968552,
+          "direction_acc": 0.5,
+          "zero_share": 0.0,
+          "rows": 871
+        },
+        "forward": {
+          "rmse_vs_naive_pct": 0.07475103066607591,
+          "ci_low_pct": -1.1475673118271672,
+          "ci_high_pct": 1.3454794567107777,
+          "direction_acc": 0.4673913043478261,
+          "zero_share": 0.0,
+          "rows": 184
+        }
+      },
+      "current": {
+        "dev": {
+          "rmse_vs_naive_pct": 0.6948313126664551,
+          "ci_low_pct": -0.7748351715139846,
+          "ci_high_pct": 2.208779031938909,
+          "direction_acc": 0.5101095197978096,
+          "zero_share": 0.0,
+          "rows": 2385
+        },
+        "holdout": {
+          "rmse_vs_naive_pct": 0.15753911461930947,
+          "ci_low_pct": -2.758474135818807,
+          "ci_high_pct": 3.2973108243493345,
+          "direction_acc": 0.5126728110599078,
+          "zero_share": 0.0,
+          "rows": 871
+        },
+        "forward": {
+          "rmse_vs_naive_pct": 0.19635643617481602,
+          "ci_low_pct": -3.3327211508133097,
+          "ci_high_pct": 3.8026407225651466,
+          "direction_acc": 0.5489130434782609,
+          "zero_share": 0.0,
+          "rows": 184
+        }
+      }
+    },
+    "20": {
+      "adopted": true,
+      "final": {
+        "candidate": "LightGBM(n_estimators=300, num_leaves=7, min_child_samples=50) | 가격+기후 요약 | har",
+        "model": "LightGBM",
+        "params": {
+          "n_estimators": 300,
+          "num_leaves": 7,
+          "min_child_samples": 50
+        },
+        "feature_set": "가격+기후 요약",
+        "features": [
+          "ret_1",
+          "ret_5",
+          "ret_20",
+          "ret_60",
+          "vol_5",
+          "vol_20",
+          "vol_60",
+          "ma_gap_60",
+          "br_rain90_z",
+          "br_temp30_z",
+          "br_heat30_z",
+          "br_tmin7_z",
+          "co_rain90_z",
+          "co_temp30_z",
+          "br_drought_days90",
+          "co_wet_days90",
+          "br_cold_days30",
+          "enso_state",
+          "br_tmin7_z_frost",
+          "br_rain30_z_flowering",
+          "enso",
+          "enso_chg_3m"
+        ],
+        "scale": "har",
+        "weight": 0.21389508970806945
+      },
+      "by_year": {
+        "2012": {
+          "candidate": "Ridge(alpha=1) | 가격 | har",
+          "model": "Ridge",
+          "params": {
+            "alpha": 1
+          },
+          "feature_set": "가격",
+          "features": [
+            "ret_1",
+            "ret_5",
+            "ret_20",
+            "ret_60",
+            "vol_5",
+            "vol_20",
+            "vol_60",
+            "ma_gap_60"
+          ],
+          "scale": "har",
+          "weight": 0.24934416791731856
+        },
+        "2013": {
+          "candidate": "LightGBM(n_estimators=300, num_leaves=7, min_child_samples=50) | 가격 | har",
+          "model": "LightGBM",
+          "params": {
+            "n_estimators": 300,
+            "num_leaves": 7,
+            "min_child_samples": 50
+          },
+          "feature_set": "가격",
+          "features": [
+            "ret_1",
+            "ret_5",
+            "ret_20",
+            "ret_60",
+            "vol_5",
+            "vol_20",
+            "vol_60",
+            "ma_gap_60"
+          ],
+          "scale": "har",
+          "weight": 0.18958637992158647
+        },
+        "2014": {
+          "candidate": "LightGBM(n_estimators=300, num_leaves=7, min_child_samples=50) | 가격 | har",
+          "model": "LightGBM",
+          "params": {
+            "n_estimators": 300,
+            "num_leaves": 7,
+            "min_child_samples": 50
+          },
+          "feature_set": "가격",
+          "features": [
+            "ret_1",
+            "ret_5",
+            "ret_20",
+            "ret_60",
+            "vol_5",
+            "vol_20",
+            "vol_60",
+            "ma_gap_60"
+          ],
+          "scale": "har",
+          "weight": 0.20921802536847148
+        },
+        "2015": {
+          "candidate": "Ridge(alpha=1) | 가격 | vol_60",
+          "model": "Ridge",
+          "params": {
+            "alpha": 1
+          },
+          "feature_set": "가격",
+          "features": [
+            "ret_1",
+            "ret_5",
+            "ret_20",
+            "ret_60",
+            "vol_5",
+            "vol_20",
+            "vol_60",
+            "ma_gap_60"
+          ],
+          "scale": "vol_60",
+          "weight": 0.2838814132809367
+        },
+        "2016": {
+          "candidate": "Ridge(alpha=1) | 가격 | har",
+          "model": "Ridge",
+          "params": {
+            "alpha": 1
+          },
+          "feature_set": "가격",
+          "features": [
+            "ret_1",
+            "ret_5",
+            "ret_20",
+            "ret_60",
+            "vol_5",
+            "vol_20",
+            "vol_60",
+            "ma_gap_60"
+          ],
+          "scale": "har",
+          "weight": 0.41590690735313246
+        },
+        "2017": {
+          "candidate": "LightGBM(n_estimators=300, num_leaves=7, min_child_samples=50) | 가격+기후 요약 | har",
+          "model": "LightGBM",
+          "params": {
+            "n_estimators": 300,
+            "num_leaves": 7,
+            "min_child_samples": 50
+          },
+          "feature_set": "가격+기후 요약",
+          "features": [
+            "ret_1",
+            "ret_5",
+            "ret_20",
+            "ret_60",
+            "vol_5",
+            "vol_20",
+            "vol_60",
+            "ma_gap_60",
+            "br_rain90_z",
+            "br_temp30_z",
+            "br_heat30_z",
+            "br_tmin7_z",
+            "co_rain90_z",
+            "co_temp30_z",
+            "br_drought_days90",
+            "co_wet_days90",
+            "br_cold_days30",
+            "enso_state",
+            "br_tmin7_z_frost",
+            "br_rain30_z_flowering",
+            "enso",
+            "enso_chg_3m"
+          ],
+          "scale": "har",
+          "weight": 0.26711296873111007
+        },
+        "2018": {
+          "candidate": "LightGBM(n_estimators=300, num_leaves=7, min_child_samples=50) | 가격+기후 요약 | har",
+          "model": "LightGBM",
+          "params": {
+            "n_estimators": 300,
+            "num_leaves": 7,
+            "min_child_samples": 50
+          },
+          "feature_set": "가격+기후 요약",
+          "features": [
+            "ret_1",
+            "ret_5",
+            "ret_20",
+            "ret_60",
+            "vol_5",
+            "vol_20",
+            "vol_60",
+            "ma_gap_60",
+            "br_rain90_z",
+            "br_temp30_z",
+            "br_heat30_z",
+            "br_tmin7_z",
+            "co_rain90_z",
+            "co_temp30_z",
+            "br_drought_days90",
+            "co_wet_days90",
+            "br_cold_days30",
+            "enso_state",
+            "br_tmin7_z_frost",
+            "br_rain30_z_flowering",
+            "enso",
+            "enso_chg_3m"
+          ],
+          "scale": "har",
+          "weight": 0.29624015372015866
+        },
+        "2019": {
+          "candidate": "LightGBM(n_estimators=300, num_leaves=7, min_child_samples=50) | 가격+기후 요약 | har",
+          "model": "LightGBM",
+          "params": {
+            "n_estimators": 300,
+            "num_leaves": 7,
+            "min_child_samples": 50
+          },
+          "feature_set": "가격+기후 요약",
+          "features": [
+            "ret_1",
+            "ret_5",
+            "ret_20",
+            "ret_60",
+            "vol_5",
+            "vol_20",
+            "vol_60",
+            "ma_gap_60",
+            "br_rain90_z",
+            "br_temp30_z",
+            "br_heat30_z",
+            "br_tmin7_z",
+            "co_rain90_z",
+            "co_temp30_z",
+            "br_drought_days90",
+            "co_wet_days90",
+            "br_cold_days30",
+            "enso_state",
+            "br_tmin7_z_frost",
+            "br_rain30_z_flowering",
+            "enso",
+            "enso_chg_3m"
+          ],
+          "scale": "har",
+          "weight": 0.2877877824710198
+        },
+        "2020": {
+          "candidate": "LightGBM(n_estimators=300, num_leaves=7, min_child_samples=50) | 가격+기후 요약 | har",
+          "model": "LightGBM",
+          "params": {
+            "n_estimators": 300,
+            "num_leaves": 7,
+            "min_child_samples": 50
+          },
+          "feature_set": "가격+기후 요약",
+          "features": [
+            "ret_1",
+            "ret_5",
+            "ret_20",
+            "ret_60",
+            "vol_5",
+            "vol_20",
+            "vol_60",
+            "ma_gap_60",
+            "br_rain90_z",
+            "br_temp30_z",
+            "br_heat30_z",
+            "br_tmin7_z",
+            "co_rain90_z",
+            "co_temp30_z",
+            "br_drought_days90",
+            "co_wet_days90",
+            "br_cold_days30",
+            "enso_state",
+            "br_tmin7_z_frost",
+            "br_rain30_z_flowering",
+            "enso",
+            "enso_chg_3m"
+          ],
+          "scale": "har",
+          "weight": 0.2888613866520911
+        },
+        "2021": {
+          "candidate": "LightGBM(n_estimators=300, num_leaves=7, min_child_samples=50) | 가격+기후 요약 | har",
+          "model": "LightGBM",
+          "params": {
+            "n_estimators": 300,
+            "num_leaves": 7,
+            "min_child_samples": 50
+          },
+          "feature_set": "가격+기후 요약",
+          "features": [
+            "ret_1",
+            "ret_5",
+            "ret_20",
+            "ret_60",
+            "vol_5",
+            "vol_20",
+            "vol_60",
+            "ma_gap_60",
+            "br_rain90_z",
+            "br_temp30_z",
+            "br_heat30_z",
+            "br_tmin7_z",
+            "co_rain90_z",
+            "co_temp30_z",
+            "br_drought_days90",
+            "co_wet_days90",
+            "br_cold_days30",
+            "enso_state",
+            "br_tmin7_z_frost",
+            "br_rain30_z_flowering",
+            "enso",
+            "enso_chg_3m"
+          ],
+          "scale": "har",
+          "weight": 0.35089405290979014
+        },
+        "2022": {
+          "candidate": "LightGBM(n_estimators=300, num_leaves=7, min_child_samples=50) | 가격+기후 요약 | har",
+          "model": "LightGBM",
+          "params": {
+            "n_estimators": 300,
+            "num_leaves": 7,
+            "min_child_samples": 50
+          },
+          "feature_set": "가격+기후 요약",
+          "features": [
+            "ret_1",
+            "ret_5",
+            "ret_20",
+            "ret_60",
+            "vol_5",
+            "vol_20",
+            "vol_60",
+            "ma_gap_60",
+            "br_rain90_z",
+            "br_temp30_z",
+            "br_heat30_z",
+            "br_tmin7_z",
+            "co_rain90_z",
+            "co_temp30_z",
+            "br_drought_days90",
+            "co_wet_days90",
+            "br_cold_days30",
+            "enso_state",
+            "br_tmin7_z_frost",
+            "br_rain30_z_flowering",
+            "enso",
+            "enso_chg_3m"
+          ],
+          "scale": "har",
+          "weight": 0.22552288946541935
+        },
+        "2023": {
+          "candidate": "LightGBM(n_estimators=300, num_leaves=7, min_child_samples=50) | 가격+기후 요약 | har",
+          "model": "LightGBM",
+          "params": {
+            "n_estimators": 300,
+            "num_leaves": 7,
+            "min_child_samples": 50
+          },
+          "feature_set": "가격+기후 요약",
+          "features": [
+            "ret_1",
+            "ret_5",
+            "ret_20",
+            "ret_60",
+            "vol_5",
+            "vol_20",
+            "vol_60",
+            "ma_gap_60",
+            "br_rain90_z",
+            "br_temp30_z",
+            "br_heat30_z",
+            "br_tmin7_z",
+            "co_rain90_z",
+            "co_temp30_z",
+            "br_drought_days90",
+            "co_wet_days90",
+            "br_cold_days30",
+            "enso_state",
+            "br_tmin7_z_frost",
+            "br_rain30_z_flowering",
+            "enso",
+            "enso_chg_3m"
+          ],
+          "scale": "har",
+          "weight": 0.2052557832216021
+        },
+        "2024": {
+          "candidate": "LightGBM(n_estimators=300, num_leaves=7, min_child_samples=50) | 가격+기후 요약 | har",
+          "model": "LightGBM",
+          "params": {
+            "n_estimators": 300,
+            "num_leaves": 7,
+            "min_child_samples": 50
+          },
+          "feature_set": "가격+기후 요약",
+          "features": [
+            "ret_1",
+            "ret_5",
+            "ret_20",
+            "ret_60",
+            "vol_5",
+            "vol_20",
+            "vol_60",
+            "ma_gap_60",
+            "br_rain90_z",
+            "br_temp30_z",
+            "br_heat30_z",
+            "br_tmin7_z",
+            "co_rain90_z",
+            "co_temp30_z",
+            "br_drought_days90",
+            "co_wet_days90",
+            "br_cold_days30",
+            "enso_state",
+            "br_tmin7_z_frost",
+            "br_rain30_z_flowering",
+            "enso",
+            "enso_chg_3m"
+          ],
+          "scale": "har",
+          "weight": 0.17684092289297731
+        },
+        "2025": {
+          "candidate": "LightGBM(n_estimators=300, num_leaves=7, min_child_samples=50) | 가격+기후 요약 | har",
+          "model": "LightGBM",
+          "params": {
+            "n_estimators": 300,
+            "num_leaves": 7,
+            "min_child_samples": 50
+          },
+          "feature_set": "가격+기후 요약",
+          "features": [
+            "ret_1",
+            "ret_5",
+            "ret_20",
+            "ret_60",
+            "vol_5",
+            "vol_20",
+            "vol_60",
+            "ma_gap_60",
+            "br_rain90_z",
+            "br_temp30_z",
+            "br_heat30_z",
+            "br_tmin7_z",
+            "co_rain90_z",
+            "co_temp30_z",
+            "br_drought_days90",
+            "co_wet_days90",
+            "br_cold_days30",
+            "enso_state",
+            "br_tmin7_z_frost",
+            "br_rain30_z_flowering",
+            "enso",
+            "enso_chg_3m"
+          ],
+          "scale": "har",
+          "weight": 0.20959135419924574
+        },
+        "2026": {
+          "candidate": "LightGBM(n_estimators=300, num_leaves=7, min_child_samples=50) | 가격+기후 요약 | har",
+          "model": "LightGBM",
+          "params": {
+            "n_estimators": 300,
+            "num_leaves": 7,
+            "min_child_samples": 50
+          },
+          "feature_set": "가격+기후 요약",
+          "features": [
+            "ret_1",
+            "ret_5",
+            "ret_20",
+            "ret_60",
+            "vol_5",
+            "vol_20",
+            "vol_60",
+            "ma_gap_60",
+            "br_rain90_z",
+            "br_temp30_z",
+            "br_heat30_z",
+            "br_tmin7_z",
+            "co_rain90_z",
+            "co_temp30_z",
+            "br_drought_days90",
+            "co_wet_days90",
+            "br_cold_days30",
+            "enso_state",
+            "br_tmin7_z_frost",
+            "br_rain30_z_flowering",
+            "enso",
+            "enso_chg_3m"
+          ],
+          "scale": "har",
+          "weight": 0.21389508970806945
+        }
+      },
+      "new": {
+        "dev": {
+          "rmse_vs_naive_pct": -0.5259175812195482,
+          "ci_low_pct": -2.5683626874272676,
+          "ci_high_pct": 1.6920901180157721,
+          "direction_acc": 0.5712473572938689,
+          "zero_share": 0.0,
+          "rows": 2370
+        },
+        "holdout": {
+          "rmse_vs_naive_pct": -0.2087099436326345,
+          "ci_low_pct": -2.0957079529915497,
+          "ci_high_pct": 1.6794554869766833,
+          "direction_acc": 0.5385514018691588,
+          "zero_share": 0.0,
+          "rows": 856
+        },
+        "forward": {
+          "rmse_vs_naive_pct": -0.09792821705619792,
+          "ci_low_pct": -1.999641943826372,
+          "ci_high_pct": 1.945454247615424,
+          "direction_acc": 0.48520710059171596,
+          "zero_share": 0.0,
+          "rows": 169
+        }
+      },
+      "current": {
+        "dev": {
+          "rmse_vs_naive_pct": 3.7062655397486433,
+          "ci_low_pct": -0.25354886363525464,
+          "ci_high_pct": 7.916291415808332,
+          "direction_acc": 0.5107822410147992,
+          "zero_share": 0.0,
+          "rows": 2370
+        },
+        "holdout": {
+          "rmse_vs_naive_pct": 1.3901247006020245,
+          "ci_low_pct": -1.9412949800885635,
+          "ci_high_pct": 4.772039402614256,
+          "direction_acc": 0.5455607476635514,
+          "zero_share": 0.0,
+          "rows": 856
+        },
+        "forward": {
+          "rmse_vs_naive_pct": -2.500026426717561,
+          "ci_low_pct": -8.535348857989629,
+          "ci_high_pct": 3.5732182390334475,
+          "direction_acc": 0.5562130177514792,
+          "zero_share": 0.0,
+          "rows": 169
+        }
+      }
+    },
+    "60": {
+      "adopted": true,
+      "final": {
+        "candidate": "LightGBM(n_estimators=300, num_leaves=7, min_child_samples=200) | 가격+기후 요약 | vol_60",
+        "model": "LightGBM",
+        "params": {
+          "n_estimators": 300,
+          "num_leaves": 7,
+          "min_child_samples": 200
+        },
+        "feature_set": "가격+기후 요약",
+        "features": [
+          "ret_1",
+          "ret_5",
+          "ret_20",
+          "ret_60",
+          "vol_5",
+          "vol_20",
+          "vol_60",
+          "ma_gap_60",
+          "br_rain90_z",
+          "br_temp30_z",
+          "br_heat30_z",
+          "br_tmin7_z",
+          "co_rain90_z",
+          "co_temp30_z",
+          "br_drought_days90",
+          "co_wet_days90",
+          "br_cold_days30",
+          "enso_state",
+          "br_tmin7_z_frost",
+          "br_rain30_z_flowering",
+          "enso",
+          "enso_chg_3m"
+        ],
+        "scale": "vol_60",
+        "weight": 0.07211460808653264
+      },
+      "by_year": {
+        "2012": {
+          "candidate": "Ridge(alpha=10000) | 가격 | har",
+          "model": "Ridge",
+          "params": {
+            "alpha": 10000
+          },
+          "feature_set": "가격",
+          "features": [
+            "ret_1",
+            "ret_5",
+            "ret_20",
+            "ret_60",
+            "vol_5",
+            "vol_20",
+            "vol_60",
+            "ma_gap_60"
+          ],
+          "scale": "har",
+          "weight": 0.6942400396160194
+        },
+        "2013": {
+          "candidate": "Naive",
+          "weight": 0.0
+        },
+        "2014": {
+          "candidate": "Naive",
+          "weight": 0.0
+        },
+        "2015": {
+          "candidate": "Naive",
+          "weight": 0.0
+        },
+        "2016": {
+          "candidate": "Naive",
+          "weight": 0.0
+        },
+        "2017": {
+          "candidate": "Naive",
+          "weight": 0.0
+        },
+        "2018": {
+          "candidate": "Naive",
+          "weight": 0.0
+        },
+        "2019": {
+          "candidate": "Naive",
+          "weight": 0.0
+        },
+        "2020": {
+          "candidate": "LightGBM(n_estimators=300, num_leaves=7, min_child_samples=200) | 가격+기후 요약 | vol_60",
+          "model": "LightGBM",
+          "params": {
+            "n_estimators": 300,
+            "num_leaves": 7,
+            "min_child_samples": 200
+          },
+          "feature_set": "가격+기후 요약",
+          "features": [
+            "ret_1",
+            "ret_5",
+            "ret_20",
+            "ret_60",
+            "vol_5",
+            "vol_20",
+            "vol_60",
+            "ma_gap_60",
+            "br_rain90_z",
+            "br_temp30_z",
+            "br_heat30_z",
+            "br_tmin7_z",
+            "co_rain90_z",
+            "co_temp30_z",
+            "br_drought_days90",
+            "co_wet_days90",
+            "br_cold_days30",
+            "enso_state",
+            "br_tmin7_z_frost",
+            "br_rain30_z_flowering",
+            "enso",
+            "enso_chg_3m"
+          ],
+          "scale": "vol_60",
+          "weight": 0.04092910253945706
+        },
+        "2021": {
+          "candidate": "LightGBM(n_estimators=300, num_leaves=7, min_child_samples=200) | 가격+기후 요약 | vol_60",
+          "model": "LightGBM",
+          "params": {
+            "n_estimators": 300,
+            "num_leaves": 7,
+            "min_child_samples": 200
+          },
+          "feature_set": "가격+기후 요약",
+          "features": [
+            "ret_1",
+            "ret_5",
+            "ret_20",
+            "ret_60",
+            "vol_5",
+            "vol_20",
+            "vol_60",
+            "ma_gap_60",
+            "br_rain90_z",
+            "br_temp30_z",
+            "br_heat30_z",
+            "br_tmin7_z",
+            "co_rain90_z",
+            "co_temp30_z",
+            "br_drought_days90",
+            "co_wet_days90",
+            "br_cold_days30",
+            "enso_state",
+            "br_tmin7_z_frost",
+            "br_rain30_z_flowering",
+            "enso",
+            "enso_chg_3m"
+          ],
+          "scale": "vol_60",
+          "weight": 0.2131164235484957
+        },
+        "2022": {
+          "candidate": "Naive",
+          "weight": 0.0
+        },
+        "2023": {
+          "candidate": "LightGBM(n_estimators=300, num_leaves=7, min_child_samples=200) | 가격+기후 요약 | vol_60",
+          "model": "LightGBM",
+          "params": {
+            "n_estimators": 300,
+            "num_leaves": 7,
+            "min_child_samples": 200
+          },
+          "feature_set": "가격+기후 요약",
+          "features": [
+            "ret_1",
+            "ret_5",
+            "ret_20",
+            "ret_60",
+            "vol_5",
+            "vol_20",
+            "vol_60",
+            "ma_gap_60",
+            "br_rain90_z",
+            "br_temp30_z",
+            "br_heat30_z",
+            "br_tmin7_z",
+            "co_rain90_z",
+            "co_temp30_z",
+            "br_drought_days90",
+            "co_wet_days90",
+            "br_cold_days30",
+            "enso_state",
+            "br_tmin7_z_frost",
+            "br_rain30_z_flowering",
+            "enso",
+            "enso_chg_3m"
+          ],
+          "scale": "vol_60",
+          "weight": 0.013606314882255333
+        },
+        "2024": {
+          "candidate": "LightGBM(n_estimators=300, num_leaves=7, min_child_samples=200) | 가격+기후 요약 | vol_60",
+          "model": "LightGBM",
+          "params": {
+            "n_estimators": 300,
+            "num_leaves": 7,
+            "min_child_samples": 200
+          },
+          "feature_set": "가격+기후 요약",
+          "features": [
+            "ret_1",
+            "ret_5",
+            "ret_20",
+            "ret_60",
+            "vol_5",
+            "vol_20",
+            "vol_60",
+            "ma_gap_60",
+            "br_rain90_z",
+            "br_temp30_z",
+            "br_heat30_z",
+            "br_tmin7_z",
+            "co_rain90_z",
+            "co_temp30_z",
+            "br_drought_days90",
+            "co_wet_days90",
+            "br_cold_days30",
+            "enso_state",
+            "br_tmin7_z_frost",
+            "br_rain30_z_flowering",
+            "enso",
+            "enso_chg_3m"
+          ],
+          "scale": "vol_60",
+          "weight": 0.029767155904713065
+        },
+        "2025": {
+          "candidate": "LightGBM(n_estimators=300, num_leaves=7, min_child_samples=200) | 가격+기후 요약 | vol_60",
+          "model": "LightGBM",
+          "params": {
+            "n_estimators": 300,
+            "num_leaves": 7,
+            "min_child_samples": 200
+          },
+          "feature_set": "가격+기후 요약",
+          "features": [
+            "ret_1",
+            "ret_5",
+            "ret_20",
+            "ret_60",
+            "vol_5",
+            "vol_20",
+            "vol_60",
+            "ma_gap_60",
+            "br_rain90_z",
+            "br_temp30_z",
+            "br_heat30_z",
+            "br_tmin7_z",
+            "co_rain90_z",
+            "co_temp30_z",
+            "br_drought_days90",
+            "co_wet_days90",
+            "br_cold_days30",
+            "enso_state",
+            "br_tmin7_z_frost",
+            "br_rain30_z_flowering",
+            "enso",
+            "enso_chg_3m"
+          ],
+          "scale": "vol_60",
+          "weight": 0.0767792913818489
+        },
+        "2026": {
+          "candidate": "LightGBM(n_estimators=300, num_leaves=7, min_child_samples=200) | 가격+기후 요약 | vol_60",
+          "model": "LightGBM",
+          "params": {
+            "n_estimators": 300,
+            "num_leaves": 7,
+            "min_child_samples": 200
+          },
+          "feature_set": "가격+기후 요약",
+          "features": [
+            "ret_1",
+            "ret_5",
+            "ret_20",
+            "ret_60",
+            "vol_5",
+            "vol_20",
+            "vol_60",
+            "ma_gap_60",
+            "br_rain90_z",
+            "br_temp30_z",
+            "br_heat30_z",
+            "br_tmin7_z",
+            "co_rain90_z",
+            "co_temp30_z",
+            "br_drought_days90",
+            "co_wet_days90",
+            "br_cold_days30",
+            "enso_state",
+            "br_tmin7_z_frost",
+            "br_rain30_z_flowering",
+            "enso",
+            "enso_chg_3m"
+          ],
+          "scale": "vol_60",
+          "weight": 0.07211460808653264
+        }
+      },
+      "new": {
+        "dev": {
+          "rmse_vs_naive_pct": 3.5925124490740368,
+          "ci_low_pct": 0.8582170794236892,
+          "ci_high_pct": 6.478773756210887,
+          "direction_acc": 0.36115107913669064,
+          "zero_share": 0.7017167381974249,
+          "rows": 2330
+        },
+        "holdout": {
+          "rmse_vs_naive_pct": -0.16909463912958556,
+          "ci_low_pct": -0.5428922588758123,
+          "ci_high_pct": 0.19219000451939933,
+          "direction_acc": 0.5716814159292035,
+          "zero_share": 0.3075980392156863,
+          "rows": 816
+        },
+        "forward": {
+          "rmse_vs_naive_pct": -0.28016542272246703,
+          "ci_low_pct": -0.7327645653925526,
+          "ci_high_pct": 0.2754367765358493,
+          "direction_acc": 0.4496124031007752,
+          "zero_share": 0.0,
+          "rows": 129
+        }
+      },
+      "current": {
+        "dev": {
+          "rmse_vs_naive_pct": 5.6931271453758425,
+          "ci_low_pct": 0.6639661711994594,
+          "ci_high_pct": 10.519938432778064,
+          "direction_acc": 0.44329896907216493,
+          "zero_share": 0.0,
+          "rows": 2330
+        },
+        "holdout": {
+          "rmse_vs_naive_pct": 3.813372058504716,
+          "ci_low_pct": 0.4828867490347372,
+          "ci_high_pct": 7.748293450570351,
+          "direction_acc": 0.38112745098039214,
+          "zero_share": 0.0,
+          "rows": 816
+        },
+        "forward": {
+          "rmse_vs_naive_pct": -4.998571646920269,
+          "ci_low_pct": -9.8309370455371,
+          "ci_high_pct": 1.3986885562297136,
+          "direction_acc": 0.5813953488372093,
+          "zero_share": 0.0,
+          "rows": 129
+        }
+      }
+    }
+  },
+  "stages": [
+    {
+      "지평": 5,
+      "단계": "현재 모델",
+      "개발 Test RMSE%": 0.6948,
+      "개발 95% 구간": "[-0.77, +2.21]",
+      "개발 예측 0 비율": 0.0,
+      "재사용 확인 RMSE%": 0.1575,
+      "2026년 RMSE%": 0.1964
+    },
+    {
+      "지평": 5,
+      "단계": "+λ 축소(B1)",
+      "개발 Test RMSE%": -0.1415,
+      "개발 95% 구간": "[-0.36, +0.07]",
+      "개발 예측 0 비율": 0.265,
+      "재사용 확인 RMSE%": -0.2664,
+      "2026년 RMSE%": -0.2986
+    },
+    {
+      "지평": 5,
+      "단계": "+튜닝(A)",
+      "개발 Test RMSE%": -0.0672,
+      "개발 95% 구간": "[-0.52, +0.42]",
+      "개발 예측 0 비율": 0.0,
+      "재사용 확인 RMSE%": -0.1764,
+      "2026년 RMSE%": 0.0748
+    },
+    {
+      "지평": 5,
+      "단계": "+HAR 척도(B2)",
+      "개발 Test RMSE%": -0.0651,
+      "개발 95% 구간": "[-0.53, +0.44]",
+      "개발 예측 0 비율": 0.0,
+      "재사용 확인 RMSE%": -0.1764,
+      "2026년 RMSE%": 0.0748
+    },
+    {
+      "지평": 5,
+      "단계": "+지평별 묶음(C1·C2)",
+      "개발 Test RMSE%": -0.0142,
+      "개발 95% 구간": "[-0.48, +0.49]",
+      "개발 예측 0 비율": 0.0,
+      "재사용 확인 RMSE%": -0.1764,
+      "2026년 RMSE%": 0.0748
+    },
+    {
+      "지평": 5,
+      "단계": "+거시 장기(C3)",
+      "개발 Test RMSE%": -0.0142,
+      "개발 95% 구간": "[-0.48, +0.49]",
+      "개발 예측 0 비율": 0.0,
+      "재사용 확인 RMSE%": -0.1764,
+      "2026년 RMSE%": 0.0748
+    },
+    {
+      "지평": 20,
+      "단계": "현재 모델",
+      "개발 Test RMSE%": 3.7063,
+      "개발 95% 구간": "[-0.25, +7.92]",
+      "개발 예측 0 비율": 0.0,
+      "재사용 확인 RMSE%": 1.3901,
+      "2026년 RMSE%": -2.5
+    },
+    {
+      "지평": 20,
+      "단계": "+λ 축소(B1)",
+      "개발 Test RMSE%": -0.3316,
+      "개발 95% 구간": "[-1.13, +0.49]",
+      "개발 예측 0 비율": 0.0,
+      "재사용 확인 RMSE%": -0.3614,
+      "2026년 RMSE%": -0.8924
+    },
+    {
+      "지평": 20,
+      "단계": "+튜닝(A)",
+      "개발 Test RMSE%": -0.4108,
+      "개발 95% 구간": "[-1.70, +0.93]",
+      "개발 예측 0 비율": 0.0,
+      "재사용 확인 RMSE%": -0.4415,
+      "2026년 RMSE%": -0.778
+    },
+    {
+      "지평": 20,
+      "단계": "+HAR 척도(B2)",
+      "개발 Test RMSE%": -0.3451,
+      "개발 95% 구간": "[-1.65, +1.10]",
+      "개발 예측 0 비율": 0.0,
+      "재사용 확인 RMSE%": -0.4415,
+      "2026년 RMSE%": -0.778
+    },
+    {
+      "지평": 20,
+      "단계": "+지평별 묶음(C1·C2)",
+      "개발 Test RMSE%": -0.5259,
+      "개발 95% 구간": "[-2.57, +1.69]",
+      "개발 예측 0 비율": 0.0,
+      "재사용 확인 RMSE%": -0.2087,
+      "2026년 RMSE%": -0.0979
+    },
+    {
+      "지평": 20,
+      "단계": "+거시 장기(C3)",
+      "개발 Test RMSE%": -0.5259,
+      "개발 95% 구간": "[-2.57, +1.69]",
+      "개발 예측 0 비율": 0.0,
+      "재사용 확인 RMSE%": -0.2087,
+      "2026년 RMSE%": -0.0979
+    },
+    {
+      "지평": 60,
+      "단계": "현재 모델",
+      "개발 Test RMSE%": 5.6931,
+      "개발 95% 구간": "[+0.66, +10.52]",
+      "개발 예측 0 비율": 0.0,
+      "재사용 확인 RMSE%": 3.8134,
+      "2026년 RMSE%": -4.9986
+    },
+    {
+      "지평": 60,
+      "단계": "+λ 축소(B1)",
+      "개발 Test RMSE%": 0.0,
+      "개발 95% 구간": "[+0.00, +0.00]",
+      "개발 예측 0 비율": 1.0,
+      "재사용 확인 RMSE%": 0.0,
+      "2026년 RMSE%": 0.0
+    },
+    {
+      "지평": 60,
+      "단계": "+튜닝(A)",
+      "개발 Test RMSE%": 1.3226,
+      "개발 95% 구간": "[+0.14, +2.80]",
+      "개발 예측 0 비율": 0.8927,
+      "재사용 확인 RMSE%": 0.0,
+      "2026년 RMSE%": 0.0
+    },
+    {
+      "지평": 60,
+      "단계": "+HAR 척도(B2)",
+      "개발 Test RMSE%": 1.4309,
+      "개발 95% 구간": "[+0.15, +3.02]",
+      "개발 예측 0 비율": 0.8927,
+      "재사용 확인 RMSE%": 0.0,
+      "2026년 RMSE%": 0.0
+    },
+    {
+      "지평": 60,
+      "단계": "+지평별 묶음(C1·C2)",
+      "개발 Test RMSE%": 3.5925,
+      "개발 95% 구간": "[+0.86, +6.48]",
+      "개발 예측 0 비율": 0.7017,
+      "재사용 확인 RMSE%": -0.1691,
+      "2026년 RMSE%": -0.2802
+    },
+    {
+      "지평": 60,
+      "단계": "+거시 장기(C3)",
+      "개발 Test RMSE%": 3.5925,
+      "개발 95% 구간": "[+0.86, +6.48]",
+      "개발 예측 0 비율": 0.7017,
+      "재사용 확인 RMSE%": -0.1691,
+      "2026년 RMSE%": -0.2802
+    }
+  ],
+  "climate_steps": [
+    {
+      "지평": 20,
+      "기후 요약 단계": "같은 달 원 편차",
+      "개발 Test RMSE%": -0.47,
+      "재사용 확인 RMSE%": -1.1295,
+      "2026년 RMSE%": -2.1421
+    },
+    {
+      "지평": 20,
+      "기후 요약 단계": "+ b 날짜 평년값",
+      "개발 Test RMSE%": -0.0654,
+      "재사용 확인 RMSE%": -1.4668,
+      "2026년 RMSE%": -2.4935
+    },
+    {
+      "지평": 20,
+      "기후 요약 단계": "+ a z",
+      "개발 Test RMSE%": 1.1705,
+      "재사용 확인 RMSE%": -1.8738,
+      "2026년 RMSE%": -0.8894
+    },
+    {
+      "지평": 20,
+      "기후 요약 단계": "+ c 사건",
+      "개발 Test RMSE%": 1.2761,
+      "재사용 확인 RMSE%": -0.3708,
+      "2026년 RMSE%": 0.2582
+    },
+    {
+      "지평": 20,
+      "기후 요약 단계": "+ d 생육기 (서비스)",
+      "개발 Test RMSE%": -0.5259,
+      "재사용 확인 RMSE%": -0.2087,
+      "2026년 RMSE%": -0.0979
+    },
+    {
+      "지평": 60,
+      "기후 요약 단계": "같은 달 원 편차",
+      "개발 Test RMSE%": 2.4103,
+      "재사용 확인 RMSE%": -0.5313,
+      "2026년 RMSE%": -1.223
+    },
+    {
+      "지평": 60,
+      "기후 요약 단계": "+ b 날짜 평년값",
+      "개발 Test RMSE%": 2.2237,
+      "재사용 확인 RMSE%": -0.6968,
+      "2026년 RMSE%": -1.5041
+    },
+    {
+      "지평": 60,
+      "기후 요약 단계": "+ a z",
+      "개발 Test RMSE%": 3.5472,
+      "재사용 확인 RMSE%": -0.1184,
+      "2026년 RMSE%": -0.4265
+    },
+    {
+      "지평": 60,
+      "기후 요약 단계": "+ c 사건",
+      "개발 Test RMSE%": 3.6115,
+      "재사용 확인 RMSE%": -0.3089,
+      "2026년 RMSE%": -0.2537
+    },
+    {
+      "지평": 60,
+      "기후 요약 단계": "+ d 생육기 (서비스)",
+      "개발 Test RMSE%": 3.5925,
+      "재사용 확인 RMSE%": -0.1691,
+      "2026년 RMSE%": -0.2802
+    }
+  ]
+}

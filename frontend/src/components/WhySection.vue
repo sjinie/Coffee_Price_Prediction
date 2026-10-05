@@ -115,7 +115,7 @@ const stale = computed(() => props.model?.model_version && props.model.model_ver
             <h3 class="h3">{{ FINDINGS.returns }}</h3>
             <ul class="keys"><li><i class="key sq dev" />개발 {{ RESEARCH.periods.development.join('-') }}</li><li><i class="key sq holdout" />보류 {{ RESEARCH.periods.holdout.join('-') }}</li></ul>
             <ReturnErrors :metadata="metadata" />
-            <p class="cap">현재가 유지 대비 RMSE. 0보다 오른쪽이면 그대로 두는 것보다 오차가 크다. 점선은 학부 캡스톤 방식의 단순 LSTM이다.</p>
+            <p class="cap">현재가 유지 대비 RMSE. 0보다 오른쪽이면 그대로 두는 것보다 오차가 크고, 왼쪽이면 작다. 서비스 모델은 해마다 그 전 해들의 성적으로 고른 설정에 예측을 줄이는 비율을 곱한다(노트북 03b). 점선은 학부 캡스톤 방식의 단순 LSTM이다.</p>
           </section>
           <section class="finding">
             <h3 class="h3">{{ FINDINGS.volatility }}</h3>

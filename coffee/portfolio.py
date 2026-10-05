@@ -11,7 +11,7 @@ import numpy as np
 import pandas as pd
 
 from coffee.config import DEV_YEARS, FORWARD_START, HOLDOUT_YEARS, ROOT, SETTINGS, TRAIN_START
-from coffee.features import FEATURE_GROUPS, build_dataset
+from coffee.features import EXTRA_GROUPS, FEATURE_GROUPS, build_dataset
 from coffee.news import daily_news, load_jev_archive
 from coffee.sources import load_sources
 
@@ -51,7 +51,7 @@ def build() -> dict:
             "holdout": [HOLDOUT_YEARS[0], HOLDOUT_YEARS[-1]],
             "forward_start": FORWARD_START.strftime("%Y-%m-%d"),
         },
-        "feature_groups": FEATURE_GROUPS,
+        "feature_groups": {**FEATURE_GROUPS, **EXTRA_GROUPS},  # 기존 묶음 + 03b의 수익률 후보 묶음
         "news_lag": news_lag(data["close"], news["news_score"]),
         "sparks": {
             "price": _values(weekly(observed("prices", "close")).iloc[::4], 1),

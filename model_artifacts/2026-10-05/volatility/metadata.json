@@ -1,17 +1,17 @@
 {
-  "version": "2026-10-04",
+  "version": "2026-10-05",
   "train_end": "2025-12-31",
   "data_end": "2026-10-02 00:00:00",
-  "code_commit": "31df685",
+  "code_commit": "45f9ac3-dirty",
   "train_rows": {
     "방향_5": 4844,
-    "수익률(LightGBM)_5": 4844,
+    "수익률(Ridge)_5": 4764,
     "변동성_5": 4860,
     "방향_20": 4829,
-    "수익률(LightGBM)_20": 4829,
+    "수익률(LightGBM)_20": 4749,
     "변동성_20": 4845,
     "방향_60": 4789,
-    "수익률(Ridge)_60": 4789,
+    "수익률(LightGBM)_60": 4709,
     "변동성_60": 4728
   },
   "kind": "volatility",
@@ -23,7 +23,7 @@
         "log_vol_20",
         "log_vol_60"
       ],
-      "interval_multiplier": 1.2000000000000002,
+      "interval_multiplier": 1.19,
       "z": 1.2815515655446004
     },
     "20": {
@@ -32,7 +32,7 @@
         "log_vol_20",
         "log_vol_60"
       ],
-      "interval_multiplier": 1.06,
+      "interval_multiplier": 0.98,
       "z": 1.2815515655446004
     },
     "60": {
@@ -41,7 +41,7 @@
         "log_vol_20",
         "log_vol_60"
       ],
-      "interval_multiplier": 0.9500000000000001,
+      "interval_multiplier": 0.9,
       "z": 1.2815515655446004
     }
   },
