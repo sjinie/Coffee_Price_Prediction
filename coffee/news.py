@@ -37,7 +37,8 @@ def daily_news(articles: pd.DataFrame, sessions: pd.DatetimeIndex, mode: str = "
     - live: 분석이 끝나 실제로 쓸 수 있게 된 시각(available_at) 이후 첫 거래일 마감에 넣는다.
       서비스는 이 방식만 쓴다.
     - research: 과거 기사는 2026년에 소급 분류해 실제 이용 시각이 없다. 발행 + 1일에 알았다고
-      가정한 연구용 시각이다. 분석 모델이 결과를 이미 알고 있을 위험이 있다.
+      가정한 연구용 시각이다. 분류는 별개의 결정 모델(Jev)에 기사만 평가하게 하므로, 이후 가격을
+      알고 판단했을 위험은 낮게 본다. 점수는 이후 수익률과 관련이 없었다(노트북 05).
     """
     if mode not in ("live", "research"):
         raise ValueError("mode는 live 또는 research")

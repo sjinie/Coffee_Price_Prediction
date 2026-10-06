@@ -27,7 +27,7 @@ const PRICE = computed(() => full.value ? { top: 40, bottom: 320 } : { top: 30, 
 const PROB = { top: 408, bottom: 488 }
 const showProb = computed(() => full.value && !all.value)
 const current = computed(() => props.latest.find(row => row.horizon === props.horizon))
-const threshold = computed(() => props.metadata?.direction?.horizons?.[props.horizon]?.threshold)
+const threshold = computed(() => props.metadata?.distribution?.horizons?.[props.horizon]?.threshold)  // null이면 신호 없음
 const prices = computed(() => all.value ? weeklyLast(props.allPrices) : props.prices)
 const start = computed(() => prices.value[0]?.date || current.value?.origin_date)
 const lastDate = computed(() => prices.value.at(-1)?.date || current.value?.origin_date)
@@ -79,7 +79,7 @@ const directLabels = computed(() => {
   if (!row) return []
   const labels = [
     { value: row.price_high, text: `상한 ${formatNumber(row.price_high, 0)}` },
-    { value: row.predicted_price, text: `예측 ${formatNumber(row.predicted_price)}`, predicted: true },
+    { value: row.predicted_price, text: `가운데 ${formatNumber(row.predicted_price)}`, predicted: true },
     { value: row.price_low, text: `하한 ${formatNumber(row.price_low, 0)}` },
   ].filter(item => isNumber(item.value)).map(item => ({ ...item, actualY: y.value(item.value), labelY: y.value(item.value) }))
   labels.sort((a, b) => a.actualY - b.actualY)
@@ -178,7 +178,7 @@ watch(() => [props.horizon, all.value], () => { hover.value = null })
       <p v-if="historyFailed" class="cap">선택한 지평의 과거 예측을 불러오지 못했습니다.</p>
       <ul v-if="!all" class="keys" aria-label="가격 그래프 범례">
         <li v-if="pricePath"><i class="key line" />실제 종가</li>
-        <li v-if="series.some(s => s.prediction)"><i class="key pred" />{{ horizon }}거래일 전 예측</li>
+        <li v-if="series.some(s => s.prediction)"><i class="key pred" />{{ horizon }}거래일 전 분포의 가운데</li>
         <li v-if="series.some(s => s.band)"><i class="key band" />그때의 80% 범위</li>
         <li v-if="fan"><i class="key fan" />오늘의 예측</li>
       </ul>
@@ -214,7 +214,7 @@ watch(() => [props.horizon, all.value], () => { hover.value = null })
           <circle class="pred-dot" r="4.5" :cx="story.to[0]" :cy="story.to[1]" />
           <circle class="actual-dot" r="4.5" :cx="story.actual[0]" :cy="story.actual[1]" />
           <text class="direct-label predicted" :x="story.actual[0] + 10" :y="story.actual[1] + 4">실제 {{ formatNumber(story.row.actual_close) }}</text>
-          <text class="direct-label" :x="story.to[0] + 10" :y="story.predLabelY + 4">예측 {{ formatNumber(story.row.predicted_price) }}</text>
+          <text class="direct-label" :x="story.to[0] + 10" :y="story.predLabelY + 4">가운데 {{ formatNumber(story.row.predicted_price) }}</text>
         </g>
         <g class="L-today">
           <path :key="`fan-${horizon}-${all}`" :d="fan" class="fan enter" />
@@ -255,18 +255,18 @@ watch(() => [props.horizon, all.value], () => { hover.value = null })
       <div v-if="hover" class="tip" :style="{ left: `${Math.max(0, Math.min(hover.left + 16, width - Math.min(280, width)))}px` }">
         <span class="tip-title">{{ hover.date }}</span>
         <template v-if="hover.future">
-          <span>오늘의 {{ horizon }}거래일 예측 <b>{{ formatNumber(hover.future.predicted_price) }}¢</b> ({{ formatReturn(hover.future.predicted_return) }})</span>
-          <span>80% 범위 {{ formatNumber(hover.future.price_low) }}~{{ formatNumber(hover.future.price_high) }}¢</span>
+          <span>오늘의 {{ horizon }}거래일 80% 범위 <b>{{ formatNumber(hover.future.price_low) }}~{{ formatNumber(hover.future.price_high) }}¢</b></span>
+          <span>가운데 {{ formatNumber(hover.future.predicted_price) }}¢ ({{ formatReturn(hover.future.predicted_return) }})</span>
           <span>상승 확률 {{ formatPercent(hover.future.prob_up, 1) }}, {{ SIGNAL_LABELS[hover.future.signal] }}</span>
           <small>예측 기준 종가 {{ formatNumber(hover.future.origin_close, 2) }}¢, {{ hover.future.kind === 'backfill' ? '소급 계산' : '실시간 예측' }}</small>
         </template>
         <template v-else>
           <span>종가 <b>{{ formatNumber(hover.close) }}¢</b></span>
           <template v-if="hover.past">
-            <span>{{ horizon }}거래일 전 예측 {{ formatNumber(hover.past.predicted_price) }}¢
-              <template v-if="isNumber(hover.past.predicted_price) && isNumber(hover.close)">(오차 {{ formatSigned(hover.past.predicted_price - hover.close) }})</template></span>
-            <span v-if="isNumber(hover.past.price_low) && isNumber(hover.past.price_high)">80% 범위 {{ formatNumber(hover.past.price_low) }}~{{ formatNumber(hover.past.price_high) }}¢
+            <span v-if="isNumber(hover.past.price_low) && isNumber(hover.past.price_high)">{{ horizon }}거래일 전 80% 범위 {{ formatNumber(hover.past.price_low) }}~{{ formatNumber(hover.past.price_high) }}¢
               <template v-if="isNumber(hover.close)">, {{ hover.past.price_low <= hover.close && hover.close <= hover.past.price_high ? '범위 안' : '범위 밖' }}</template></span>
+            <span>가운데 {{ formatNumber(hover.past.predicted_price) }}¢
+              <template v-if="isNumber(hover.past.predicted_price) && isNumber(hover.close)">(차이 {{ formatSigned(hover.past.predicted_price - hover.close) }})</template></span>
             <small>예측 기준일 {{ hover.past.origin_date }}, {{ hover.past.kind === 'backfill' ? '소급 계산' : '실시간 예측' }}</small>
           </template>
           <span v-if="hover.prob">이날 낸 상승 확률 {{ formatPercent(hover.prob.prob_up, 1) }}</span>
@@ -278,9 +278,9 @@ watch(() => [props.horizon, all.value], () => { hover.value = null })
       <p class="cap">실시간 예측은 진하게, 소급 계산은 옅게 표시합니다. 2026-01-02부터의 소급 계산은 동결한 모델로 나중에 계산한 값입니다. 예측 부채꼴은 모델이 사용한 기준 종가에서 시작하므로 가격 표의 종가와 다를 수 있습니다.</p>
       <details>
         <summary>표로 보기: 최근 20개 예측과 모델</summary>
-        <p class="cap">예측 가격 {{ modelFor(metadata, 'return', horizon) ?? '확인 불가' }}, 예상 범위 {{ modelFor(metadata, 'volatility', horizon) ?? '확인 불가' }}, 상승 확률 {{ modelFor(metadata, 'direction', horizon) ?? '확인 불가' }}</p>
+        <p class="cap">범위·가운데 가격·상승 확률은 모두 같은 분포에서 나온다: {{ modelFor(metadata, 'distribution', horizon) ?? '확인 불가' }}</p>
         <div class="table-wrap"><table>
-          <thead><tr><th>기준일</th><th>목표일</th><th>구분</th><th class="num">기준 종가</th><th class="num">예측 가격</th><th class="num">상승 확률</th><th>신호</th><th class="num">80% 범위</th><th class="num">실제 종가</th></tr></thead>
+          <thead><tr><th>기준일</th><th>목표일</th><th>구분</th><th class="num">기준 종가</th><th class="num">가운데 가격</th><th class="num">상승 확률</th><th>신호</th><th class="num">80% 범위</th><th class="num">실제 종가</th></tr></thead>
           <tbody><tr v-for="row in rows.slice(-20).reverse()" :key="`${row.origin_date}-${row.kind}`">
             <td>{{ row.origin_date }}</td><td>{{ row.target_date }}</td><td>{{ row.kind === 'backfill' ? '소급' : '실시간' }}</td>
             <td class="num">{{ formatNumber(row.origin_close) }}</td><td class="num">{{ formatNumber(row.predicted_price) }}</td><td class="num">{{ formatPercent(row.prob_up, 1) }}</td>

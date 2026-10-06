@@ -13,8 +13,12 @@ export function formatNumber(value, digits = 1) {
 
 export const formatPercent = (value, digits = 0) => (isNumber(value) ? `${(value * 100).toFixed(digits)}%` : '-')
 
-export const formatSigned = (value, digits = 1) =>
-  (isNumber(value) ? `${value < 0 ? '−' : '+'}${Math.abs(value).toFixed(digits)}` : '-')
+// 반올림해서 0이 되면 부호를 붙이지 않는다(−0.014 → '0.0', '−0.0'이 아니다).
+export const formatSigned = (value, digits = 1) => {
+  if (!isNumber(value)) return '-'
+  const text = Math.abs(value).toFixed(digits)
+  return Number(text) === 0 ? text : `${value < 0 ? '−' : '+'}${text}`
+}
 
 // 로그수익률을 '+2.1%' 같은 가격 변화율로 바꾼다.
 export const formatReturn = (logReturn, digits = 1) =>
@@ -201,6 +205,31 @@ export function weeklyRainGrid(weather, years) {
       return isNumber(value) && days >= 7 ? (value / days) * 7 : null
     })
   })
+}
+
+// 기온(t_min·t_max·t_mean)이 같은 주의 평년(years 안 해들의 평균)보다 얼마나 높았는지(℃). 이상기후를 보려는 그림용이다.
+// 관측일이 7일보다 적은 주는 최저·최고가 덜 극단적으로 나오므로 그리지 않는다. 피처는 직전 10년만 쓰므로 이 평년과 다르다.
+export function weeklyAnomalyGrid(weather, years, key) {
+  const rowOf = new Map((weather?.years ?? []).map((year, i) => [year, i]))
+  const grid = years.map(year => {
+    const i = rowOf.get(year)
+    if (i === undefined) return Array(52).fill(null)
+    return weather[key][i].map((value, week) => (isNumber(value) && weather.days[i][week] >= 7 ? value : null))
+  })
+  const normal = Array.from({ length: 52 }, (_, week) => {
+    const column = grid.map(row => row[week]).filter(isNumber)
+    return column.length ? column.reduce((sum, v) => sum + v, 0) / column.length : null
+  })
+  return grid.map(row => row.map((value, week) => (isNumber(value) && isNumber(normal[week]) ? value - normal[week] : null)))
+}
+
+// 격자에서 가장 낮은(lowest) 또는 가장 높은 칸. 없으면 null.
+export function extremeWeek(grid, years, lowest) {
+  let best = null
+  grid.forEach((row, y) => row.forEach((value, week) => {
+    if (isNumber(value) && (!best || (lowest ? value < best.value : value > best.value))) best = { year: years[y], week, value }
+  }))
+  return best
 }
 
 function correlation(a, b) {

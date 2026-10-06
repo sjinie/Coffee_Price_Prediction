@@ -66,6 +66,7 @@ test('적중 기록은 목표일 가격이 확인된 예측만 센다', () => {
   assert.equal(trackRecord([]).maeModel, null)
   assert.equal(formatReturn(Math.log(1.021)), '+2.1%')
   assert.equal(formatReturn(Math.log(0.996)), '−0.4%')
+  assert.equal(formatReturn(Math.log(0.9999)), '0.0%')  // 반올림해서 0이면 부호가 없다
   assert.equal(formatReturn(null), '-')
   assert.equal(riskLevel(0.2), '낮음')
   assert.equal(riskLevel(0.5), '보통')
@@ -151,4 +152,14 @@ test('좁은 화면의 현재 단계는 고정 차트 바로 아래에서 온전
   assert.equal(lib.activeStep(paragraphs, 341, 812), 3)
   assert.equal(lib.activeStep([{ step: 5, top: 360, bottom: 440 }, { step: 4, top: 100, bottom: 180 }], 341, 812), 5)
   assert.equal(lib.activeStep([{ step: 2, top: 200, bottom: 400 }], 341, 812), null)   // 온전한 문단이 없으면 단계를 바꾸지 않는다
+})
+
+test('기온 편차: 같은 주 평년과의 차이이고, 관측일이 7일보다 적은 주는 그리지 않는다', () => {
+  const week = values => [...values, ...Array(50).fill(null)]
+  const weather = { years: [2020, 2021], days: [week([7, 7]), week([7, 3])], t_min: [week([10, 8]), week([4, 2])] }
+  const grid = lib.weeklyAnomalyGrid(weather, [2020, 2021], 't_min')
+  assert.deepEqual(grid.map(row => row.slice(0, 2)), [[3, 0], [-3, null]])   // 0주 평년 7, 1주는 2020년만 남아 평년 8
+  assert.deepEqual(lib.extremeWeek(grid, [2020, 2021], true), { year: 2021, week: 0, value: -3 })
+  assert.deepEqual(lib.extremeWeek(grid, [2020, 2021], false), { year: 2020, week: 0, value: 3 })
+  assert.equal(lib.extremeWeek([[null]], [2020], true), null)
 })

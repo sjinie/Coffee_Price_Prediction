@@ -1,19 +1,21 @@
 <script setup>
 import { computed } from 'vue'
-import { arcPath, isNumber } from '../lib.js'
+import { arcPath, formatSigned, isNumber } from '../lib.js'
 
 // 연간 시계: 고리 하나가 한 해(안쪽이 첫해), 12시 방향에서 1월이 시작한다. 칸 색은 값의 크기다.
 const props = defineProps({
   grid: { type: Array, required: true },   // 연도 × 52주
   years: { type: Array, required: true },
-  kind: { type: String, required: true },   // rain: 한 가지 색의 진하기, return: 하락·상승 두 색
+  kind: { type: String, required: true },   // rain: 한 가지 색의 진하기, return: 하락·상승 두 색, tmin·tmax: 평년보다 추움·더움 두 색
   label: { type: String, required: true },
 })
 const R = 190, R0 = 48
+const TEMP = { tmin: '최저기온', tmax: '최고기온' }
 const ring = computed(() => (R - R0) / Math.max(props.years.length, 1))
 const angle = week => (week / 52) * 2 * Math.PI
 const scaleMax = computed(() => {
   if (props.kind === 'return') return 0.05   // 주간 로그수익률 ±5%에서 색이 가장 진하다
+  if (TEMP[props.kind]) return 6   // 평년보다 ±6℃에서 색이 가장 진하다
   const values = props.grid.flat().filter(isNumber).sort((a, b) => a - b)
   return values[Math.floor(values.length * 0.98)] || 1
 })
@@ -25,7 +27,8 @@ function fill(value) {
 }
 const text = (year, week, value) => {
   const start = new Date(Date.UTC(year, 0, 1 + week * 7))
-  const shown = props.kind === 'rain' ? `강수 ${value.toFixed(0)}mm (7일 기준)` : `로그수익률 ${(value * 100).toFixed(2)}%`
+  const shown = props.kind === 'rain' ? `강수 ${value.toFixed(0)}mm (7일 기준)`
+    : TEMP[props.kind] ? `${TEMP[props.kind]} 평년보다 ${formatSigned(value, 1)}℃` : `로그수익률 ${(value * 100).toFixed(2)}%`
   return `${year}년 ${start.getUTCMonth() + 1}월 ${start.getUTCDate()}일부터 한 주, ${shown}`
 }
 const cells = computed(() => props.grid.flatMap((row, y) => row.map((value, week) => (isNumber(value) ? {

@@ -18,15 +18,15 @@ from dotenv import load_dotenv
 
 from . import db, jev
 from .config import ARTIFACTS_DIR, FORWARD_START, HORIZONS, REGION_IDS, ROOT, SETTINGS, SOURCES_DIR
-from .features import build_dataset, trading_sessions
-from .models import buy_signal, load_bundle, price_range
+from .features import add_news, build_dataset, trading_sessions
+from .models import buy_signal, load_bundle
 from .news import load_jev_archive
 from .sources import load_sources, update_all
 
 RISK_WINDOW = 756            # 위험 수준을 매기는 최근 3년(거래일)
 NEWS_LOOKBACK_DAYS = 7       # 매일 다시 훑는 뉴스 기간. 하루 이틀 실패해도 메운다
 EXIT_OK, EXIT_WARNING, EXIT_FAILED = 0, 3, 1
-MODEL_KINDS = ("direction", "return", "volatility")  # 상승 확률, 로그수익률, 변동성(예상 범위)
+MODEL_KINDS = ("distribution",)  # 분포 모델 하나가 범위·가운데 가격·상승 확률·신호·위험 수준을 낸다(노트북 07)
 
 
 def load_models(version: str = SETTINGS["model_version"]) -> dict:
@@ -57,35 +57,40 @@ def closed_prices(prices: pd.DataFrame, now: datetime) -> pd.DataFrame:
 
 
 def make_forecasts(data: pd.DataFrame, origins, models: dict, kind: str) -> list[dict]:
-    """기준일(행 번호)마다 지평별 예측 행을 만든다. 계산은 노트북 06과 같다."""
+    """기준일(행 번호)마다 지평별 예측 행을 만든다. 모든 값이 같은 분포에서 나온다(노트북 06과 같은 계산).
+
+    가운데 가격 = 50% 분위, 범위 = 10%·90% 분위, 상승 확률 = 현재가 위의 비율, 신호 = 상승 확률과 기준,
+    예측 변동성 = 분포의 표준편차를 연율로 바꾼 값, 위험 수준 = 폭 σ의 최근 3년 백분위.
+    """
     origins = np.asarray(origins)
     axis = data.index.append(trading_sessions(data.index[-1] + pd.Timedelta(days=1),
                                               data.index[-1] + pd.Timedelta(days=120)))
     close = data["close"].to_numpy(float)
     rows = []
     for h in HORIZONS:
-        prob = models["direction"][h].predict(data, origins)
-        signal = buy_signal(prob, models["direction_meta"]["horizons"][str(h)]["threshold"])
-        ret = _predict_valid(models["return"][h], data)[origins]
-        log_vol = _predict_valid(models["volatility"][h], data)
-        multiplier = models["volatility_meta"]["horizons"][str(h)]["interval_multiplier"]
-        low, high = price_range(close[origins], log_vol[origins], h, multiplier, center=ret)
-        vol = np.exp(log_vol[origins]) * np.sqrt(252)
-        percentile = _rolling_percentile(pd.Series(log_vol)).to_numpy()[origins]
+        model = models["distribution"][h]
+        low, mid, high = model.quantiles(data, origins).T
+        prob = model.prob_up(data, origins)
+        signal = buy_signal(prob, models["distribution_meta"]["horizons"][str(h)]["threshold"])
+        vol = model.spread(data, origins) * np.sqrt(252 / h)
+        sigma = model.distribution(data, np.arange(len(data)))[1]
+        percentile = _rolling_percentile(pd.Series(np.log(sigma))).to_numpy()[origins]
         for i, origin in enumerate(origins):
             rows.append({"model_version": models["version"], "origin_date": data.index[origin].date(), "horizon": h,
                          "target_date": axis[origin + h].date(), "origin_close": close[origin],
-                         "predicted_return": ret[i], "predicted_price": close[origin] * np.exp(ret[i]),
-                         "prob_up": float(prob[i]), "signal": str(signal[i]), "price_low": low[i],
-                         "price_high": high[i], "predicted_vol": vol[i], "vol_percentile": percentile[i],
-                         "kind": kind})
+                         "predicted_return": mid[i], "predicted_price": close[origin] * np.exp(mid[i]),
+                         "prob_up": float(prob[i]), "signal": str(signal[i]),
+                         "price_low": close[origin] * np.exp(low[i]), "price_high": close[origin] * np.exp(high[i]),
+                         "predicted_vol": vol[i], "vol_percentile": percentile[i], "kind": kind})
     return rows
 
 
-def _predict_valid(model, data: pd.DataFrame) -> np.ndarray:
-    """피처가 모두 있는 행만 예측하고 나머지는 결측으로 둔다(Ridge는 결측 피처를 받지 못한다)."""
-    valid = np.flatnonzero(data[model.features].notna().all(axis=1).to_numpy())
-    return pd.Series(model.predict(data, valid), index=valid).reindex(range(len(data))).to_numpy()
+def _articles(rows: list[dict]) -> pd.DataFrame:
+    """DB에서 읽은 기사 점수를 news.daily_news가 받는 표로 바꾼다(시각은 UTC)."""
+    frame = pd.DataFrame(rows, columns=["event_at", "available_at", "p_bullish", "p_bearish", "relevance"])
+    for column in ("event_at", "available_at"):
+        frame[column] = pd.to_datetime(frame[column], utc=True)
+    return frame
 
 
 def _model_features(models: dict) -> list[str]:
@@ -95,7 +100,7 @@ def _model_features(models: dict) -> list[str]:
 
 def _activate(conn, models: dict) -> None:
     metadata = {kind: models[f"{kind}_meta"] for kind in MODEL_KINDS}
-    db.activate_model(conn, models["version"], models["direction_meta"]["train_end"], metadata)
+    db.activate_model(conn, models["version"], models["distribution_meta"]["train_end"], metadata)
 
 
 def update_news(conn, now: datetime) -> dict:
@@ -170,7 +175,9 @@ def daily(conn, now: datetime | None = None) -> tuple[int, list]:
 
     sources = load_sources()
     sources["prices"] = closed_prices(sources["prices"], now)
-    data = build_dataset(sources)
+    # 뉴스 점수: 기준일 마감까지 분석이 끝난 기사(live 시점). 오늘 분류할 기사는 다음 기준일부터 쓴다.
+    since = (now - timedelta(days=2 * NEWS_LOOKBACK_DAYS)).date()
+    data = add_news(build_dataset(sources), _articles(db.read_news_inputs(conn, since)), "live")
     db.upsert_prices(conn, sources["prices"].tail(30))
     steps.append(store_weather(conn, sources, recent_days=30, now=now))
     models = load_models()
@@ -202,9 +209,16 @@ def daily(conn, now: datetime | None = None) -> tuple[int, list]:
 
 
 def backfill(conn, now: datetime | None = None) -> tuple[int, list]:
+    # 예측 행은 덮어쓰지 않으므로(ON CONFLICT DO NOTHING) 보관 뉴스 없이 계산한 소급 예측은 나중에 고칠 수 없다.
+    # 그래서 아무것도 쓰기 전에 멈추고 실행을 실패로 남긴다. 실행 기록은 공개되므로 경로는 상대 경로만 적는다.
+    try:
+        archive = load_jev_archive()
+    except FileNotFoundError:
+        raise RuntimeError("보관 뉴스(data/jev/responses.json)가 없어 소급 예측을 멈춤. 보관 뉴스가 있는 곳에서 다시 실행") from None
     sources = load_sources()
     sources["prices"] = closed_prices(sources["prices"], now or datetime.now(timezone.utc))
-    data = build_dataset(sources)
+    # 소급 예측은 학습·평가와 같은 연구용 시점(발행 + 1일)으로 보관 기사의 점수를 붙인다
+    data = add_news(build_dataset(sources), archive, "research")
     models = load_models()
     _activate(conn, models)
     steps = [{"step": "prices", "upserted": db.upsert_prices(conn, sources["prices"])},
@@ -212,19 +226,11 @@ def backfill(conn, now: datetime | None = None) -> tuple[int, list]:
     origins = np.flatnonzero((data.index >= FORWARD_START) & data["close"].notna().to_numpy())
     inserted = db.insert_forecasts(conn, make_forecasts(data, origins, models, "backfill"))
     steps.append({"step": "forecast", "origins": len(origins), "inserted": inserted})
-    warnings = []
-    try:
-        archive = load_jev_archive()
-    except FileNotFoundError:
-        archive, warnings = None, ["보관 뉴스(data/jev/responses.json)가 없어 건너뜀"]
-    if archive is not None:
-        rows = archive.assign(model=SETTINGS["jev"]["model"], prompt_version=SETTINGS["jev"]["prompt_version"],
-                              cost_usd=0.0).to_dict("records")
-        steps.append({"step": "news_archive", "articles": len(rows), "inserted": db.insert_news(conn, rows)})
+    rows = archive.assign(model=SETTINGS["jev"]["model"], prompt_version=SETTINGS["jev"]["prompt_version"],
+                          cost_usd=0.0).to_dict("records")
+    steps.append({"step": "news_archive", "articles": len(rows), "inserted": db.insert_news(conn, rows)})
     conn.commit()
-    if warnings:
-        steps.append({"step": "warnings", "messages": warnings})
-    return (EXIT_WARNING if warnings else EXIT_OK), steps
+    return EXIT_OK, steps
 
 
 def main(argv=None) -> int:
