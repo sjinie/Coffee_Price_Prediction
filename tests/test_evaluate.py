@@ -30,6 +30,13 @@ def test_direction_metrics_count_only_confident_signals():
     assert np.isclose(result["base_brier"], 0.25)
 
 
+def test_base_brier_uses_each_rows_training_rate():
+    # 평가 연도마다 학습 구간의 상승 비율이 다르면 행마다 그 값으로 채점한다(평균 하나로 쓰면 0.25)
+    y = np.array([0.01, 0.02, -0.01, -0.02])
+    result = direction_metrics(y, np.full(4, 0.5), base_rate=np.array([0.9, 0.9, 0.1, 0.1]))
+    assert np.isclose(result["base_brier"], 0.01)
+
+
 def test_block_bootstrap_detects_better_model_and_is_reproducible():
     rng = np.random.default_rng(0)
     y = rng.normal(0, 0.05, 400)

@@ -159,10 +159,12 @@ def metrics(y_true, y_pred) -> dict:
     return {**result, "direction_acc": float(hit.mean()), "balanced_acc": float(np.mean(recalls))}
 
 
-def direction_metrics(y_true, prob_up, base_rate: float, threshold: float = 0.6) -> dict:
+def direction_metrics(y_true, prob_up, base_rate, threshold: float = 0.6) -> dict:
     """상승 확률 예측의 평가.
 
     - brier: 확률 오차의 제곱 평균. base_brier는 학습 구간의 상승 비율을 늘 말했을 때의 값이다.
+      walk-forward처럼 평가 연도마다 학습 구간이 다르면 base_rate에 행마다의 값을 넘긴다
+      (연도별 비율을 평균해 하나로 쓰면 기준선이 바뀐다).
     - auc: 상승한 날에 더 높은 확률을 줬는지(0.5면 구분 못 함).
     - 신호: 확률이 threshold 이상이면 '지금 구매', 1-threshold 이하면 '미루기', 사이는 보류.
       precision은 신호를 낸 날 중 맞힌 비율, coverage는 신호를 낸 날의 비율이다.
@@ -172,12 +174,13 @@ def direction_metrics(y_true, prob_up, base_rate: float, threshold: float = 0.6)
     y_true, prob_up = np.asarray(y_true, float), np.asarray(prob_up, float)
     moved = y_true != 0
     up, prob = (y_true[moved] > 0).astype(float), prob_up[moved]
+    base = np.broadcast_to(np.asarray(base_rate, float), y_true.shape)[moved]
     buy, wait = prob >= threshold, prob <= 1 - threshold
     signals = buy | wait
     correct = (buy & (up == 1)) | (wait & (up == 0))
     return {
         "n": int(moved.sum()), "up_rate": float(up.mean()),
-        "brier": float(np.mean((prob - up) ** 2)), "base_brier": float(np.mean((base_rate - up) ** 2)),
+        "brier": float(np.mean((prob - up) ** 2)), "base_brier": float(np.mean((base - up) ** 2)),
         "auc": float(roc_auc_score(up, prob)) if 0 < up.mean() < 1 else np.nan,
         "coverage": float(signals.mean()),
         "precision": float(correct[signals].mean()) if signals.any() else np.nan,
