@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 # GitHub runner에서 실행한다(.github/workflows/daily.yml).
 # VM에 보관한 소스 Parquet를 받아 파이프라인을 돌리고, SSH 터널로 VM의 PostgreSQL에 적재한 뒤 소스를 돌려놓는다.
-# 종료 코드 3(경고)은 Actions 경고로 남기고 성공으로 처리한다. 가격이 늦은 날은 예측을 저장하지 않은 경고이므로
-# 이유는 실행 기록(pipeline_runs.message)에서 확인한다.
+# 종료 코드 3(경고)은 Actions 경고로 남기고 성공으로 처리한다. 가격이 늦은 날과 예약 시각 전 수동 실행은
+# 예측을 저장하지 않은 경고이므로 이유는 실행 기록(pipeline_runs.message)에서 확인한다.
 set -euo pipefail
 umask 077
 
@@ -71,10 +71,14 @@ done
 (( tunnel_ready )) || { echo 'SSH tunnel failed' >&2; exit 1; }
 
 export PGHOST=127.0.0.1 PGPORT=15432 PGCONNECT_TIMEOUT=10 DATABASE_URL=postgresql://   # 비밀번호는 PGPASSWORD로만 넘긴다
+# 예약 실행(schedule 이벤트)만 --scheduled로 돌린다. 수동 실행은 기준일의 예약 시각 전이면 수집·예측을 건너뛰고,
+# 예약 실행은 같은 기준일에 이미 저장된 live 예측을 새 값으로 바꾼다.
+mode=
+if [[ "${GITHUB_EVENT_NAME:-}" == schedule ]]; then mode=--scheduled; fi
 status=0
-python -m coffee.pipeline daily || status=$?
+python -m coffee.pipeline daily $mode || status=$?   # mode가 비면 인자 없이 실행되도록 따옴표를 쓰지 않는다
 if (( status == 3 )); then
-  echo '::warning title=Daily pipeline warning::경고로 끝났습니다(일부 소스·피처·뉴스 실패, 또는 가격이 늦어 예측 미저장). 위 로그와 실행 기록의 메시지를 확인하세요.'
+  echo '::warning title=Daily pipeline warning::경고로 끝났습니다(일부 소스·피처·뉴스 실패, 가격이 늦어 예측 미저장, 또는 예약 시각 전 수동 실행). 위 로그와 실행 기록의 메시지를 확인하세요.'
   status=0
 fi
 exit "$status"

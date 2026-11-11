@@ -94,8 +94,17 @@ def activate_model(conn, version: str, train_end: str, metadata: dict) -> None:
     conn.execute("UPDATE models SET is_active = true WHERE model_version = %s", (version,))
 
 
-def insert_forecasts(conn, rows: list[dict]) -> int:
-    return _insert(conn, "forecasts", FORECAST_COLUMNS, rows)
+def insert_forecasts(conn, rows: list[dict], replace: bool = False) -> int:
+    """예측은 한 번만 쓴다. replace(예약 실행)면 같은 기준일의 live 예측을 새 값으로 바꾼다.
+
+    소급 계산(backfill) 행은 replace여도 바꾸지 않는다. 돌려주는 값은 새로 쓰거나 바꾼 행 수다.
+    """
+    if not replace:
+        return _insert(conn, "forecasts", FORECAST_COLUMNS, rows)
+    key = FORECAST_COLUMNS[:3]  # model_version, origin_date, horizon
+    updates = ", ".join(f"{column} = EXCLUDED.{column}" for column in FORECAST_COLUMNS[3:])
+    return _insert(conn, "forecasts", FORECAST_COLUMNS, rows,
+                   f"({', '.join(key)}) DO UPDATE SET {updates}, created_at = now() WHERE forecasts.kind = 'live'")
 
 
 def insert_news(conn, rows: list[dict]) -> int:

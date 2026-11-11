@@ -126,7 +126,7 @@ flowchart LR
 
 "기준일 이후 원자료를 모두 바꿔도 기준일까지의 피처는 같다"는 성질을 테스트로 고정했다.
 
-**2. 예측 기록은 덮어쓰지 않는다.** 예측은 한 번만 쓰고(`ON CONFLICT DO NOTHING`), 실시간 예측과 소급 계산을 따로 저장해 따로 채점한다. 가격 수집이 늦은 날은 예측을 저장하지 않는다.
+**2. 예측 기록은 결과를 본 뒤에 바뀌지 않는다.** 기준일의 예측은 예약 배치가 확정하고, 다음 종가가 나온 뒤에는 고치지 않는다. 수동 실행은 그 기준일의 예약 시각 전이면 아무것도 하지 않고, 이미 있는 예측을 바꾸지 못한다. 실시간 예측과 소급 계산은 따로 저장해 따로 채점하고, 가격 수집이 늦은 날은 예측을 저장하지 않는다.
 
 **3. 실패에 등급을 둔다.** 종료 코드를 성공 0 / 경고 3 / 실패 1로 나눠, 뉴스 같은 보조 소스가 실패해도 예측은 저장된다. 뉴스 분류는 하루 2건, 누적 1 USD 상한 안에서 돈다.
 
@@ -140,7 +140,7 @@ flowchart LR
 | 데이터 품질 | 오류 시세를 찾아 원인을 추적하고, 실제 자료로 이상치 규칙을 비교해 결정 |
 | 실험 설계 | 기준선, walk-forward, 중첩 검증, 블록 bootstrap, 사전 등록 |
 | 판단 | 뉴스 보정·앙상블·딥러닝처럼 좋아 보이는 후보를 근거를 들어 기각 |
-| 엔지니어링 | 매일 도는 수집·예측 배치, 읽기 전용 API, 테스트 107개(pytest 85 · 프론트 22), CI |
+| 엔지니어링 | 매일 도는 수집·예측 배치, 읽기 전용 API, 테스트 111개(pytest 89 · 프론트 22), CI |
 | 전달 | 예측과 그 근거, 검증 성적을 한 화면에서 설명하는 대시보드 |
 
 ## 실행 방법
@@ -153,14 +153,14 @@ uv venv --python 3.12 "$HOME/.virtualenvs/coffee-price-prediction"
 uv pip install --python "$HOME/.virtualenvs/coffee-price-prediction/bin/python" -r requirements.txt
 source "$HOME/.virtualenvs/coffee-price-prediction/bin/activate"
 
-python -m pytest            # DB 없이 69 passed · COFFEE_TEST_DATABASE_URL을 주면 85 passed
+python -m pytest            # DB 없이 72 passed · COFFEE_TEST_DATABASE_URL을 주면 89 passed
 python -m coffee.sources    # 원자료 수집 → data/sources/*.parquet
 
 # 로컬 전체 실행 (PostgreSQL + API + 대시보드 → http://localhost:8080)
 docker compose up -d --build
 docker compose run --rm pipeline migrate
 docker compose run --rm pipeline backfill
-docker compose run --rm pipeline daily
+docker compose run --rm pipeline daily      # 기준일의 예약 시각(종가 다음 날 06:17 UTC) 전이면 건너뜀
 
 # 프론트엔드
 cd frontend && npm ci && npm test && npm run build
@@ -177,7 +177,7 @@ model_artifacts/     동결 모델(2026-10-06)과 metadata
 frontend/            Vue 3 대시보드 (차트 라이브러리 없이 SVG)
 tests/               시점 성질·평가·파이프라인·DB 계약 테스트
 deploy/, .github/    VM 배포 설정, CI와 일일 배치 워크플로
-docs/                architecture.md(구조·데이터 계약), development_log.md(의사결정 기록 30건)
+docs/                architecture.md(구조·데이터 계약), development_log.md(의사결정 기록 31건)
 ```
 
 ## 한계와 다음 단계

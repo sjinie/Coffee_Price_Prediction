@@ -1,4 +1,5 @@
 import copy
+import re
 from datetime import datetime, timezone
 
 import numpy as np
@@ -153,7 +154,7 @@ def daily_stubs(monkeypatch, sources, small_models):
     monkeypatch.setattr(db, "activate_model", lambda *args: None)
     monkeypatch.setattr(db, "read_model_metadata", lambda conn, version: None)
     monkeypatch.setattr(db, "read_news_inputs", lambda conn, since: [])
-    monkeypatch.setattr(db, "insert_forecasts", lambda conn, rows: saved.extend(rows) or len(rows))
+    monkeypatch.setattr(db, "insert_forecasts", lambda conn, rows, replace=False: saved.extend(rows) or len(rows))
     monkeypatch.setattr(pipeline, "update_news", lambda conn, now: {"step": "news", "selected": 0})
     return saved
 
@@ -181,6 +182,46 @@ def test_daily_does_not_store_a_late_forecast_as_live(daily_stubs):
     assert any("저장하지 않음" in text for step in steps if step["step"] == "warnings" for text in step["messages"])
 
 
+def test_manual_daily_before_the_scheduled_time_collects_and_stores_nothing(monkeypatch, daily_stubs):
+    # 합성 자료의 마지막 종가는 2016-12-30(금). 예약 배치가 이 기준일을 처리하는 시각은 12-31 06:17 UTC다.
+    collected = []
+    monkeypatch.setattr(pipeline, "update_all", lambda end: collected.append(end) or [])
+    for early in (datetime(2016, 12, 30, 23, 30, tzinfo=timezone.utc),   # 마감 직후
+                  datetime(2016, 12, 31, 5, 38, tzinfo=timezone.utc)):   # 다음 날 예약 시각 전
+        code, steps = pipeline.daily(FakeConn(), early)
+        assert code == EXIT_WARNING and "예약 시각(12-31 06:17 UTC) 전" in steps[0]["messages"][0]
+    assert collected == [] and daily_stubs == []
+
+    # 같은 시각이라도 예약 실행은 진행한다. 수동 실행은 예약 시각이 지나면 진행한다.
+    pipeline.daily(FakeConn(), datetime(2016, 12, 31, 5, 38, tzinfo=timezone.utc), scheduled=True)
+    pipeline.daily(FakeConn(), datetime(2016, 12, 31, 6, 17, tzinfo=timezone.utc))
+    assert len(collected) == 2 and len(daily_stubs) == 2 * len(HORIZONS)
+
+
+def test_only_the_scheduled_run_replaces_the_forecast_of_its_origin(monkeypatch, daily_stubs):
+    modes = []
+    monkeypatch.setattr(db, "insert_forecasts", lambda conn, rows, replace=False: modes.append(replace) or len(rows))
+    after = datetime(2016, 12, 31, 12, 0, tzinfo=timezone.utc)
+    pipeline.daily(FakeConn(), after)
+    pipeline.daily(FakeConn(), after, scheduled=True)
+    assert modes == [False, True]
+
+
+def test_schedule_setting_matches_the_workflow_cron_and_main_passes_the_flag(monkeypatch):
+    cron = re.search(r'cron: "(\d+) (\d+) \* \* \*"', (pipeline.ROOT / ".github/workflows/daily.yml").read_text())
+    assert (int(cron[2]), int(cron[1])) == (pipeline.SCHEDULE_UTC.hour, pipeline.SCHEDULE_UTC.minute)
+
+    seen = []
+    monkeypatch.setattr(pipeline, "load_dotenv", lambda *args: None)
+    monkeypatch.setattr(db, "connect", lambda: FakeConn())
+    monkeypatch.setattr(db, "start_run", lambda conn, command: 1)
+    monkeypatch.setattr(db, "finish_run", lambda *args: None)
+    monkeypatch.setattr(pipeline, "daily", lambda conn, scheduled=False: seen.append(scheduled) or (0, []))
+    pipeline.main(["daily"])
+    pipeline.main(["daily", "--scheduled"])
+    assert seen == [False, True]
+
+
 @pytest.mark.parametrize("news_fails, expected", [(False, EXIT_OK), (True, EXIT_WARNING)])
 def test_daily_stores_the_forecast_even_when_news_fails(monkeypatch, daily_stubs, news_fails, expected):
     saved = daily_stubs
@@ -191,7 +232,7 @@ def test_daily_stores_the_forecast_even_when_news_fails(monkeypatch, daily_stubs
         return {"step": "news", "selected": 0}
     monkeypatch.setattr(pipeline, "update_news", news)
     conn = FakeConn()
-    code, steps = pipeline.daily(conn, datetime(2016, 12, 31, 1, 0, tzinfo=timezone.utc))  # 합성 자료 마지막 마감 뒤
+    code, steps = pipeline.daily(conn, datetime(2016, 12, 31, 12, 0, tzinfo=timezone.utc))  # 합성 자료 마지막 마감과 예약 시각 뒤
     assert code == expected
     assert [row["horizon"] for row in saved] == list(HORIZONS) and {row["kind"] for row in saved} == {"live"}
     assert conn.rollbacks == int(news_fails)
@@ -205,14 +246,14 @@ def test_main_records_a_short_failure_message_and_exits_1(monkeypatch):
     monkeypatch.setattr(db, "finish_run", lambda conn, run_id, status, steps, message=None:
                         finished.update(status=status, message=message))
 
-    def broken(conn):
+    def broken(conn, scheduled=False):
         raise RuntimeError("첫 줄\n자세한 내부 정보")
     monkeypatch.setattr(pipeline, "daily", broken)
     assert pipeline.main(["daily"]) == 1
     assert finished == {"status": "failed", "message": "RuntimeError: 첫 줄"}
 
     # 경고로 끝나면 이유를 공개 상태 API가 보여 주는 message에 남긴다
-    monkeypatch.setattr(pipeline, "daily", lambda conn: (EXIT_WARNING, [{"step": "warnings", "messages": ["가", "나"]}]))
+    monkeypatch.setattr(pipeline, "daily", lambda conn, scheduled=False: (EXIT_WARNING, [{"step": "warnings", "messages": ["가", "나"]}]))
     assert pipeline.main(["daily"]) == EXIT_WARNING
     assert finished == {"status": "warning", "message": "가; 나"}
 

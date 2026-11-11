@@ -4,13 +4,15 @@
     python -m coffee.pipeline backfill    가격·기상 전체, 보관 뉴스, 2026년부터 최신까지 예측(kind=backfill)
     python -m coffee.pipeline weather     보관 기상 전체 적재(가격·모델·뉴스는 건드리지 않음)
     python -m coffee.pipeline daily       자료 갱신 → 최신 기준일 예측(kind=live) → 뉴스 분류
+    python -m coffee.pipeline daily --scheduled   예약 배치(GitHub Actions schedule)가 쓰는 형태
 
-종료 코드: 0 성공, 3 경고(일부 소스 실패·피처 결측·뉴스 실패면 예측은 저장, 가격이 늦으면 예측을 저장하지 않음), 1 실패.
-같은 기준일의 예측이 이미 있으면(backfill 포함) 새로 쓰지 않는다.
+종료 코드: 0 성공, 3 경고(일부 소스 실패·피처 결측·뉴스 실패면 예측은 저장, 가격이 늦으면 예측을 저장하지 않음,
+기준일의 예약 시각 전 수동 실행이면 아무것도 하지 않음), 1 실패.
+같은 기준일의 예측이 이미 있으면(backfill 포함) 새로 쓰지 않는다. 예약 실행만 그 기준일의 live 예측을 새 값으로 바꾼다.
 """
 import argparse
 import sys
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, time, timedelta, timezone
 
 import numpy as np
 import pandas as pd
@@ -26,6 +28,7 @@ from .sources import load_sources, update_all
 RISK_WINDOW = 756            # 위험 수준을 매기는 최근 3년(거래일)
 NEWS_LOOKBACK_DAYS = 7       # 매일 다시 훑는 뉴스 기간. 하루 이틀 실패해도 메운다
 EXIT_OK, EXIT_WARNING, EXIT_FAILED = 0, 3, 1
+SCHEDULE_UTC = time.fromisoformat(SETTINGS["daily_schedule_utc"])  # 예약 배치 시각(daily.yml cron과 같다)
 MODEL_KINDS = ("distribution",)  # 분포 모델 하나가 범위·가운데 가격·상승 확률·신호·위험 수준을 낸다(노트북 07)
 
 
@@ -49,11 +52,22 @@ def _rolling_percentile(values: pd.Series) -> pd.Series:
 def closed_prices(prices: pd.DataFrame, now: datetime) -> pd.DataFrame:
     """23:00 UTC 마감이 지난 거래일의 가격만 남긴다.
 
-    장중에 실행하면 Yahoo가 아직 끝나지 않은 오늘 봉을 준다. 그 값으로 예측을 저장하면
-    덮어쓰지 않는 규칙 때문에 영영 고칠 수 없다.
+    장중에 실행하면 Yahoo가 아직 끝나지 않은 오늘 봉을 준다. 그 값으로 낸 예측은 끝나지 않은 가격을
+    기준일 종가로 기록에 남긴다.
     """
-    last_closed = (pd.Timestamp(now).tz_convert("UTC") - pd.Timedelta(hours=23)).date()
-    return prices[prices["date"].dt.date <= last_closed]
+    return prices[prices["date"].dt.date <= _last_closed(now)]
+
+
+def _last_closed(now: datetime):
+    """23:00 UTC 마감이 지난 마지막 달력 날짜."""
+    return (pd.Timestamp(now).tz_convert("UTC") - pd.Timedelta(hours=23)).date()
+
+
+def scheduled_time(now: datetime) -> tuple[pd.Timestamp, datetime]:
+    """(마감이 지난 최신 거래일, 예약 배치가 그 거래일을 처리하는 시각 = 다음 날 SCHEDULE_UTC)."""
+    last_closed = _last_closed(now)
+    session = trading_sessions(last_closed - timedelta(days=10), last_closed)[-1]
+    return session, datetime.combine(session.date() + timedelta(days=1), SCHEDULE_UTC, tzinfo=timezone.utc)
 
 
 def make_forecasts(data: pd.DataFrame, origins, models: dict, kind: str) -> list[dict]:
@@ -182,8 +196,16 @@ def weather(conn) -> tuple[int, list]:
     return EXIT_OK, [step]
 
 
-def daily(conn, now: datetime | None = None) -> tuple[int, list]:
+def daily(conn, now: datetime | None = None, scheduled: bool = False) -> tuple[int, list]:
+    """scheduled는 예약 배치일 때만 True다(run-daily.sh가 GitHub의 schedule 이벤트에서만 넘긴다)."""
     now = now or datetime.now(timezone.utc)
+    if not scheduled:
+        # 수동 실행이 예약 배치보다 먼저 그 기준일의 예측을 남기지 않게 한다. 2026-11-11 05:38 UTC의 수동 실행은
+        # FRED 4개 소스가 실패한 채로 기준일 11-10의 예측을 저장했다(개발 기록 31).
+        session, due = scheduled_time(now)
+        if now < due:
+            return EXIT_WARNING, [{"step": "warnings", "messages": [
+                f"기준일 {session:%Y-%m-%d}의 예약 시각({due:%m-%d %H:%M} UTC) 전 수동 실행이라 수집·예측을 하지 않음"]}]
     steps, warnings = [], []
     results = update_all(now.date())
     failed = [item["source"] for item in results if item["status"] != "ok"]
@@ -203,16 +225,18 @@ def daily(conn, now: datetime | None = None) -> tuple[int, list]:
     origin = len(data) - 1
     expected = trading_sessions(now.date() - timedelta(days=10), now.date() - timedelta(days=1))[-1]
     # 가격이 늦으면 예측을 저장하지 않는다. 지난 기준일의 예측을 나중에 live로 남기면 실시간 성적이
-    # '그날 처음 낸 예측'이라는 뜻을 잃는다. backfill을 다시 돌리면 빠진 날도 채워지지만 kind='backfill'이라 실시간 성적에 섞이지 않는다.
+    # '다음 종가를 보기 전에 낸 예측'이라는 뜻을 잃는다. backfill을 다시 돌리면 빠진 날도 채워지지만 kind='backfill'이라 실시간 성적에 섞이지 않는다.
     stale = data.index[origin] < expected
     if stale:
         warnings.append(f"최신 가격 {data.index[origin]:%Y-%m-%d}이 기대한 {expected:%Y-%m-%d}보다 늦어 예측을 저장하지 않음")
     missing = [name for name in _model_features(models) if pd.isna(data[name].iloc[origin])]
     if missing:
         warnings.append(f"기준일 피처 결측 {len(missing)}개")
-    inserted = 0 if stale else db.insert_forecasts(conn, make_forecasts(data, [origin], models, "live"))
+    # 예약 실행은 같은 기준일에 이미 있는 live 예측을 새 값으로 바꾼다. 앞선 수동 실행이 일부 소스 없이 남긴 값을
+    # 바로잡는다. 기준일은 늘 최신 종가라서 다음 종가를 본 뒤에 고쳐지는 예측은 없다.
+    written = 0 if stale else db.insert_forecasts(conn, make_forecasts(data, [origin], models, "live"), replace=scheduled)
     conn.commit()
-    steps.append({"step": "forecast", "origin": f"{data.index[origin]:%Y-%m-%d}", "inserted": inserted,
+    steps.append({"step": "forecast", "origin": f"{data.index[origin]:%Y-%m-%d}", "written": written,
                   "missing_features": missing})
 
     try:
@@ -257,7 +281,9 @@ def backfill(conn, now: datetime | None = None) -> tuple[int, list]:
 def main(argv=None) -> int:
     parser = argparse.ArgumentParser(description="커피 예측 파이프라인")
     parser.add_argument("command", choices=["migrate", "daily", "backfill", "weather"])
-    command = parser.parse_args(argv).command
+    parser.add_argument("--scheduled", action="store_true", help="daily를 예약 배치로 실행한다(기준일의 live 예측을 새 값으로 바꾼다)")
+    args = parser.parse_args(argv)
+    command = args.command
     load_dotenv(ROOT / ".env")
     try:
         conn = db.connect()
@@ -271,7 +297,10 @@ def main(argv=None) -> int:
             return EXIT_OK
         run_id = db.start_run(conn, command)
         try:
-            code, steps = {"daily": daily, "backfill": backfill, "weather": weather}[command](conn)
+            if command == "daily":
+                code, steps = daily(conn, scheduled=args.scheduled)
+            else:
+                code, steps = {"backfill": backfill, "weather": weather}[command](conn)
         except Exception as exc:
             conn.rollback()
             # 실행 기록은 공개 API로 보이므로 첫 줄만 짧게 남기고, 전체 메시지는 실행 로그에만 출력한다.
