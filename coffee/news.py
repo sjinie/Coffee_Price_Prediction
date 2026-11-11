@@ -1,6 +1,6 @@
 """뉴스: 선정 기사의 Jev 분석을 거래일별 뉴스 점수로 만든다.
 
-기사 수집(Google News RSS·Yahoo)과 Jev 분류는 coffee/jev.py가 맡는다.
+기사 수집(Google News RSS)과 Jev 분류는 coffee/jev.py가 맡는다.
 """
 import json
 from pathlib import Path
@@ -37,8 +37,9 @@ def daily_news(articles: pd.DataFrame, sessions: pd.DatetimeIndex, mode: str = "
     - live: 분석이 끝나 실제로 쓸 수 있게 된 시각(available_at) 이후 첫 거래일 마감에 넣는다.
       서비스는 이 방식만 쓴다.
     - research: 과거 기사는 2026년에 소급 분류해 실제 이용 시각이 없다. 발행 + 1일에 알았다고
-      가정한 연구용 시각이다. 분류는 별개의 결정 모델(Jev)에 기사만 평가하게 하므로, 이후 가격을
-      알고 판단했을 위험은 낮게 본다. 점수는 이후 수익률과 관련이 없었다(노트북 05).
+      가정한 연구용 시각이다. 분류는 별개의 결정 모델(Jev)에 기사만 평가하게 한다. 점수와 이후
+      수익률 사이에 선형 관계는 보이지 않았지만(노트북 05), Jev의 학습 자료 기간은 확인하지 못해
+      이후 가격을 알고 판단했을 가능성을 배제하지는 못한다.
     """
     if mode not in ("live", "research"):
         raise ValueError("mode는 live 또는 research")
