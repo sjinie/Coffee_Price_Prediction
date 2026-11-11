@@ -1,3 +1,4 @@
+import copy
 from datetime import datetime, timezone
 
 import numpy as np
@@ -117,7 +118,7 @@ def news_stubs(monkeypatch):
 
 def test_update_news_caps_articles_per_run(monkeypatch, news_stubs):
     now, calls = news_stubs
-    monkeypatch.setattr(db, "news_state", lambda conn, since, per_day: (set(), set(), 0.0))
+    monkeypatch.setattr(db, "news_state", lambda conn, since: (set(), {}, 0.0))
     step = update_news(FakeConn(), now)
     assert step["selected"] == 3 and step["classified"] == 3 and len(calls["classified"][0]) == 3
 
@@ -126,21 +127,22 @@ def test_update_news_caps_articles_per_run(monkeypatch, news_stubs):
 def test_update_news_reserves_the_cost_before_calling_jev(monkeypatch, news_stubs, left):
     now, calls = news_stubs
     budget = pipeline.SETTINGS["jev"]["budget_usd"]
-    monkeypatch.setattr(db, "news_state", lambda conn, since, per_day: (set(), set(), budget - left))
+    monkeypatch.setattr(db, "news_state", lambda conn, since: (set(), {}, budget - left))
     step = update_news(FakeConn(), now)
     assert "warning" in step and calls["classified"] == []
 
 
 def test_update_news_warns_when_a_request_costs_more_than_the_reserve(monkeypatch, news_stubs):
     now, calls = news_stubs  # 기사당 0.001 USD, 한 번에 3건 → 0.003 USD
-    monkeypatch.setattr(db, "news_state", lambda conn, since, per_day: (set(), set(), 0.0))
+    monkeypatch.setattr(db, "news_state", lambda conn, since: (set(), {}, 0.0))
     monkeypatch.setitem(pipeline.SETTINGS["jev"], "reserve_usd", 0.002)
     step = update_news(FakeConn(), now)
     assert step["classified"] == 3 and "warning" in step
 
 
-@pytest.mark.parametrize("news_fails, expected", [(False, EXIT_OK), (True, EXIT_WARNING)])
-def test_daily_stores_the_forecast_even_when_news_fails(monkeypatch, sources, small_models, news_fails, expected):
+@pytest.fixture
+def daily_stubs(monkeypatch, sources, small_models):
+    """daily를 외부 수집·DB 없이 돌린다. 저장하려던 예측 행을 돌려준다."""
     _, models = small_models
     saved = []
     monkeypatch.setattr(pipeline, "update_all", lambda end: [{"source": "prices", "status": "ok"}])
@@ -149,8 +151,39 @@ def test_daily_stores_the_forecast_even_when_news_fails(monkeypatch, sources, sm
     monkeypatch.setattr(db, "upsert_prices", lambda conn, prices: len(prices))
     monkeypatch.setattr(db, "upsert_weather", lambda conn, region, frame: len(frame))
     monkeypatch.setattr(db, "activate_model", lambda *args: None)
+    monkeypatch.setattr(db, "read_model_metadata", lambda conn, version: None)
     monkeypatch.setattr(db, "read_news_inputs", lambda conn, since: [])
     monkeypatch.setattr(db, "insert_forecasts", lambda conn, rows: saved.extend(rows) or len(rows))
+    monkeypatch.setattr(pipeline, "update_news", lambda conn, now: {"step": "news", "selected": 0})
+    return saved
+
+
+def test_same_version_corrects_evaluation_but_refuses_a_changed_prediction_setting(monkeypatch, small_models):
+    _, models = small_models
+    registered = {"distribution": copy.deepcopy(models["distribution_meta"])}
+    registered["distribution"]["horizons"]["20"]["dev"] = {"base_brier": 0.24}  # 등록된 쪽의 검증 성적만 다르다
+    activated = []
+    monkeypatch.setattr(db, "read_model_metadata", lambda conn, version: registered)
+    monkeypatch.setattr(db, "activate_model", lambda *args: activated.append(args))
+    pipeline._activate(FakeConn(), models)
+    assert len(activated) == 1
+
+    registered["distribution"]["horizons"]["20"]["threshold"] = 0.6  # 매수 기준이 다르면 같은 버전으로 둘 수 없다
+    with pytest.raises(RuntimeError, match="새 버전"):
+        pipeline._activate(FakeConn(), models)
+    assert len(activated) == 1
+
+
+def test_daily_does_not_store_a_late_forecast_as_live(daily_stubs):
+    # 합성 자료의 마지막 종가는 2016-12-30. 3주 뒤에 실행하면 가격이 늦은 것이고, 지난 기준일 예측을 live로 남기지 않는다.
+    code, steps = pipeline.daily(FakeConn(), datetime(2017, 1, 20, 12, 0, tzinfo=timezone.utc))
+    assert code == EXIT_WARNING and daily_stubs == []
+    assert any("저장하지 않음" in text for step in steps if step["step"] == "warnings" for text in step["messages"])
+
+
+@pytest.mark.parametrize("news_fails, expected", [(False, EXIT_OK), (True, EXIT_WARNING)])
+def test_daily_stores_the_forecast_even_when_news_fails(monkeypatch, daily_stubs, news_fails, expected):
+    saved = daily_stubs
 
     def news(conn, now):
         if news_fails:
@@ -177,6 +210,11 @@ def test_main_records_a_short_failure_message_and_exits_1(monkeypatch):
     monkeypatch.setattr(pipeline, "daily", broken)
     assert pipeline.main(["daily"]) == 1
     assert finished == {"status": "failed", "message": "RuntimeError: 첫 줄"}
+
+    # 경고로 끝나면 이유를 공개 상태 API가 보여 주는 message에 남긴다
+    monkeypatch.setattr(pipeline, "daily", lambda conn: (EXIT_WARNING, [{"step": "warnings", "messages": ["가", "나"]}]))
+    assert pipeline.main(["daily"]) == EXIT_WARNING
+    assert finished == {"status": "warning", "message": "가; 나"}
 
 
 def test_backfill_stops_before_writing_without_news_archive(monkeypatch):

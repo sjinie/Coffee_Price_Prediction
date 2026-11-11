@@ -5,7 +5,7 @@
     python -m coffee.pipeline weather     보관 기상 전체 적재(가격·모델·뉴스는 건드리지 않음)
     python -m coffee.pipeline daily       자료 갱신 → 최신 기준일 예측(kind=live) → 뉴스 분류
 
-종료 코드: 0 성공, 3 경고(예측은 저장했지만 일부 소스 실패·자료 지연·피처 결측·뉴스 실패), 1 실패.
+종료 코드: 0 성공, 3 경고(일부 소스 실패·피처 결측·뉴스 실패면 예측은 저장, 가격이 늦으면 예측을 저장하지 않음), 1 실패.
 같은 기준일의 예측이 이미 있으면(backfill 포함) 새로 쓰지 않는다.
 """
 import argparse
@@ -98,8 +98,26 @@ def _model_features(models: dict) -> list[str]:
                    for item in models[f"{kind}_meta"]["horizons"].values() for name in item["features"]})
 
 
+EVALUATION_KEYS = ("dev", "holdout", "forward", "b2")  # 지평별 검증 성적
+
+
+def _behavior(metadata: dict) -> dict:
+    """metadata에서 검증 성적과 생성 커밋을 뺀 부분. 모델 파일·매수 기준·피처처럼 예측을 정하는 것이 남는다."""
+    kept = {}
+    for kind, meta in metadata.items():
+        horizons = {h: {k: v for k, v in entry.items() if k not in EVALUATION_KEYS}
+                    for h, entry in meta.get("horizons", {}).items()}
+        kept[kind] = {**{k: v for k, v in meta.items() if k != "code_commit"}, "horizons": horizons}
+    return kept
+
+
 def _activate(conn, models: dict) -> None:
+    # 같은 버전은 검증 성적만 정정할 수 있다. 예측을 정하는 부분이 다르면 그 버전으로 쌓인 예측이
+    # 서로 다른 방법으로 만들어지므로 멈춘다(새 버전으로 동결해야 한다).
     metadata = {kind: models[f"{kind}_meta"] for kind in MODEL_KINDS}
+    stored = db.read_model_metadata(conn, models["version"])
+    if stored is not None and _behavior(stored) != _behavior(metadata):
+        raise RuntimeError(f"모델 {models['version']}의 예측 설정이 등록된 것과 다르다. 새 버전으로 동결해야 한다")
     db.activate_model(conn, models["version"], models["distribution_meta"]["train_end"], metadata)
 
 
@@ -112,10 +130,10 @@ def update_news(conn, now: datetime) -> dict:
     settings = SETTINGS["jev"]
     today = now.astimezone(jev.NY).date()
     since = today - timedelta(days=NEWS_LOOKBACK_DAYS)
-    known, covered, spent = db.news_state(conn, since, SETTINGS["news"]["articles_per_day"])
+    known, per_day_counts, spent = db.news_state(conn, since)
     articles = [item for query in SETTINGS["news"]["queries"]
                 for item in jev.fetch_google_news(query, since, today + timedelta(days=1))]
-    chosen = jev.select_daily(articles, today, known, covered)[: settings["max_articles_per_run"]]
+    chosen = jev.select_daily(articles, today, known, per_day_counts)[: settings["max_articles_per_run"]]
     step = {"step": "news", "collected": len(articles), "selected": len(chosen), "spent_usd": round(spent, 6)}
     if not chosen:
         return step
@@ -184,12 +202,15 @@ def daily(conn, now: datetime | None = None) -> tuple[int, list]:
     _activate(conn, models)
     origin = len(data) - 1
     expected = trading_sessions(now.date() - timedelta(days=10), now.date() - timedelta(days=1))[-1]
-    if data.index[origin] < expected:
-        warnings.append(f"최신 가격 {data.index[origin]:%Y-%m-%d}이 기대한 {expected:%Y-%m-%d}보다 늦음")
+    # 가격이 늦으면 예측을 저장하지 않는다. 지난 기준일의 예측을 나중에 live로 남기면 실시간 성적이
+    # '그날 처음 낸 예측'이라는 뜻을 잃는다. backfill을 다시 돌리면 빠진 날도 채워지지만 kind='backfill'이라 실시간 성적에 섞이지 않는다.
+    stale = data.index[origin] < expected
+    if stale:
+        warnings.append(f"최신 가격 {data.index[origin]:%Y-%m-%d}이 기대한 {expected:%Y-%m-%d}보다 늦어 예측을 저장하지 않음")
     missing = [name for name in _model_features(models) if pd.isna(data[name].iloc[origin])]
     if missing:
         warnings.append(f"기준일 피처 결측 {len(missing)}개")
-    inserted = db.insert_forecasts(conn, make_forecasts(data, [origin], models, "live"))
+    inserted = 0 if stale else db.insert_forecasts(conn, make_forecasts(data, [origin], models, "live"))
     conn.commit()
     steps.append({"step": "forecast", "origin": f"{data.index[origin]:%Y-%m-%d}", "inserted": inserted,
                   "missing_features": missing})
@@ -259,7 +280,9 @@ def main(argv=None) -> int:
             print(f"실패: {type(exc).__name__}: {exc}", file=sys.stderr)
             return EXIT_FAILED
         status = "warning" if code == EXIT_WARNING else "success"
-        db.finish_run(conn, run_id, status, steps)
+        # 경고 이유는 공개 상태 API가 보여 주는 message에도 짧게 남긴다(steps는 API로 나가지 않는다)
+        warned = [text for step in steps if step.get("step") == "warnings" for text in step["messages"]]
+        db.finish_run(conn, run_id, status, steps, "; ".join(warned)[:200] or None)
         for step in steps:
             print({key: value for key, value in step.items() if key != "results"})
         print(f"{command}: {status}")

@@ -50,7 +50,8 @@ async function loadAllPrices() {
   if (allPrices.value || fullLoading.value) return
   fullLoading.value = true
   fullError.value = ''
-  try { allPrices.value = (await getJson('/api/prices?days=8000')).filter(row => row.date >= '2005-01-01') }
+  // start가 있으면 새 API는 2005-01-01부터 읽고, start를 모르는 이전 API는 days로 읽는다(배포 순서와 무관)
+  try { allPrices.value = (await getJson('/api/prices?days=8000&start=2005-01-01')).filter(row => row.date >= '2005-01-01') }
   catch { fullError.value = '전체 가격을 불러오지 못했습니다. 다시 시도하거나 1년 보기를 선택하세요.' }
   finally { fullLoading.value = false }
 }

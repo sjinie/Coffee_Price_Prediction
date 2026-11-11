@@ -25,7 +25,7 @@ CREATE TABLE IF NOT EXISTS weather (
 CREATE TABLE IF NOT EXISTS models (
     model_version text PRIMARY KEY,
     train_end     date NOT NULL,
-    metadata      jsonb NOT NULL,                  -- 방향·변동성 metadata.json
+    metadata      jsonb NOT NULL,                  -- 분포 모델 metadata.json(지평별 설정·검증 성적)
     is_active     boolean NOT NULL DEFAULT false,
     created_at    timestamptz NOT NULL DEFAULT now()
 );
@@ -53,7 +53,7 @@ CREATE TABLE IF NOT EXISTS forecasts (
     CHECK (price_low IS NULL OR price_low <= price_high)
 );
 
--- Jev로 분류한 뉴스. 모델 입력이 아니라 참고 정보다(노트북 05).
+-- Jev로 분류한 뉴스. 분포 모델의 희소 입력(news_score)을 만든다(노트북 07). 기사가 없는 날은 0이다.
 CREATE TABLE IF NOT EXISTS news_articles (
     content_hash   text PRIMARY KEY,               -- sha256(제목 + "\n" + 요약)
     url            text NOT NULL,

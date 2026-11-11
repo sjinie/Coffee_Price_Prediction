@@ -79,21 +79,22 @@ def market_score(title: str) -> int:
     return 2 * bool(words & COFFEE_WORDS) + len(words & MARKET_WORDS)
 
 
-def select_daily(articles: list[dict], today: date, known_hashes=(), covered_dates=(),
+def select_daily(articles: list[dict], today: date, known_hashes=(), existing: dict | None = None,
                  per_day: int = SETTINGS["news"]["articles_per_day"]) -> list[dict]:
-    """끝난 뉴욕 날짜마다 점수가 높은 새 기사를 per_day건 고른다.
+    """끝난 뉴욕 날짜마다 점수가 높은 새 기사를 남은 자리만큼 골라 하루 per_day건을 넘지 않게 한다.
 
-    이미 분석한 기사(known_hashes)와 이미 채운 날짜(covered_dates)는 건너뛴다.
+    이미 분석한 기사(known_hashes)는 건너뛰고, existing(뉴욕 날짜 → 이미 분석한 건수)만큼 자리를 뺀다.
     """
     if not articles:
         return []
+    existing = existing or {}
     frame = pd.DataFrame(articles).drop_duplicates("content_hash").drop_duplicates("url")
     frame["ny_date"] = frame["event_at"].dt.tz_convert(NY).dt.date
     frame["score"] = frame["title"].map(market_score)
-    keep = ((frame["score"] > 0) & (frame["ny_date"] < today) & ~frame["content_hash"].isin(set(known_hashes))
-            & ~frame["ny_date"].isin(set(covered_dates)))
+    keep = (frame["score"] > 0) & (frame["ny_date"] < today) & ~frame["content_hash"].isin(set(known_hashes))
     frame = frame[keep].sort_values(["ny_date", "score", "event_at"], ascending=[True, False, True])
-    return frame.groupby("ny_date").head(per_day).drop(columns=["score"]).to_dict("records")
+    room = per_day - frame["ny_date"].map(lambda day: existing.get(day, 0))
+    return frame[frame.groupby("ny_date").cumcount() < room].drop(columns=["score"]).to_dict("records")
 
 
 def request_body(articles: list[dict]) -> dict:

@@ -147,6 +147,18 @@ def test_one_day_bad_quote_is_replaced_by_the_previous_value_without_looking_ahe
     assert replace_spikes(quotes.iloc[:200], log=True).equals(quotes.iloc[:200])  # 변화 250개 전에는 울타리가 없다
 
 
+def test_cleaning_ignores_a_past_observation_that_is_released_later(sources):
+    """관측일은 앞서도 나중에 공개되는 값은, 먼저 공개된 값을 고칠 때 쓰이면 안 된다."""
+    brl = sources["macro_brl"]
+    i = 600
+    brl.loc[i, "release_date"] += pd.Timedelta(days=30)  # 이 관측만 한 달 늦게 공개
+    brl.loc[i + 1, "value"] = 0.0                       # 먼저 공개된 다음 관측은 있을 수 없는 값(직전 값으로 바뀐다)
+    changed = {**sources, "macro_brl": brl.assign(value=brl["value"].where(brl.index != i, brl.loc[i, "value"] * 0.9))}
+    before = clean_sources(sources)["macro_brl"].loc[i + 1, "value"]
+    after = clean_sources(changed)["macro_brl"].loc[i + 1, "value"]
+    assert before == after == brl.loc[i - 1, "value"]  # 그 시점에 공개된 마지막 값
+
+
 def test_clean_sources_leaves_coffee_price_rate_and_rain_alone(sources):
     sources["fx_cop"].loc[400, "close"] = 3.67
     sources["macro_rate"].loc[500, "value"] += 5.0       # 금리: 계단형이라 대상이 아니다
