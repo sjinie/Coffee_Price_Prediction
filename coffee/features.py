@@ -162,7 +162,10 @@ def clean_sources(sources: dict) -> dict:
     """피처를 만들기 전에 원자료의 이상치를 직전 값으로 바꾼 사본(모듈 docstring의 '이상치')."""
     cleaned = dict(sources)
     for name, (column, log, history) in SPIKE_SERIES.items():
-        frame = sources[name].sort_values("date")
+        # 공개일이 있는 자료는 공개된 순서로 판단한다. 관측일 순서로 보면 나중에 공개될 과거 관측이
+        # 먼저 공개된 값의 울타리와 직전 값에 끼어든다(지금 자료는 두 순서가 같다).
+        order = ["release_date", "date"] if "release_date" in sources[name] else ["date"]
+        frame = sources[name].sort_values(order, kind="stable")
         cleaned[name] = frame.assign(**{column: replace_spikes(frame[column], log=log, history=history)})
     for region in REGIONS:
         name = f"weather_{region['id']}"
