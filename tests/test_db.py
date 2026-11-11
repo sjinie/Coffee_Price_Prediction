@@ -72,6 +72,17 @@ def test_only_one_model_is_active_and_forecasts_are_never_overwritten(conn):
     assert conn.execute("SELECT prob_up FROM forecasts WHERE horizon = 20").fetchone()["prob_up"] == 0.6
 
 
+def test_scheduled_run_replaces_a_live_forecast_but_not_a_backfill(conn):
+    db.activate_model(conn, "v1", "2025-12-31", {})
+    db.insert_forecasts(conn, [forecast(date(2026, 9, 29), 20, kind="backfill"), forecast(date(2026, 9, 30), 20, kind="live")])
+    again = [forecast(date(2026, 9, 29), 20, kind="live", prob=0.1), forecast(date(2026, 9, 30), 20, kind="live", prob=0.1)]
+    assert db.insert_forecasts(conn, again) == 0                 # 수동 실행은 있는 예측을 바꾸지 않는다
+    assert db.insert_forecasts(conn, again, replace=True) == 1   # 예약 실행은 live 행만 바꾼다
+    stored = {row["origin_date"]: (row["kind"], row["prob_up"])
+              for row in conn.execute("SELECT origin_date, kind, prob_up FROM forecasts")}
+    assert stored == {date(2026, 9, 29): ("backfill", 0.6), date(2026, 9, 30): ("live", 0.1)}
+
+
 def test_news_state_reports_known_articles_covered_days_and_spending(conn):
     db.insert_news(conn, [news("a", "2026-09-29 15:00", 0.0003), news("b", "2026-09-29 16:00"),
                           news("c", "2026-09-30 15:00")])

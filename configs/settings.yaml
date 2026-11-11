@@ -50,6 +50,10 @@ news:
     - "(Brazil OR Colombia) (agriculture OR farming OR drought OR rainfall OR fertilizer OR coffee)"
   articles_per_day: 2
 
+# 일일 배치의 예약 시각(UTC). .github/workflows/daily.yml의 cron과 같아야 한다(테스트가 확인).
+# 수동 실행은 기준일의 이 시각이 지난 뒤에만 수집·예측한다.
+daily_schedule_utc: "06:17"
+
 model_version: "2026-10-06"  # 서비스가 읽는 model_artifacts/<버전> (노트북 06에서 동결)
 
 jev:
