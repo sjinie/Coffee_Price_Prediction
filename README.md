@@ -6,6 +6,8 @@
 
 [![운영 대시보드 첫 화면: 가격 차트와 5·20·60거래일 전망 카드](docs/images/dashboard.png)](https://coffee-price-sjinie.koreacentral.cloudapp.azure.com/)
 
+*2026-11-11 운영 화면(2026-11-10 종가 기준 예측). 이미지를 누르면 현재 대시보드로 이동합니다.*
+
 ## 한눈에 보기
 
 | 변동성 예측 오차 | 80% 예측 범위 적중률 | 60일 상승 확률 AUC | 운영 |
@@ -49,7 +51,9 @@
 |---|---|
 | ![기준일까지 알려진 가격만 쓰는 과정](docs/images/screen_asof.jpg) | ![브라질 산지의 강수와 기온 편차를 연도 × 52주 원형 시계로 그린 화면](docs/images/screen_clock.jpg) |
 | **검증 결과: 기준선 대비 성적 공개** | **적중 기록: 실시간 예측을 따로 채점** |
-| ![지평별 기준선 대비 CRPS 막대](docs/images/screen_result.jpg) | ![실시간 예측의 지평별 방향 적중률, 가격 오차, 범위 적중률](docs/images/screen_track.jpg) |
+| ![지평별 기준선 대비 CRPS 막대](docs/images/screen_result.jpg) | ![실시간 예측의 지평별 방향 적중률, 가격 오차, 범위 적중률, 신호 적중률](docs/images/screen_track.jpg) |
+
+화면은 2026-11-11에 운영 사이트에서 캡처했습니다.
 
 ## 검증 방법과 모델 성적
 
