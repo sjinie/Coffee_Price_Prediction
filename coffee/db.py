@@ -92,14 +92,14 @@ def insert_news(conn, rows: list[dict]) -> int:
     return _insert(conn, "news_articles", NEWS_COLUMNS, rows)
 
 
-def news_state(conn, since: date, per_day: int) -> tuple[set, set, float]:
-    """(분석한 기사 해시, since 이후 기사를 다 채운 뉴욕 날짜, 누적 비용)."""
+def news_state(conn, since: date) -> tuple[set, dict, float]:
+    """(분석한 기사 해시, since 이후 뉴욕 날짜별 분석한 기사 수, 누적 비용)."""
     hashes = {row["content_hash"] for row in conn.execute("SELECT content_hash FROM news_articles")}
-    covered = {row["day"] for row in conn.execute(
-        "SELECT (event_at AT TIME ZONE 'America/New_York')::date AS day FROM news_articles "
-        "WHERE event_at >= %s GROUP BY day HAVING count(*) >= %s", (since, per_day))}
+    counts = {row["day"]: row["n"] for row in conn.execute(
+        "SELECT (event_at AT TIME ZONE 'America/New_York')::date AS day, count(*) AS n FROM news_articles "
+        "WHERE event_at >= %s GROUP BY day", (since,))}
     spent = conn.execute("SELECT coalesce(sum(cost_usd), 0) AS spent FROM news_articles").fetchone()["spent"]
-    return hashes, covered, float(spent)
+    return hashes, counts, float(spent)
 
 
 def start_run(conn, command: str) -> int:
@@ -122,11 +122,18 @@ def read_prices(conn, start: date) -> list[dict]:
 
 
 def read_weather(conn, region: str, start: date) -> dict:
-    """UTC 관측일을 1월 1일 기준 52주로 집계한다. days는 NULL 여부와 무관한 관측 행 수다."""
+    """UTC 관측일을 1월 1일 기준 52주로 집계한다. days는 NULL 여부와 무관한 관측 행 수다.
+
+    지표는 그 주의 모든 관측 행에 값이 있을 때만 집계한다. 일부만 있는 주를 그대로 합치면
+    days로 7일 환산할 때 빠진 날이 있는 주가 온전한 주처럼 보인다.
+    """
     rows = conn.execute(
         "SELECT extract(year FROM date)::int AS year, "
         "least((extract(doy FROM date)::int - 1) / 7, 51) AS week, count(*) AS days, "
-        "sum(precip) AS precip, avg(t_mean) AS t_mean, min(t_min) AS t_min, max(t_max) AS t_max "
+        "CASE WHEN count(precip) = count(*) THEN sum(precip) END AS precip, "
+        "CASE WHEN count(t_mean) = count(*) THEN avg(t_mean) END AS t_mean, "
+        "CASE WHEN count(t_min) = count(*) THEN min(t_min) END AS t_min, "
+        "CASE WHEN count(t_max) = count(*) THEN max(t_max) END AS t_max "
         "FROM weather WHERE region = %s AND date >= %s GROUP BY year, week ORDER BY year, week",
         (region, start)).fetchall()
     years = sorted({row["year"] for row in rows})

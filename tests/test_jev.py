@@ -35,11 +35,15 @@ def test_select_daily_keeps_best_new_articles_of_finished_new_york_days():
         article("Coffee harvest delayed", "2026-10-02 15:00"),  # 오늘(뉴욕) → 아직 끝나지 않음
         article("Already analyzed coffee price", "2026-09-28 15:00"),
     ]
-    chosen = jev.select_daily(articles, today=date(2026, 10, 2), per_day=2,
-                              known_hashes={jev.content_hash("Already analyzed coffee price")},
-                              covered_dates={date(2026, 9, 30)})
+    known = {jev.content_hash("Already analyzed coffee price")}
+    chosen = jev.select_daily(articles, today=date(2026, 10, 2), per_day=2, known_hashes=known,
+                              existing={date(2026, 9, 30): 2})
     assert [item["title"] for item in chosen] == ["Coffee futures jump as Brazil frost hits harvest",
                                                   "Coffee prices rise"]
+    # 이미 1건을 분석한 날은 남은 1건만 고른다(다시 실행해도 하루 2건을 넘지 않는다)
+    again = jev.select_daily(articles, today=date(2026, 10, 2), per_day=2, known_hashes=known,
+                             existing={date(2026, 9, 29): 1, date(2026, 9, 30): 2})
+    assert [item["title"] for item in again] == ["Coffee futures jump as Brazil frost hits harvest"]
 
 
 class FakeSession:

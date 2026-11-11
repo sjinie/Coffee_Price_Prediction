@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 # GitHub runner에서 실행한다(.github/workflows/daily.yml).
 # VM에 보관한 소스 Parquet를 받아 파이프라인을 돌리고, SSH 터널로 VM의 PostgreSQL에 적재한 뒤 소스를 돌려놓는다.
-# 종료 코드 3(경고)은 예측이 저장된 상태라 Actions 경고로 남기고 성공으로 처리한다.
+# 종료 코드 3(경고)은 Actions 경고로 남기고 성공으로 처리한다. 가격이 늦은 날은 예측을 저장하지 않은 경고이므로
+# 이유는 실행 기록(pipeline_runs.message)에서 확인한다.
 set -euo pipefail
 umask 077
 
@@ -73,7 +74,7 @@ export PGHOST=127.0.0.1 PGPORT=15432 PGCONNECT_TIMEOUT=10 DATABASE_URL=postgresq
 status=0
 python -m coffee.pipeline daily || status=$?
 if (( status == 3 )); then
-  echo '::warning title=Daily pipeline warning::예측은 저장했지만 일부 소스·피처·뉴스에 경고가 있습니다. 위 로그를 확인하세요.'
+  echo '::warning title=Daily pipeline warning::경고로 끝났습니다(일부 소스·피처·뉴스 실패, 또는 가격이 늦어 예측 미저장). 위 로그와 실행 기록의 메시지를 확인하세요.'
   status=0
 fi
 exit "$status"

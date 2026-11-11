@@ -41,8 +41,9 @@ def health():
 
 
 @app.get("/api/prices")
-def prices(days: int = Query(730, ge=1, le=8000)):
-    return _read(db.read_prices, _since(days))
+def prices(days: int = Query(730, ge=1, le=8000), start: date | None = None):
+    # 전체 보기는 고정 시작일(start)로 읽는다. days로만 읽으면 날이 갈수록 처음 자료가 창 밖으로 밀려난다.
+    return _read(db.read_prices, start or _since(days))
 
 
 @app.get("/api/weather")

@@ -69,8 +69,9 @@ def test_news_state_reports_known_articles_covered_days_and_spending(conn):
     db.insert_news(conn, [news("a", "2026-09-29 15:00", 0.0003), news("b", "2026-09-29 16:00"),
                           news("c", "2026-09-30 15:00")])
     assert db.insert_news(conn, [news("a", "2026-09-29 15:00")]) == 0
-    hashes, covered, spent = db.news_state(conn, date(2026, 9, 28), per_day=2)
-    assert hashes == {"a", "b", "c"} and covered == {date(2026, 9, 29)} and spent == pytest.approx(0.0003)
+    hashes, counts, spent = db.news_state(conn, date(2026, 9, 28))
+    assert hashes == {"a", "b", "c"} and spent == pytest.approx(0.0003)
+    assert counts == {date(2026, 9, 29): 2, date(2026, 9, 30): 1}
 
 
 def test_api_reads_active_model_rows(conn, monkeypatch):
@@ -99,6 +100,8 @@ def test_api_reads_active_model_rows(conn, monkeypatch):
     assert [row["actual_close"] for row in history] == [310.0, None]  # 9/29 예측의 목표일 9/30은 실제 가격이 있다
     assert client.get("/api/forecasts/history", params={"horizon": 7}).status_code == 422
     assert client.get("/api/prices", params={"days": 5}).json()[-1]["close"] == 300.0
+    # start를 주면 days와 관계없이 그날부터 읽는다(전체 보기가 시간이 지나도 2005년부터 시작하도록)
+    assert [row["close"] for row in client.get("/api/prices", params={"days": 1, "start": "2026-09-01"}).json()] == [310.0, 300.0]
     assert client.get("/api/news").json()["daily"][0]["articles"] == 1
     assert client.get("/api/models").json()["model_version"] == "v1"
     assert client.get("/api/status").json()["runs"][0]["status"] == "success"
@@ -158,6 +161,14 @@ def test_weather_aggregates_each_metric_skips_nulls_and_fills_missing_weeks(conn
         assert data[key][0][1:] == [None] * 51
         assert data[key][1] == [None] * 52
     assert data["days"][0][2:] == [0] * 50
+
+
+def test_weather_week_with_some_missing_values_is_null_for_that_metric(conn):
+    # 7일 중 하루만 강수가 비면 그 주 강수는 NULL(온전한 주처럼 7일로 환산되지 않게), 기온은 그대로
+    days = pd.date_range("2010-01-01", "2010-01-07")
+    db.upsert_weather(conn, "br_sul_minas", weather_frame(days, precip=[1, 1, 1, np.nan, 1, 1, 1]))
+    data = db.read_weather(conn, "br_sul_minas", date(2005, 1, 1))
+    assert data["days"][0][0] == 7 and data["precip"][0][0] is None and data["t_mean"][0][0] == 20.0
 
 
 def test_weather_dates_use_utc_before_grouping_years(conn):
