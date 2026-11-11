@@ -1,3 +1,4 @@
+import copy
 from datetime import datetime, timezone
 
 import numpy as np
@@ -150,10 +151,27 @@ def daily_stubs(monkeypatch, sources, small_models):
     monkeypatch.setattr(db, "upsert_prices", lambda conn, prices: len(prices))
     monkeypatch.setattr(db, "upsert_weather", lambda conn, region, frame: len(frame))
     monkeypatch.setattr(db, "activate_model", lambda *args: None)
+    monkeypatch.setattr(db, "read_model_metadata", lambda conn, version: None)
     monkeypatch.setattr(db, "read_news_inputs", lambda conn, since: [])
     monkeypatch.setattr(db, "insert_forecasts", lambda conn, rows: saved.extend(rows) or len(rows))
     monkeypatch.setattr(pipeline, "update_news", lambda conn, now: {"step": "news", "selected": 0})
     return saved
+
+
+def test_same_version_corrects_evaluation_but_refuses_a_changed_prediction_setting(monkeypatch, small_models):
+    _, models = small_models
+    registered = {"distribution": copy.deepcopy(models["distribution_meta"])}
+    registered["distribution"]["horizons"]["20"]["dev"] = {"base_brier": 0.24}  # 등록된 쪽의 검증 성적만 다르다
+    activated = []
+    monkeypatch.setattr(db, "read_model_metadata", lambda conn, version: registered)
+    monkeypatch.setattr(db, "activate_model", lambda *args: activated.append(args))
+    pipeline._activate(FakeConn(), models)
+    assert len(activated) == 1
+
+    registered["distribution"]["horizons"]["20"]["threshold"] = 0.6  # 매수 기준이 다르면 같은 버전으로 둘 수 없다
+    with pytest.raises(RuntimeError, match="새 버전"):
+        pipeline._activate(FakeConn(), models)
+    assert len(activated) == 1
 
 
 def test_daily_does_not_store_a_late_forecast_as_live(daily_stubs):

@@ -50,6 +50,13 @@ def test_prices_upsert_replaces_values_and_stores_nan_as_null(conn):
     assert row == {"open": None, "close": 299.0}
 
 
+def test_registering_the_same_version_again_corrects_its_metadata(conn):
+    db.activate_model(conn, "v1", "2025-12-31", {"distribution": {"dev": {"base_brier": 0.24}}})
+    db.activate_model(conn, "v1", "2025-12-31", {"distribution": {"dev": {"base_brier": 0.25}}})
+    assert db.read_model_metadata(conn, "v1") == {"distribution": {"dev": {"base_brier": 0.25}}}
+    assert db.read_model_metadata(conn, "없는 버전") is None
+
+
 def test_only_one_model_is_active_and_forecasts_are_never_overwritten(conn):
     db.activate_model(conn, "v1", "2025-12-31", {"note": "first"})
     db.activate_model(conn, "v2", "2025-12-31", {"note": "second"})

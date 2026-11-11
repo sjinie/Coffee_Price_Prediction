@@ -98,8 +98,26 @@ def _model_features(models: dict) -> list[str]:
                    for item in models[f"{kind}_meta"]["horizons"].values() for name in item["features"]})
 
 
+EVALUATION_KEYS = ("dev", "holdout", "forward", "b2")  # 지평별 검증 성적
+
+
+def _behavior(metadata: dict) -> dict:
+    """metadata에서 검증 성적과 생성 커밋을 뺀 부분. 모델 파일·매수 기준·피처처럼 예측을 정하는 것이 남는다."""
+    kept = {}
+    for kind, meta in metadata.items():
+        horizons = {h: {k: v for k, v in entry.items() if k not in EVALUATION_KEYS}
+                    for h, entry in meta.get("horizons", {}).items()}
+        kept[kind] = {**{k: v for k, v in meta.items() if k != "code_commit"}, "horizons": horizons}
+    return kept
+
+
 def _activate(conn, models: dict) -> None:
+    # 같은 버전은 검증 성적만 정정할 수 있다. 예측을 정하는 부분이 다르면 그 버전으로 쌓인 예측이
+    # 서로 다른 방법으로 만들어지므로 멈춘다(새 버전으로 동결해야 한다).
     metadata = {kind: models[f"{kind}_meta"] for kind in MODEL_KINDS}
+    stored = db.read_model_metadata(conn, models["version"])
+    if stored is not None and _behavior(stored) != _behavior(metadata):
+        raise RuntimeError(f"모델 {models['version']}의 예측 설정이 등록된 것과 다르다. 새 버전으로 동결해야 한다")
     db.activate_model(conn, models["version"], models["distribution_meta"]["train_end"], metadata)
 
 

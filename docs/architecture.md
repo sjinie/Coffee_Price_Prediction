@@ -137,7 +137,7 @@
 |---|---|
 | `prices` | 날짜별 OHLCV. Yahoo가 최근 값을 고칠 수 있어 같은 날짜는 덮어쓴다 |
 | `weather` | (산지, UTC 관측일)별 강수·평균/최저/최고기온. 같은 키는 수정값으로 갱신하고 NaN은 NULL로 저장한다. 화면 전용이며 모델 피처의 Parquet·관측일 + 4일 규칙과는 별개다 |
-| `models` | 모델 버전과 metadata. 활성 모델은 부분 유일 인덱스로 하나만 허용 |
+| `models` | 모델 버전과 metadata. 활성 모델은 부분 유일 인덱스로 하나만 허용. 같은 버전을 다시 등록하면 검증 성적(지평별 `dev`·`holdout`·`forward`·`b2`)과 `code_commit`만 바뀔 수 있다. 모델 파일 해시·매수 기준·피처 등 예측을 정하는 값이 다르면 `pipeline._activate`가 멈춘다(새 버전으로 동결해야 한다) |
 | `forecasts` | (버전, 기준일, 지평)마다 한 행. 기준일 종가, 예측 로그수익률·예측 가격, 상승 확률·신호, 80% 범위, 예측 변동성·백분위를 담는다. 한 번 쓰면 고치지 않는다(`ON CONFLICT DO NOTHING`). 같은 기준일의 backfill이 있으면 live는 저장되지 않는다. 실제 가격은 `prices`를 목표일로 조인해 본다 |
 | `news_articles` | 기사별 Jev 분석과 요청 비용. `daily`는 여기서 분석이 끝난 시각(`available_at`)을 읽어 분포 모델의 뉴스 입력을 만든다(`db.read_news_inputs`) |
 | `pipeline_runs` | 실행 기록(상태, 단계별 결과, 메시지). 실패면 오류 첫 줄, 경고면 경고 이유를 200자 안에서 `message`에 남긴다. 상태 API는 `steps`가 아니라 `message`를 보여 준다 |
