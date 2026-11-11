@@ -81,7 +81,7 @@ const PURCHASE_LABELS = { '개발 Test': '개발', '재사용 확인': '보류',
 const purchaseRows = R.purchase.map(row => ({ label: PURCHASE_LABELS[row.period] ?? row.period, values: row }))
 const evaluationNotes = {
   ...NOTES.evaluation,
-  method: `${P.train_start.slice(0, 4)}년부터 학습하고 ${P.development.join('–')}년을 한 해씩 예측하며 설정을 골랐다. 고른 설정은 ${P.holdout.join('–')}년에 한 번만 적용했고, ${P.forward_start.slice(0, 4)}년은 동결한 모델의 사후 확인이다. 목표일이 학습 구간을 넘는 행은 학습에서 뺐다.`,
+  method: `${P.train_start.slice(0, 4)}년부터 학습하고 ${P.development.join('–')}년을 한 해씩 예측하며 후보와 판단 규칙을 정했다. 모델 설정은 평가 연도마다 그 이전 해들의 성적으로 다시 골랐고, ${P.holdout.join('–')}년은 이 규칙으로 한 번만 평가했다. ${P.forward_start.slice(0, 4)}년은 동결한 모델의 사후 확인이다. 목표일이 학습 구간을 넘는 행은 학습에서 뺐다.`,
 }
 </script>
 

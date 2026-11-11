@@ -180,11 +180,13 @@ export function trackRecord(rows) {
 // ---------- 연간 시계 (1월 1일 기준 52주, 기후 API와 같은 주) ----------
 
 // 연도 × 52주 칸마다 일간 로그수익률의 합. 앞 거래일 종가가 없으면 그날 수익률은 계산하지 않는다(결측을 채우지 않는다).
+// 결측 행을 먼저 지우면 결측을 건너뛴 여러 날의 변화가 하루 수익률로 들어가므로 지우지 않는다.
 export function weeklyReturnGrid(prices, years) {
   const grid = years.map(() => Array(52).fill(null))
   const rowOf = new Map(years.map((year, i) => [year, i]))
-  const sorted = prices.filter(row => isNumber(row.close)).sort((a, b) => a.date.localeCompare(b.date))
+  const sorted = [...prices].sort((a, b) => a.date.localeCompare(b.date))
   for (let i = 1; i < sorted.length; i += 1) {
+    if (!isNumber(sorted[i].close) || !isNumber(sorted[i - 1].close)) continue
     const row = rowOf.get(Number(sorted[i].date.slice(0, 4)))
     if (row === undefined) continue
     const week = weekIndex(sorted[i].date)

@@ -114,7 +114,7 @@ test('연간 시계: 주간 수익률은 앞 종가가 있을 때만 더하고, 
   ]
   const grid = lib.weeklyReturnGrid(prices, [2024])
   assert.ok(Math.abs(grid[0][0] - Math.log(1.1)) < 1e-12)   // 1월 1~7일
-  assert.ok(Math.abs(grid[0][1] - Math.log(1.1)) < 1e-12)   // 결측을 건너뛴 다음 종가와 비교
+  assert.equal(grid[0][1], null)                            // 앞 거래일(1/3) 종가가 결측이면 계산하지 않는다
   assert.equal(grid[0][2], null)
 
   const weather = { years: [2024], days: [[7, ...Array(50).fill(7), 9]], precip: [[14, ...Array(50).fill(null), 18]] }
