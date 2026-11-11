@@ -2,7 +2,7 @@
 
 아라비카 커피 선물(KC=F)이 **5·20·60거래일 뒤 어느 가격 범위에 있을지** 매일 예측하고, 그 근거와 검증 성적을 함께 공개하는 1인 E2E 데이터 프로젝트입니다. 공개 데이터 수집부터 시점 규칙, 모델 검증, PostgreSQL 적재, API, 대시보드, 클라우드 운영까지 직접 만들고 운영합니다.
 
-**[운영 대시보드](https://coffee-price-sjinie.koreacentral.cloudapp.azure.com/)** · [일일 배치 실행 기록](https://github.com/sjinie/Coffee_Price_Prediction/actions/workflows/daily.yml) · [API 상태](https://coffee-price-sjinie.koreacentral.cloudapp.azure.com/health) · [개발 기록(시행착오 29개)](docs/development_log.md) · [구조와 데이터 계약](docs/architecture.md)
+**[운영 대시보드](https://coffee-price-sjinie.koreacentral.cloudapp.azure.com/)** · [일일 배치 실행 기록](https://github.com/sjinie/Coffee_Price_Prediction/actions/workflows/daily.yml) · [API 상태](https://coffee-price-sjinie.koreacentral.cloudapp.azure.com/health) · [개발 기록(시행착오 30개)](docs/development_log.md) · [구조와 데이터 계약](docs/architecture.md)
 
 [![운영 대시보드 첫 화면: 가격 차트와 5·20·60거래일 전망 카드](docs/images/dashboard.png)](https://coffee-price-sjinie.koreacentral.cloudapp.azure.com/)
 

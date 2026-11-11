@@ -2,7 +2,7 @@
   "version": "2026-10-06",
   "train_end": "2025-12-31",
   "data_end": "2026-10-02 00:00:00",
-  "code_commit": "36de24c",
+  "code_commit": "3fe50f5",
   "kind": "distribution",
   "algorithm": "분포 모델: 중심 μ(x) + 폭 σ(x) × 모양 Z, CRPS 학습",
   "train_rows": {
@@ -107,7 +107,7 @@
         "width80_pct": 11.8313025094882,
         "auc": 0.5316265049518978,
         "brier": 0.2496622648905913,
-        "base_brier": 0.24960211666654786,
+        "base_brier": 0.2507554975022988,
         "signal_coverage": 0.0,
         "signal_precision": null,
         "signal_up_rate": null
@@ -125,7 +125,7 @@
         "width80_pct": 12.521090065964948,
         "auc": 0.5214666581692264,
         "brier": 0.24947049669711105,
-        "base_brier": 0.24992010595840367,
+        "base_brier": 0.24999581706182647,
         "signal_coverage": 0.0,
         "signal_precision": null,
         "signal_up_rate": null
@@ -143,7 +143,7 @@
         "width80_pct": 13.505712467688118,
         "auc": 0.4626201923076923,
         "brier": 0.25076833874702503,
-        "base_brier": 0.24881050612837136,
+        "base_brier": 0.24881050612837133,
         "signal_coverage": 0.0,
         "signal_precision": null,
         "signal_up_rate": null
@@ -162,7 +162,7 @@
           "width80_pct": 11.338583382760763,
           "auc": 0.5344009346346645,
           "brier": 0.24941485693818644,
-          "base_brier": 0.24972708212058814,
+          "base_brier": 0.2507110617362368,
           "signal_coverage": 0.5754001684919966,
           "signal_precision": 0.5402635431918009,
           "signal_up_rate": 0.46925329428989754
@@ -180,7 +180,7 @@
           "width80_pct": 12.607688833931965,
           "auc": 0.5307527669789476,
           "brier": 0.24892712360502595,
-          "base_brier": 0.24991577392745196,
+          "base_brier": 0.249982309822371,
           "signal_coverage": 0.6267281105990783,
           "signal_precision": 0.5459558823529411,
           "signal_up_rate": 0.5055147058823529
@@ -302,7 +302,7 @@
         "width80_pct": 23.685203925254942,
         "auc": 0.5565984890975639,
         "brier": 0.24925174232293223,
-        "base_brier": 0.24797672085011546,
+        "base_brier": 0.2516511160193193,
         "signal_coverage": 0.3501057082452431,
         "signal_precision": 0.5434782608695652,
         "signal_up_rate": 0.538647342995169
@@ -320,7 +320,7 @@
         "width80_pct": 24.606522643789443,
         "auc": 0.5844175351204912,
         "brier": 0.2447395213604079,
-        "base_brier": 0.24997189051931878,
+        "base_brier": 0.2500348020872574,
         "signal_coverage": 0.6705607476635514,
         "signal_precision": 0.578397212543554,
         "signal_up_rate": 0.5017421602787456
@@ -338,7 +338,7 @@
         "width80_pct": 25.6381301549578,
         "auc": 0.5150112233445567,
         "brier": 0.24893922004437866,
-        "base_brier": 0.2495738272324791,
+        "base_brier": 0.24957382723247915,
         "signal_coverage": 0.514792899408284,
         "signal_precision": 0.5287356321839081,
         "signal_up_rate": 0.5402298850574713
@@ -357,7 +357,7 @@
           "width80_pct": 20.863316224026097,
           "auc": 0.5752086670174565,
           "brier": 0.24370907917405596,
-          "base_brier": 0.24811899621174202,
+          "base_brier": 0.2515797980992114,
           "signal_coverage": 0.4249471458773784,
           "signal_precision": 0.6159203980099502,
           "signal_up_rate": 0.445771144278607
@@ -375,7 +375,7 @@
           "width80_pct": 23.093478649942174,
           "auc": 0.5888690437176378,
           "brier": 0.2438142771202421,
-          "base_brier": 0.2499181401662419,
+          "base_brier": 0.2500144156957755,
           "signal_coverage": 0.35864485981308414,
           "signal_precision": 0.6156351791530945,
           "signal_up_rate": 0.48859934853420195
@@ -393,7 +393,7 @@
           "width80_pct": 24.33222911113774,
           "auc": 0.38980078563411896,
           "brier": 0.26316355393614077,
-          "base_brier": 0.24961641340621454,
+          "base_brier": 0.2496164134062145,
           "signal_coverage": 0.20118343195266272,
           "signal_precision": 0.4117647058823529,
           "signal_up_rate": 0.5294117647058824
@@ -497,7 +497,7 @@
         "width80_pct": 37.112334967902264,
         "auc": 0.6374904715131428,
         "brier": 0.24930850590492779,
-        "base_brier": 0.2463918566298339,
+        "base_brier": 0.26351143987151154,
         "signal_coverage": 0.0,
         "signal_precision": null,
         "signal_up_rate": null
@@ -515,7 +515,7 @@
         "width80_pct": 37.58480730444235,
         "auc": 0.6287998637038479,
         "brier": 0.23512961345514632,
-        "base_brier": 0.25315292699574155,
+        "base_brier": 0.25382763651364676,
         "signal_coverage": 0.0,
         "signal_precision": null,
         "signal_up_rate": null
@@ -533,7 +533,7 @@
         "width80_pct": 36.85487290948867,
         "auc": 0.8739130434782608,
         "brier": 0.21924987582346048,
-        "base_brier": 0.2495308731443716,
+        "base_brier": 0.24953087314437156,
         "signal_coverage": 0.0,
         "signal_precision": null,
         "signal_up_rate": null
@@ -552,7 +552,7 @@
           "width80_pct": 33.79868661927041,
           "auc": 0.5453176731150662,
           "brier": 0.25485175685772393,
-          "base_brier": 0.24672188819198462,
+          "base_brier": 0.2633294431812973,
           "signal_coverage": 0.438573883161512,
           "signal_precision": 0.5602350636630754,
           "signal_up_rate": 0.277179236043095
@@ -570,7 +570,7 @@
           "width80_pct": 37.019923823521665,
           "auc": 0.6188697154817824,
           "brier": 0.24570339908025196,
-          "base_brier": 0.25277925889248215,
+          "base_brier": 0.25348011528307024,
           "signal_coverage": 0.34681372549019607,
           "signal_precision": 0.568904593639576,
           "signal_up_rate": 0.4840989399293286
@@ -588,7 +588,7 @@
           "width80_pct": 36.76900046549295,
           "auc": 0.6975845410628019,
           "brier": 0.2318484104762483,
-          "base_brier": 0.24990714845041007,
+          "base_brier": 0.24990714845041,
           "signal_coverage": 0.31007751937984496,
           "signal_precision": 0.775,
           "signal_up_rate": 0.325
